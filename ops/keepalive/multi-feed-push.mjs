@@ -57,30 +57,56 @@ const log = (msg) => console.log(`[arcora-v07-feeds] ${ts()} ${msg}`);
 
 const priceTo1e8 = (usd) => BigInt(Math.round(usd * 1e8));
 
-async function fetchUsdPrice(feed, apiKey) {
-    if (feed.hardcodedAnswer1e8 !== undefined) {
-        return Number(feed.hardcodedAnswer1e8) / 1e8;
-    }
+/// Fetches all USD prices in (at most) two batched CoinGecko calls — one for
+/// stable→USD ids, one for USD→fiat-currency vs_currencies. Returns a map
+/// keyed by feed symbol. A failed batch leaves its symbols absent from the
+/// map so per-feed error handling in main() surfaces the gap cleanly.
+async function fetchAllPrices(feeds, apiKey) {
     const headers = apiKey ? { "x-cg-pro-api-key": apiKey } : undefined;
-    if (feed.coingeckoId) {
-        const url = `https://api.coingecko.com/api/v3/simple/price?ids=${feed.coingeckoId}&vs_currencies=usd`;
-        const res = await fetch(url, { headers });
-        if (!res.ok) throw new Error(`CoinGecko HTTP ${res.status} for ${feed.coingeckoId}`);
-        const json = await res.json();
-        const usd = json[feed.coingeckoId]?.usd;
-        if (typeof usd !== "number") throw new Error(`No usd field in response for ${feed.coingeckoId}`);
-        return usd;
+    const out = new Map();
+
+    const ids        = feeds.filter((f) => f.coingeckoId).map((f) => f.coingeckoId);
+    const currencies = feeds.filter((f) => f.coingeckoVsCurrency).map((f) => f.coingeckoVsCurrency);
+
+    for (const f of feeds) {
+        if (f.hardcodedAnswer1e8 !== undefined) {
+            out.set(f.symbol, Number(f.hardcodedAnswer1e8) / 1e8);
+        }
     }
-    if (feed.coingeckoVsCurrency) {
-        const url = `https://api.coingecko.com/api/v3/simple/price?ids=usd&vs_currencies=${feed.coingeckoVsCurrency}`;
-        const res = await fetch(url, { headers });
-        if (!res.ok) throw new Error(`CoinGecko HTTP ${res.status} for usd/${feed.coingeckoVsCurrency}`);
-        const json = await res.json();
-        const rate = json.usd?.[feed.coingeckoVsCurrency];
-        if (typeof rate !== "number" || rate === 0) throw new Error(`No ${feed.coingeckoVsCurrency} rate`);
-        return 1 / rate;
+
+    if (ids.length > 0) {
+        try {
+            const url = `https://api.coingecko.com/api/v3/simple/price?ids=${ids.join(",")}&vs_currencies=usd`;
+            const res = await fetch(url, { headers });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const json = await res.json();
+            for (const f of feeds) {
+                if (!f.coingeckoId) continue;
+                const usd = json[f.coingeckoId]?.usd;
+                if (typeof usd === "number") out.set(f.symbol, usd);
+            }
+        } catch (err) {
+            log(`batch usd-prices: ERROR ${err?.message || err}`);
+        }
     }
-    throw new Error(`feed ${feed.symbol} has no price source configured`);
+
+    if (currencies.length > 0) {
+        try {
+            const url = `https://api.coingecko.com/api/v3/simple/price?ids=usd&vs_currencies=${currencies.join(",")}`;
+            const res = await fetch(url, { headers });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const json = await res.json();
+            for (const f of feeds) {
+                if (!f.coingeckoVsCurrency) continue;
+                const rate = json.usd?.[f.coingeckoVsCurrency];
+                if (typeof rate === "number" && rate !== 0) out.set(f.symbol, 1 / rate);
+            }
+        } catch (err) {
+            log(`batch fx-rates: ERROR ${err?.message || err}`);
+        }
+    }
+
+    return out;
 }
 
 async function main() {
@@ -99,6 +125,8 @@ async function main() {
     let skipped = 0;
     let errored = 0;
 
+    const prices = await fetchAllPrices(FEEDS, apiKey);
+
     for (const f of FEEDS) {
         if (!f.feed) {
             log(`${f.symbol}: feed address env missing — skip`);
@@ -106,7 +134,10 @@ async function main() {
             continue;
         }
         try {
-            const usd = await fetchUsdPrice(f, apiKey);
+            const usd = prices.get(f.symbol);
+            if (typeof usd !== "number") {
+                throw new Error("price source returned no value (likely 429 or upstream gap)");
+            }
             if (usd < f.band.min || usd > f.band.max) {
                 log(`${f.symbol}: price ${usd} outside band [${f.band.min}, ${f.band.max}] — skip`);
                 skipped++;
