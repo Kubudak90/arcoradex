@@ -19,8 +19,18 @@ contract ArcFXGatewayTest is Test {
     StablePool          pool;
     MockERC20           usdc;
     MockERC20           eurc;
+    MockERC20           usdt;
+    MockERC20           pyusd;
+    MockERC20           dai;
+    MockERC20           tryc;
+    MockERC20           brlc;
     MockChainlinkFeed   usdcFeed;
     MockChainlinkFeed   eurcFeed;
+    MockChainlinkFeed   usdtFeed;
+    MockChainlinkFeed   pyusdFeed;
+    MockChainlinkFeed   daiFeed;
+    MockChainlinkFeed   trycFeed;
+    MockChainlinkFeed   brlcFeed;
     ArcFXGateway        gw;
 
     address merchant = makeAddr("merchant");
@@ -47,6 +57,32 @@ contract ArcFXGatewayTest is Test {
         IERC20(address(eurc)).approve(address(pool), 1_000_000e6);
         pool.deposit(address(usdc), 1_000_000e6);
         pool.deposit(address(eurc), 1_000_000e6);
+
+        // ── v0.7 cross-stable expansion: USDT, PYUSD, DAI, TRYC, BRLC ──
+        usdt      = new MockERC20("USDT",  "USDT",  6);
+        pyusd     = new MockERC20("PYUSD", "PYUSD", 6);
+        dai       = new MockERC20("DAI",   "DAI",   18);
+        tryc      = new MockERC20("TRYC",  "TRYC",  6);
+        brlc      = new MockERC20("BRLC",  "BRLC",  6);
+        usdtFeed  = new MockChainlinkFeed(8, 1.0001e8);
+        pyusdFeed = new MockChainlinkFeed(8, 1.0000e8);
+        daiFeed   = new MockChainlinkFeed(8, 1.0000e8);
+        trycFeed  = new MockChainlinkFeed(8, 0.0291e8);
+        brlcFeed  = new MockChainlinkFeed(8, 0.1980e8);
+
+        reg.listToken(address(usdt),  6,  IChainlinkAggregator(address(usdtFeed)),  50);
+        reg.listToken(address(pyusd), 6,  IChainlinkAggregator(address(pyusdFeed)), 50);
+        reg.listToken(address(dai),   18, IChainlinkAggregator(address(daiFeed)),   50);
+        reg.listToken(address(tryc),  6,  IChainlinkAggregator(address(trycFeed)),  150);
+        reg.listToken(address(brlc),  6,  IChainlinkAggregator(address(brlcFeed)),  150);
+
+        // Seed reserves sized so each pocket has roughly $1M USD-equivalent
+        // depth. TRYC at 0.0291 USD ⇒ ~34M TRYC; BRLC at 0.198 ⇒ ~5M BRLC.
+        _seed(address(usdt),  1_000_000e6);
+        _seed(address(pyusd), 1_000_000e6);
+        _seed(address(dai),   1_000_000e18);
+        _seed(address(tryc),  34_000_000e6);
+        _seed(address(brlc),  5_000_000e6);
 
         gw = new ArcFXGateway(
             IStablePool(address(pool)),
@@ -783,6 +819,85 @@ contract ArcFXGatewayTest is Test {
         (, , , , , ArcFXGateway.InvoiceStatus s, address paidBy) = gw.invoices(g);
         assertEq(uint8(s), uint8(ArcFXGateway.InvoiceStatus.Paid));
         assertEq(paidBy, customer);
+    }
+
+    // ── v0.7 cross-stable end-to-end pay flows ─────────────────────────
+
+    /// @dev Mints, approves, and deposits `amount` of `token` from the test
+    /// contract into the pool. Used by setUp to seed initial reserves.
+    function _seed(address token, uint256 amount) internal {
+        MockERC20(token).mint(address(this), amount);
+        IERC20(token).approve(address(pool), amount);
+        pool.deposit(token, amount);
+    }
+
+    /// @dev Drives a full pay flow: ensures the merchant is registered with
+    /// `payoutToken`, mints generously to the customer, creates an invoice
+    /// for `amountOut`, and pays it. Returns the global invoice id.
+    function _payFlow(address payIn, address payoutToken, uint256 amountOut)
+        internal
+        returns (bytes32 globalId)
+    {
+        // Register or re-target the merchant's payout token.
+        (, address curPayoutToken, bool active) = gw.merchants(merchant);
+        if (!active) {
+            vm.prank(merchant);
+            gw.registerMerchant(merchant, payoutToken);
+        } else if (curPayoutToken != payoutToken) {
+            vm.prank(merchant);
+            gw.updatePayoutToken(payoutToken);
+        }
+
+        bytes32 mInvId = keccak256(abi.encodePacked("inv-", payIn, payoutToken, block.timestamp));
+        vm.prank(merchant);
+        globalId = gw.createInvoice(mInvId, payIn, amountOut, uint64(block.timestamp + 1 hours));
+
+        // Mint enough payIn for any reasonable quote and approve the gateway.
+        MockERC20(payIn).mint(customer, 10_000_000 * 10 ** MockERC20(payIn).decimals());
+        vm.startPrank(customer);
+        IERC20(payIn).approve(address(gw), type(uint256).max);
+        gw.pay(globalId, type(uint256).max);
+        vm.stopPrank();
+    }
+
+    function test_Pay_USDTtoUSDC_NewPath() public {
+        bytes32 id = _payFlow(address(usdt), address(usdc), 100e6);
+        (, , , , , ArcFXGateway.InvoiceStatus status, ) = gw.invoices(id);
+        assertEq(uint256(status), uint256(ArcFXGateway.InvoiceStatus.Paid));
+        // 100 USDC requested, 10bps gateway fee ⇒ ~99.9 USDC to merchant.
+        assertGt(usdc.balanceOf(merchant), 99e6);
+    }
+
+    function test_Pay_PYUSDtoDAI_CrossDecimal() public {
+        bytes32 id = _payFlow(address(pyusd), address(dai), 100e18);
+        (, , , , , ArcFXGateway.InvoiceStatus status, ) = gw.invoices(id);
+        assertEq(uint256(status), uint256(ArcFXGateway.InvoiceStatus.Paid));
+        // PYUSD 6dec → DAI 18dec, both ~$1: ~99.9 DAI after 10bps fee.
+        assertGt(dai.balanceOf(merchant), 99e18);
+    }
+
+    function test_Pay_DAItoTRYC_CrossDecimalAndFX() public {
+        // Payout ~3,448 TRYC ≈ $100 USD at 0.0291 USD/TRY.
+        bytes32 id = _payFlow(address(dai), address(tryc), 3_448e6);
+        (, , , , , ArcFXGateway.InvoiceStatus status, ) = gw.invoices(id);
+        assertEq(uint256(status), uint256(ArcFXGateway.InvoiceStatus.Paid));
+        assertGe(tryc.balanceOf(merchant), 3_400e6);
+    }
+
+    function test_Pay_BRLCtoEURC_BothFX() public {
+        // Payout 100 EURC (~$108.6 USD) ⇒ ~548 BRLC pulled (108.6 / 0.198).
+        bytes32 id = _payFlow(address(brlc), address(eurc), 100e6);
+        (, , , , , ArcFXGateway.InvoiceStatus status, ) = gw.invoices(id);
+        assertEq(uint256(status), uint256(ArcFXGateway.InvoiceStatus.Paid));
+        assertGe(eurc.balanceOf(merchant), 99e6);
+    }
+
+    function test_Pay_USDCtoUSDC_SameToken_Unchanged() public {
+        bytes32 id = _payFlow(address(usdc), address(usdc), 100e6);
+        (, , , , , ArcFXGateway.InvoiceStatus status, ) = gw.invoices(id);
+        assertEq(uint256(status), uint256(ArcFXGateway.InvoiceStatus.Paid));
+        // Same-token: no pool fee, only gateway 10bps ⇒ exactly 99.9 USDC.
+        assertEq(usdc.balanceOf(merchant), 99_900_000);
     }
 }
 
