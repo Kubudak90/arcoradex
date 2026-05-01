@@ -43,7 +43,14 @@ const FEEDS = [
 const FEED_ABI = parseAbi([
     "function setAnswer(int256 newAnswer) external",
     "function latestAnswer() view returns (int256)",
+    "function latestUpdatedAt() view returns (uint256)",
 ]);
+
+// Push setAnswer even when the value is unchanged if the on-chain timestamp
+// is older than this. The pool reverts swaps when oracle age exceeds
+// 1 hour (MAX_STALE_SECONDS); 30 min keeps a comfortable margin for the
+// next 30-min keeper tick.
+const REFRESH_THRESHOLD_SECONDS = 30 * 60;
 
 const ts = () => new Date().toISOString();
 const log = (msg) => console.log(`[arcora-v07-feeds] ${ts()} ${msg}`);
@@ -106,13 +113,13 @@ async function main() {
                 continue;
             }
             const newAnswer = priceTo1e8(usd);
-            const prev = await publicClient.readContract({
-                address: f.feed,
-                abi: FEED_ABI,
-                functionName: "latestAnswer",
-            });
-            if (prev === newAnswer) {
-                log(`${f.symbol}: unchanged at ${prev}`);
+            const [prev, lastUpdated] = await Promise.all([
+                publicClient.readContract({ address: f.feed, abi: FEED_ABI, functionName: "latestAnswer" }),
+                publicClient.readContract({ address: f.feed, abi: FEED_ABI, functionName: "latestUpdatedAt" }),
+            ]);
+            const ageSeconds = Math.floor(Date.now() / 1000) - Number(lastUpdated);
+            if (prev === newAnswer && ageSeconds < REFRESH_THRESHOLD_SECONDS) {
+                log(`${f.symbol}: unchanged at ${prev}, fresh (${ageSeconds}s)`);
                 skipped++;
                 continue;
             }
@@ -123,7 +130,8 @@ async function main() {
                 args: [newAnswer],
             });
             await publicClient.waitForTransactionReceipt({ hash });
-            log(`${f.symbol}: ${prev} -> ${newAnswer} (usd=${usd}) tx=${hash}`);
+            const reason = prev === newAnswer ? "refresh" : "value";
+            log(`${f.symbol}: ${prev} -> ${newAnswer} (usd=${usd}, ${reason}, age=${ageSeconds}s) tx=${hash}`);
             updated++;
         } catch (err) {
             log(`${f.symbol}: ERROR ${err?.message || err}`);
