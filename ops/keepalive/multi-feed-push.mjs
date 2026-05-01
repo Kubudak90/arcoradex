@@ -30,14 +30,21 @@ const arcTestnet = defineChain({
 //   - coingeckoId: fetch USD/<id> directly
 //   - coingeckoVsCurrency: fetch USD vs <currency> and invert (for FX legs
 //     where CoinGecko prices the foreign currency rather than the stable)
+//
+// `maxDevBps` mirrors the registry's per-token maxOracleDeviationBps.
+// The keeper caps each push so |new - prev| ≤ prev × maxDevBps / 10000.
+// This lets the registry stay on production-grade tolerances (50 bps for
+// USD pegs, 150 bps for FX pegs) without bricking swaps when the live
+// market drifts faster than one tick: the keeper takes multiple ticks
+// to walk the on-chain answer toward the true price.
 const FEEDS = [
-    { symbol: "USDC",  feed: process.env.FEED_USDC,  hardcodedAnswer1e8: 100_000_000n, band: { min: 1.00, max: 1.00 } },
-    { symbol: "USDT",  feed: process.env.FEED_USDT,  coingeckoId: "tether",          band: { min: 0.95, max: 1.05 } },
-    { symbol: "PYUSD", feed: process.env.FEED_PYUSD, coingeckoId: "paypal-usd",      band: { min: 0.95, max: 1.05 } },
-    { symbol: "DAI",   feed: process.env.FEED_DAI,   coingeckoId: "dai",             band: { min: 0.95, max: 1.05 } },
-    { symbol: "EURC",  feed: process.env.FEED_EURC,  coingeckoVsCurrency: "eur",     band: { min: 1.00, max: 1.30 } },
-    { symbol: "TRYC",  feed: process.env.FEED_TRYC,  coingeckoVsCurrency: "try",     band: { min: 0.01, max: 0.10 } },
-    { symbol: "BRLC",  feed: process.env.FEED_BRLC,  coingeckoVsCurrency: "brl",     band: { min: 0.10, max: 0.30 } },
+    { symbol: "USDC",  feed: process.env.FEED_USDC,  hardcodedAnswer1e8: 100_000_000n, band: { min: 1.00, max: 1.00 }, maxDevBps: 50 },
+    { symbol: "USDT",  feed: process.env.FEED_USDT,  coingeckoId: "tether",          band: { min: 0.95, max: 1.05 }, maxDevBps: 50 },
+    { symbol: "PYUSD", feed: process.env.FEED_PYUSD, coingeckoId: "paypal-usd",      band: { min: 0.95, max: 1.05 }, maxDevBps: 50 },
+    { symbol: "DAI",   feed: process.env.FEED_DAI,   coingeckoId: "dai",             band: { min: 0.95, max: 1.05 }, maxDevBps: 50 },
+    { symbol: "EURC",  feed: process.env.FEED_EURC,  coingeckoVsCurrency: "eur",     band: { min: 1.00, max: 1.30 }, maxDevBps: 150 },
+    { symbol: "TRYC",  feed: process.env.FEED_TRYC,  coingeckoVsCurrency: "try",     band: { min: 0.01, max: 0.10 }, maxDevBps: 150 },
+    { symbol: "BRLC",  feed: process.env.FEED_BRLC,  coingeckoVsCurrency: "brl",     band: { min: 0.10, max: 0.30 }, maxDevBps: 150 },
 ];
 
 const FEED_ABI = parseAbi([
@@ -143,12 +150,28 @@ async function main() {
                 skipped++;
                 continue;
             }
-            const newAnswer = priceTo1e8(usd);
+            const targetAnswer = priceTo1e8(usd);
             const [prev, lastUpdated] = await Promise.all([
                 publicClient.readContract({ address: f.feed, abi: FEED_ABI, functionName: "latestAnswer" }),
                 publicClient.readContract({ address: f.feed, abi: FEED_ABI, functionName: "latestUpdatedAt" }),
             ]);
             const ageSeconds = Math.floor(Date.now() / 1000) - Number(lastUpdated);
+
+            // Cap each push so the swap-time PriceGuard never reverts. The
+            // pool compares against lastAcceptedPrice (set on the prior swap),
+            // not the prior oracle answer, so capping vs `prev` is a strict
+            // upper bound on the deviation any swap can observe.
+            let newAnswer = targetAnswer;
+            let capped = false;
+            if (prev > 0n) {
+                const maxDeltaAbs = (prev * BigInt(f.maxDevBps)) / 10_000n;
+                const delta = targetAnswer > prev ? targetAnswer - prev : prev - targetAnswer;
+                if (delta > maxDeltaAbs) {
+                    newAnswer = targetAnswer > prev ? prev + maxDeltaAbs : prev - maxDeltaAbs;
+                    capped = true;
+                }
+            }
+
             if (prev === newAnswer && ageSeconds < REFRESH_THRESHOLD_SECONDS) {
                 log(`${f.symbol}: unchanged at ${prev}, fresh (${ageSeconds}s)`);
                 skipped++;
@@ -161,7 +184,9 @@ async function main() {
                 args: [newAnswer],
             });
             await publicClient.waitForTransactionReceipt({ hash });
-            const reason = prev === newAnswer ? "refresh" : "value";
+            const reason = capped
+                ? `capped@${f.maxDevBps}bps (target=${targetAnswer})`
+                : prev === newAnswer ? "refresh" : "value";
             log(`${f.symbol}: ${prev} -> ${newAnswer} (usd=${usd}, ${reason}, age=${ageSeconds}s) tx=${hash}`);
             updated++;
         } catch (err) {
