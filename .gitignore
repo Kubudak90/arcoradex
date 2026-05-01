@@ -1,0 +1,19 @@
+# Forge build artifacts
+contracts/out/
+contracts/cache/
+contracts/broadcast/
+
+# Forge dependencies (re-fetched via `cd contracts && forge install`)
+contracts/lib/
+
+# Environment
+contracts/.env
+contracts/.env.*
+.env
+
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
