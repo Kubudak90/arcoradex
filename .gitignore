@@ -17,3 +17,9 @@ contracts/.env.*
 # Editor
 .vscode/
 .idea/
+
+# Keeper local test artifacts
+ops/keepalive/.env
+ops/keepalive/.env.*
+ops/keepalive/node_modules/
+ops/keepalive/package-lock.json
