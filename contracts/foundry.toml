@@ -12,7 +12,7 @@ ffi = true
 
 [profile.ci]
 fuzz = { runs = 10000 }
-invariant = { runs = 256, depth = 64 }
+invariant = { runs = 1024, depth = 128 }
 
 [rpc_endpoints]
 arc_testnet = "${ARC_TESTNET_RPC}"
