@@ -1,0 +1,221 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.26;
+
+import { Test } from "forge-std/Test.sol";
+import { ArcoraDexPool }       from "../src/ArcoraDexPool.sol";
+import { ArcoraDexRegistry }   from "../src/ArcoraDexRegistry.sol";
+import { ArcoraDexLP }         from "../src/ArcoraDexLP.sol";
+import { IArcoraDexPool }      from "../src/interfaces/IArcoraDexPool.sol";
+import { IArcoraDexRegistry }  from "../src/interfaces/IArcoraDexRegistry.sol";
+import { IChainlinkAggregator } from "../src/interfaces/IChainlinkAggregator.sol";
+import { MintableERC20 }       from "../src/testnet/MintableERC20.sol";
+import { MockChainlinkFeed }   from "../src/testnet/MockChainlinkFeed.sol";
+
+contract ArcoraDexPoolTest is Test {
+    ArcoraDexPool     pool;
+    ArcoraDexRegistry reg;
+    ArcoraDexLP       lp;
+    MintableERC20 usdc; MockChainlinkFeed fUsdc;
+    MintableERC20 eurc; MockChainlinkFeed fEurc;
+    MintableERC20 dai;  MockChainlinkFeed fDai;
+    address owner = makeAddr("owner");
+    address alice = makeAddr("alice");
+    address bob   = makeAddr("bob");
+
+    uint16 constant SWAP_FEE_BPS_DEFAULT = 30;
+    uint16 constant PROT_SHARE_DEFAULT   = 1000; // 10%
+
+    function setUp() public {
+        // Tokens (decimals: USDC=6, EURC=6, DAI=18). 4-arg MintableERC20 ctor.
+        usdc = new MintableERC20("USD Coin",    "USDC", 6,  owner);
+        eurc = new MintableERC20("Euro Coin",   "EURC", 6,  owner);
+        dai  = new MintableERC20("Dai",         "DAI",  18, owner);
+        // Feeds (decimals first, answer second). Initial: 1.00 USD, 1.10 USD, 1.00 USD.
+        fUsdc = new MockChainlinkFeed(8, int256(1e8));
+        fEurc = new MockChainlinkFeed(8, int256(11e7));
+        fDai  = new MockChainlinkFeed(8, int256(1e8));
+
+        reg  = new ArcoraDexRegistry(owner);
+        pool = new ArcoraDexPool(address(reg), SWAP_FEE_BPS_DEFAULT, PROT_SHARE_DEFAULT, owner);
+        lp   = ArcoraDexLP(address(pool.LP()));
+
+        vm.startPrank(owner);
+        reg.listToken(address(usdc), 6,  IChainlinkAggregator(address(fUsdc)),  50);
+        reg.listToken(address(eurc), 6,  IChainlinkAggregator(address(fEurc)), 150);
+        reg.listToken(address(dai),  18, IChainlinkAggregator(address(fDai)),   50);
+        vm.stopPrank();
+
+        // Mint to alice/bob via owner (MintableERC20 mint may be owner-only — check).
+        vm.startPrank(owner);
+        usdc.mint(alice, 10_000e6);
+        usdc.mint(bob,   10_000e6);
+        eurc.mint(alice, 10_000e6);
+        dai.mint (alice, 10_000e18);
+        vm.stopPrank();
+    }
+
+    // ── Constructor / wiring ─────────────────────────────────────────
+    function test_constructor_setsImmutables() public view {
+        assertEq(address(pool.REGISTRY()), address(reg));
+        assertEq(address(pool.LP()),       address(lp));
+        assertEq(pool.swapFeeBps(),        SWAP_FEE_BPS_DEFAULT);
+        assertEq(pool.protocolFeeShareBps(), PROT_SHARE_DEFAULT);
+        assertFalse(pool.paused());
+        assertEq(lp.MINTER(), address(pool));
+        assertEq(lp.totalSupply(), 0);
+    }
+
+    function test_constructor_revertsBadFee() public {
+        vm.expectRevert(abi.encodeWithSelector(IArcoraDexPool.InvalidFeeBps.selector, uint16(101)));
+        new ArcoraDexPool(address(reg), 101, PROT_SHARE_DEFAULT, owner);
+    }
+
+    function test_constructor_revertsBadProtocolShare() public {
+        vm.expectRevert(abi.encodeWithSelector(IArcoraDexPool.InvalidProtocolFeeShareBps.selector, uint16(2501)));
+        new ArcoraDexPool(address(reg), SWAP_FEE_BPS_DEFAULT, 2501, owner);
+    }
+
+    // ── deposit (first deposit + subsequent) ─────────────────────────
+    function test_deposit_first_burns_minimum_liquidity_and_mints_residual() public {
+        // Alice deposits 1000 USDC at $1.00 → usdValue = 1000 * 1e18.
+        uint256 amount = 1000e6;
+        vm.startPrank(alice);
+        usdc.approve(address(pool), amount);
+        uint256 lpMinted = pool.deposit(address(usdc), amount, 0, block.timestamp);
+        vm.stopPrank();
+
+        // Expected: usdValue 1000e18; user gets 1000e18 - 1000.
+        assertEq(lpMinted, 1000e18 - 1000);
+        assertEq(lp.balanceOf(alice), 1000e18 - 1000);
+        assertEq(lp.balanceOf(address(0xdead)), 1000);
+        assertEq(lp.totalSupply(), 1000e18);
+        assertEq(pool.reserves(address(usdc)), amount);
+    }
+
+    function test_deposit_first_revertsTooSmall() public {
+        // Use DAI (18 dec). 999 wei DAI at $1 = 999 USD-1e18 → < 1000 ⇒ revert.
+        // Mint a tiny amount to alice.
+        vm.prank(owner);
+        dai.mint(alice, 1000);
+        vm.startPrank(alice);
+        dai.approve(address(pool), 999);
+        vm.expectRevert(abi.encodeWithSelector(IArcoraDexPool.FirstDepositTooSmall.selector, uint256(999), uint256(1000)));
+        pool.deposit(address(dai), 999, 0, block.timestamp);
+        vm.stopPrank();
+    }
+
+    function test_deposit_second_proportional() public {
+        // Seed first
+        vm.startPrank(alice);
+        usdc.approve(address(pool), 1000e6);
+        pool.deposit(address(usdc), 1000e6, 0, block.timestamp);
+        vm.stopPrank();
+        uint256 supplyAfter1 = lp.totalSupply();
+        uint256 navAfter1    = pool.totalReservesUSD();
+
+        // Bob deposits 500 USDC. lpMinted = 500e18 * supply / nav.
+        vm.startPrank(bob);
+        usdc.approve(address(pool), 500e6);
+        uint256 lpMintedBob = pool.deposit(address(usdc), 500e6, 0, block.timestamp);
+        vm.stopPrank();
+
+        assertEq(lpMintedBob, (500e18 * supplyAfter1) / navAfter1);
+        assertEq(lp.balanceOf(bob), lpMintedBob);
+    }
+
+    function test_deposit_revertsSlippage() public {
+        vm.startPrank(alice);
+        usdc.approve(address(pool), 1000e6);
+        // First deposit yields 1000e18 - 1000; require minLpOut = 1000e18 (impossible).
+        vm.expectRevert(abi.encodeWithSelector(IArcoraDexPool.InsufficientLpOut.selector, uint256(1000e18 - 1000), uint256(1000e18)));
+        pool.deposit(address(usdc), 1000e6, 1000e18, block.timestamp);
+        vm.stopPrank();
+    }
+
+    function test_deposit_revertsInactive() public {
+        vm.prank(owner);
+        reg.deactivateToken(address(usdc));
+
+        vm.startPrank(alice);
+        usdc.approve(address(pool), 100e6);
+        vm.expectRevert(abi.encodeWithSelector(IArcoraDexPool.TokenNotActive.selector, address(usdc)));
+        pool.deposit(address(usdc), 100e6, 0, block.timestamp);
+        vm.stopPrank();
+    }
+
+    function test_deposit_revertsZeroAmount() public {
+        vm.startPrank(alice);
+        usdc.approve(address(pool), 1);
+        vm.expectRevert(IArcoraDexPool.ZeroAmount.selector);
+        pool.deposit(address(usdc), 0, 0, block.timestamp);
+        vm.stopPrank();
+    }
+
+    function test_deposit_revertsDeadlinePassed() public {
+        vm.warp(2_000);
+        vm.startPrank(alice);
+        usdc.approve(address(pool), 100e6);
+        vm.expectRevert(IArcoraDexPool.DeadlinePassed.selector);
+        pool.deposit(address(usdc), 100e6, 0, 1_000);
+        vm.stopPrank();
+    }
+
+    // ── withdraw ─────────────────────────────────────────────────────
+    function test_withdraw_singleToken_chargesSwapFeeBps() public {
+        // Seed with 2000 USDC
+        vm.startPrank(alice);
+        usdc.approve(address(pool), 2000e6);
+        pool.deposit(address(usdc), 2000e6, 0, block.timestamp);
+        uint256 aliceLp = lp.balanceOf(alice);
+
+        // Withdraw half as USDC.
+        uint256 lpToBurn = aliceLp / 2;
+        uint256 amountOut = pool.withdraw(address(usdc), lpToBurn, 0, block.timestamp);
+        vm.stopPrank();
+
+        // After fee = 30 bps: amountOut ≈ 1000e18 * (10000-30)/10000 = 997e18 USD; in USDC ≈ 997e6.
+        assertGt(amountOut, 996e6);
+        assertLt(amountOut, 998e6);
+        assertEq(lp.balanceOf(alice), aliceLp - lpToBurn);
+    }
+
+    function test_withdraw_revertsInsufficientReserves() public {
+        // Deposit USDC, try to withdraw EURC (no reserves)
+        vm.startPrank(alice);
+        usdc.approve(address(pool), 1000e6);
+        pool.deposit(address(usdc), 1000e6, 0, block.timestamp);
+        vm.expectRevert();   // InsufficientLiquidity
+        pool.withdraw(address(eurc), 100e18, 0, block.timestamp);
+        vm.stopPrank();
+    }
+
+    // ── pause / unpause ──────────────────────────────────────────────
+    function test_pause_blocksDepositWithdraw() public {
+        vm.prank(owner);
+        pool.pause();
+        assertTrue(pool.paused());
+
+        vm.startPrank(alice);
+        usdc.approve(address(pool), 100e6);
+        vm.expectRevert(IArcoraDexPool.PoolPaused.selector);
+        pool.deposit(address(usdc), 100e6, 0, block.timestamp);
+        vm.stopPrank();
+
+        vm.prank(owner);
+        pool.unpause();
+        assertFalse(pool.paused());
+    }
+
+    // ── setProtocolFeeShareBps cap ───────────────────────────────────
+    function test_setProtocolFeeShareBps_revertsAboveCap() public {
+        vm.prank(owner);
+        vm.expectRevert(abi.encodeWithSelector(IArcoraDexPool.InvalidProtocolFeeShareBps.selector, uint16(2501)));
+        pool.setProtocolFeeShareBps(2501);
+    }
+
+    function test_setProtocolFeeShareBps_updates() public {
+        vm.prank(owner);
+        pool.setProtocolFeeShareBps(2000);
+        assertEq(pool.protocolFeeShareBps(), 2000);
+    }
+}
