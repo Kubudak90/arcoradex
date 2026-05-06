@@ -167,17 +167,47 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         emit Withdrew(msg.sender, tokenOut, lpAmount, amountOut, protFeeAmt, navBefore, navBefore - usdRedeemed);
     }
 
-    // ── swap (stub; implemented in T10) ──────────────────────────────
+    // ── swap ─────────────────────────────────────────────────────────
     function swap(
-        address /*tokenIn*/,
-        address /*tokenOut*/,
-        uint256 /*amountIn*/,
-        uint256 /*minOut*/,
-        uint256 /*deadline*/,
-        address /*recipient*/
-    ) external override whenNotPaused nonReentrant returns (uint256) {
-        // Implemented in T10.
-        revert("swap: not implemented (T10)");
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        uint256 minOut,
+        uint256 deadline,
+        address recipient
+    ) external override whenNotPaused nonReentrant checkDeadline(deadline) returns (uint256 amountOut) {
+        if (tokenIn == tokenOut)     revert SameToken(tokenIn);
+        if (amountIn  == 0)          revert ZeroAmount();
+        if (recipient == address(0)) revert ZeroAddress();
+
+        uint256 protFee;
+        uint256 lpFeeUsd1e18;
+        {
+            (uint256 pIn,  uint8 dIn ) = _readUsdPrice1e18(tokenIn);
+            (uint256 pOut, uint8 dOut) = _readUsdPrice1e18(tokenOut);
+
+            uint256 gross = _grossOut(amountIn, pIn, pOut, dIn, dOut);
+            uint256 fee   = (gross * swapFeeBps) / BPS;
+            amountOut     = gross - fee;
+            protFee       = (fee * protocolFeeShareBps) / BPS;
+
+            // Compute lpFeeUsd1e18 BEFORE we mutate state (it's a metric for the event)
+            lpFeeUsd1e18 = ((fee - protFee) * pOut) / (10 ** dOut);
+        }
+
+        if (amountOut < minOut) revert InsufficientOutput(amountOut, minOut);
+        uint256 r = reserves[tokenOut];
+        if (r < amountOut + protFee) revert InsufficientLiquidity(tokenOut, amountOut + protFee, r);
+
+        // CEI
+        IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), amountIn);
+        reserves[tokenIn]   = reserves[tokenIn] + amountIn;
+        reserves[tokenOut]  = r - (amountOut + protFee);
+        protocolFeesAccrued[tokenOut] += protFee;
+
+        IERC20(tokenOut).safeTransfer(recipient, amountOut);
+
+        emit Swapped(msg.sender, tokenIn, tokenOut, amountIn, amountOut, lpFeeUsd1e18, protFee, recipient);
     }
 
     // ── Quote views ──────────────────────────────────────────────────

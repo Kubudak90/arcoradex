@@ -281,4 +281,134 @@ contract ArcoraDexPoolTest is Test {
         assertLt(amountOut, 998e6);
         assertGt(fee, 0);     // protocol's 10% of 30 bps fee on ~1000 USDC
     }
+
+    // ── swap ────────────────────────────────────────────────────────
+    function _seedAllThree() internal {
+        // Owner-style seeding via a generous Alice deposit across all tokens
+        vm.startPrank(alice);
+        usdc.approve(address(pool), 5_000e6);
+        eurc.approve(address(pool), 5_000e6);
+        dai .approve(address(pool), 5_000e18);
+        pool.deposit(address(usdc), 5_000e6,  0, block.timestamp);
+        pool.deposit(address(eurc), 5_000e6,  0, block.timestamp);
+        pool.deposit(address(dai),  5_000e18, 0, block.timestamp);
+        vm.stopPrank();
+    }
+
+    function test_swap_USDC_to_EURC_amountOut_matches_quote() public {
+        _seedAllThree();
+        uint256 amountIn = 110e6; // 110 USDC
+
+        uint256 expected = pool.quote(address(usdc), address(eurc), amountIn);
+
+        // Bob swaps
+        vm.prank(owner);
+        usdc.mint(bob, amountIn);
+        vm.startPrank(bob);
+        usdc.approve(address(pool), amountIn);
+        uint256 amountOut = pool.swap(address(usdc), address(eurc), amountIn, 0, block.timestamp, bob);
+        vm.stopPrank();
+
+        assertEq(amountOut, expected);
+        assertEq(eurc.balanceOf(bob), amountOut);
+    }
+
+    function test_swap_charges_protocol_fee_in_tokenOut() public {
+        _seedAllThree();
+        uint256 amountIn = 100e6;
+
+        uint256 protBefore = pool.protocolFeesAccrued(address(eurc));
+
+        vm.prank(owner);
+        usdc.mint(bob, amountIn);
+        vm.startPrank(bob);
+        usdc.approve(address(pool), amountIn);
+        pool.swap(address(usdc), address(eurc), amountIn, 0, block.timestamp, bob);
+        vm.stopPrank();
+
+        uint256 protAfter = pool.protocolFeesAccrued(address(eurc));
+        assertGt(protAfter, protBefore);
+        // Protocol's share of total fee is protocolFeeShareBps (default 1000 = 10%).
+        // Total fee in EURC ≈ swapFeeBps fraction of gross output ≈ 0.30% of ~90.9 EURC ≈ 0.273 EURC.
+        // Protocol share ≈ 10% of that ≈ 0.0273 EURC = ~27_300 (6 dec).
+        uint256 fee = protAfter - protBefore;
+        assertGt(fee, 25_000);
+        assertLt(fee, 30_000);
+    }
+
+    function test_swap_revertsSlippage() public {
+        _seedAllThree();
+        uint256 amountIn = 100e6;
+
+        vm.prank(owner);
+        usdc.mint(bob, amountIn);
+        vm.startPrank(bob);
+        usdc.approve(address(pool), amountIn);
+        // Overly aggressive minOut
+        vm.expectRevert();
+        pool.swap(address(usdc), address(eurc), amountIn, 1_000_000_000_000, block.timestamp, bob);
+        vm.stopPrank();
+    }
+
+    function test_swap_revertsDeadlinePassed() public {
+        _seedAllThree();
+        vm.warp(2_000);
+        vm.prank(owner);
+        usdc.mint(bob, 100e6);
+        vm.startPrank(bob);
+        usdc.approve(address(pool), 100e6);
+        vm.expectRevert(IArcoraDexPool.DeadlinePassed.selector);
+        pool.swap(address(usdc), address(eurc), 100e6, 0, 1_000, bob);
+        vm.stopPrank();
+    }
+
+    function test_swap_revertsSameToken() public {
+        _seedAllThree();
+        vm.prank(owner);
+        usdc.mint(bob, 100e6);
+        vm.startPrank(bob);
+        usdc.approve(address(pool), 100e6);
+        vm.expectRevert(abi.encodeWithSelector(IArcoraDexPool.SameToken.selector, address(usdc)));
+        pool.swap(address(usdc), address(usdc), 100e6, 0, block.timestamp, bob);
+        vm.stopPrank();
+    }
+
+    function test_swap_revertsInactiveIn() public {
+        _seedAllThree();
+        vm.prank(owner);
+        reg.deactivateToken(address(usdc));
+        vm.prank(owner);
+        usdc.mint(bob, 100e6);
+        vm.startPrank(bob);
+        usdc.approve(address(pool), 100e6);
+        vm.expectRevert(abi.encodeWithSelector(IArcoraDexPool.TokenNotActive.selector, address(usdc)));
+        pool.swap(address(usdc), address(eurc), 100e6, 0, block.timestamp, bob);
+        vm.stopPrank();
+    }
+
+    function test_swap_paused_reverts() public {
+        _seedAllThree();
+        vm.prank(owner);
+        pool.pause();
+        vm.prank(owner);
+        usdc.mint(bob, 100e6);
+        vm.startPrank(bob);
+        usdc.approve(address(pool), 100e6);
+        vm.expectRevert(IArcoraDexPool.PoolPaused.selector);
+        pool.swap(address(usdc), address(eurc), 100e6, 0, block.timestamp, bob);
+        vm.stopPrank();
+    }
+
+    function test_swap_recipient_receives() public {
+        _seedAllThree();
+        address charlie = makeAddr("charlie");
+        vm.prank(owner);
+        usdc.mint(bob, 100e6);
+        vm.startPrank(bob);
+        usdc.approve(address(pool), 100e6);
+        uint256 outAmt = pool.swap(address(usdc), address(eurc), 100e6, 0, block.timestamp, charlie);
+        vm.stopPrank();
+        assertEq(eurc.balanceOf(charlie), outAmt);
+        assertEq(eurc.balanceOf(bob), 0);
+    }
 }
