@@ -15,6 +15,10 @@ import { withdraw, type WithdrawArgs } from "./actions/withdraw";
 import * as fmt from "./format";
 import * as slip from "./slippage";
 import { tokenLabel } from "./tokens/label";
+import { subscribeSwaps, type Unsubscribe } from "./subscriptions/subscribeSwaps";
+import { subscribeDeposited } from "./subscriptions/subscribeDeposited";
+import { subscribeWithdrew } from "./subscriptions/subscribeWithdrew";
+import { subscribePoolStats } from "./subscriptions/subscribePoolStats";
 
 export interface CreateArcoraDexParams {
   chain: Chain;
@@ -42,6 +46,11 @@ export interface ArcoraDexClient {
   swap: (a: SwapArgs) => ReturnType<typeof swap>;
   deposit: (a: DepositArgs) => ReturnType<typeof deposit>;
   withdraw: (a: WithdrawArgs) => ReturnType<typeof withdraw>;
+
+  subscribeSwaps:     (h: Parameters<typeof subscribeSwaps>[1],     o?: Parameters<typeof subscribeSwaps>[2])     => Unsubscribe;
+  subscribeDeposited: (h: Parameters<typeof subscribeDeposited>[1], o?: Parameters<typeof subscribeDeposited>[2]) => Unsubscribe;
+  subscribeWithdrew:  (h: Parameters<typeof subscribeWithdrew>[1],  o?: Parameters<typeof subscribeWithdrew>[2])  => Unsubscribe;
+  subscribePoolStats: (h: Parameters<typeof subscribePoolStats>[1])                                                => Unsubscribe;
 
   format: typeof fmt & { tokenLabel: typeof tokenLabel };
   slippage: typeof slip;
@@ -81,6 +90,11 @@ export function createArcoraDex(params: CreateArcoraDexParams): ArcoraDexClient 
     swap: (a) => swap(client, a),
     deposit: (a) => deposit(client, a),
     withdraw: (a) => withdraw(client, a),
+
+    subscribeSwaps:     (h, o) => subscribeSwaps(client, h, o),
+    subscribeDeposited: (h, o) => subscribeDeposited(client, h, o),
+    subscribeWithdrew:  (h, o) => subscribeWithdrew(client, h, o),
+    subscribePoolStats: (h)    => subscribePoolStats(client, h),
 
     format: { ...fmt, tokenLabel },
     slippage: slip,
