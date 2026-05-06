@@ -218,4 +218,67 @@ contract ArcoraDexPoolTest is Test {
         pool.setProtocolFeeShareBps(2000);
         assertEq(pool.protocolFeeShareBps(), 2000);
     }
+
+    // ── quote ───────────────────────────────────────────────────────
+    function test_quote_USDC_to_EURC_oracle_price() public {
+        // 1.00 USDC → 1.10 EUR per EURC oracle. amount = 110 USDC, expected gross = 100 EURC, net = 100 * (10000-30)/10000 = 99.7 EURC.
+        uint256 amountIn  = 110e6;       // 110 USDC
+        uint256 amountOut = pool.quote(address(usdc), address(eurc), amountIn);
+        // gross = 110e18 (USD value) / 1.10 (EURC price 1.1e18) * 1e6 ≈ 100e6
+        // net   = 100e6 * 9970/10000 = 99.7e6
+        assertApproxEqAbs(amountOut, 99_700_000, 100);
+    }
+
+    function test_quote_USDC_to_DAI_decimals_6_to_18() public {
+        // Both at $1.00. 100 USDC → ~99.7 DAI (after 30 bps swap fee).
+        uint256 amountIn  = 100e6;
+        uint256 amountOut = pool.quote(address(usdc), address(dai), amountIn);
+        // gross = 100e18; net = 100e18 * 9970/10000 = 99.7e18
+        assertApproxEqAbs(amountOut, 99_700_000_000_000_000_000, 1e12);
+    }
+
+    function test_quote_revertsSameToken() public {
+        vm.expectRevert(abi.encodeWithSelector(IArcoraDexPool.SameToken.selector, address(usdc)));
+        pool.quote(address(usdc), address(usdc), 1e6);
+    }
+
+    function test_quote_revertsZeroAmount() public {
+        vm.expectRevert(IArcoraDexPool.ZeroAmount.selector);
+        pool.quote(address(usdc), address(eurc), 0);
+    }
+
+    function test_quote_revertsInactiveOut() public {
+        vm.prank(owner);
+        reg.deactivateToken(address(eurc));
+        vm.expectRevert(abi.encodeWithSelector(IArcoraDexPool.TokenNotActive.selector, address(eurc)));
+        pool.quote(address(usdc), address(eurc), 100e6);
+    }
+
+    function test_quoteDeposit_first_deduct_minimum_liquidity() public view {
+        uint256 lpOut = pool.quoteDeposit(address(usdc), 1000e6);
+        assertEq(lpOut, 1000e18 - 1000);
+    }
+
+    function test_quoteDeposit_proportional_after_seed() public {
+        vm.startPrank(alice);
+        usdc.approve(address(pool), 1000e6);
+        pool.deposit(address(usdc), 1000e6, 0, block.timestamp);
+        vm.stopPrank();
+
+        uint256 lpOut = pool.quoteDeposit(address(usdc), 500e6);
+        uint256 expected = (500e18 * lp.totalSupply()) / pool.totalReservesUSD();
+        assertEq(lpOut, expected);
+    }
+
+    function test_quoteWithdraw_returns_amount_and_fee() public {
+        vm.startPrank(alice);
+        usdc.approve(address(pool), 2000e6);
+        pool.deposit(address(usdc), 2000e6, 0, block.timestamp);
+        uint256 lpToBurn = lp.balanceOf(alice) / 2;
+        (uint256 amountOut, uint256 fee) = pool.quoteWithdraw(address(usdc), lpToBurn);
+        vm.stopPrank();
+        assertGt(amountOut, 996e6);
+        assertLt(amountOut, 998e6);
+        assertGt(fee, 0);     // protocol's 10% of 30 bps fee on ~1000 USDC
+    }
 }

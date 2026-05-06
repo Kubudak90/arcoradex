@@ -180,15 +180,61 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         revert("swap: not implemented (T10)");
     }
 
-    // ── Quote views (placeholders; full versions in T9) ──────────────
-    function quote(address, address, uint256) external pure override returns (uint256) {
-        revert("quote: not implemented (T9)");
+    // ── Quote views ──────────────────────────────────────────────────
+    function _grossOut(
+        uint256 amountIn,
+        uint256 priceIn1e18,
+        uint256 priceOut1e18,
+        uint8   decIn,
+        uint8   decOut
+    ) internal pure returns (uint256) {
+        uint256 usdValue1e18 = (amountIn * priceIn1e18) / (10 ** decIn);
+        return (usdValue1e18 * (10 ** decOut)) / priceOut1e18;
     }
-    function quoteDeposit(address, uint256) external pure override returns (uint256) {
-        revert("quoteDeposit: not implemented (T9)");
+
+    function quote(address tokenIn, address tokenOut, uint256 amountIn)
+        external view override returns (uint256 amountOut)
+    {
+        if (tokenIn == tokenOut) revert SameToken(tokenIn);
+        if (amountIn == 0)       revert ZeroAmount();
+        (uint256 pIn,  uint8 dIn ) = _readUsdPrice1e18(tokenIn);
+        (uint256 pOut, uint8 dOut) = _readUsdPrice1e18(tokenOut);
+        uint256 gross = _grossOut(amountIn, pIn, pOut, dIn, dOut);
+        amountOut     = gross - (gross * swapFeeBps) / BPS;
     }
-    function quoteWithdraw(address, uint256) external pure override returns (uint256, uint256) {
-        revert("quoteWithdraw: not implemented (T9)");
+
+    function quoteDeposit(address token, uint256 amount)
+        external view override returns (uint256 lpOut)
+    {
+        if (amount == 0) revert ZeroAmount();
+        (uint256 pIn, uint8 dIn) = _readUsdPrice1e18(token);
+        uint256 usdIn  = (amount * pIn) / (10 ** dIn);
+        uint256 supply = LP.totalSupply();
+        if (supply == 0) {
+            if (usdIn <= MINIMUM_LIQUIDITY) revert FirstDepositTooSmall(usdIn, MINIMUM_LIQUIDITY);
+            lpOut = usdIn - MINIMUM_LIQUIDITY;
+        } else {
+            uint256 nav = totalReservesUSD();
+            lpOut = (usdIn * supply) / nav;
+        }
+    }
+
+    function quoteWithdraw(address tokenOut, uint256 lpAmount)
+        external view override returns (uint256 amountOut, uint256 protocolFee)
+    {
+        if (lpAmount == 0) revert ZeroAmount();
+        (uint256 pOut, uint8 dOut) = _readUsdPrice1e18(tokenOut);
+        {
+            uint256 supply      = LP.totalSupply();
+            uint256 navBefore   = totalReservesUSD();
+            uint256 usdRedeemed = (lpAmount * navBefore) / supply;
+            uint256 usdNet      = (usdRedeemed * (BPS - swapFeeBps)) / BPS;
+            uint256 feeUsd      = usdRedeemed - usdNet;
+            uint256 protFeeUsd  = (feeUsd * protocolFeeShareBps) / BPS;
+            uint256 scale       = 10 ** dOut;
+            amountOut   = (usdNet * scale) / pOut;
+            protocolFee = (protFeeUsd * scale) / pOut;
+        }
     }
 
     // ── Owner ────────────────────────────────────────────────────────
