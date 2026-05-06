@@ -89,6 +89,25 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         else                      price1e18 = uint256(answer) / (10 ** (oracleDec - 18));
     }
 
+    /// @dev Stateful: reads oracle, runs PriceGuard against last accepted, updates last accepted.
+    function _readAndGuardPrice(address token)
+        internal
+        returns (uint256 price1e18, uint8 tokenDecimals)
+    {
+        IArcoraDexRegistry.TokenInfo memory info = REGISTRY.tokenInfo(token);
+        uint16 maxDevBps;
+        (price1e18, tokenDecimals) = _readUsdPrice1e18(token);
+        maxDevBps = info.maxOracleDeviationBps;
+        uint256 prev = lastAcceptedPrice[token];
+        if (prev != 0) {
+            uint256 diff = price1e18 > prev ? price1e18 - prev : prev - price1e18;
+            if (diff * BPS > prev * uint256(maxDevBps)) {
+                revert PriceDeviation(token, price1e18, prev, maxDevBps);
+            }
+        }
+        lastAcceptedPrice[token] = price1e18;
+    }
+
     function totalReservesUSD() public view override returns (uint256 navE18) {
         uint256 n = REGISTRY.tokensLength();
         for (uint256 i = 0; i < n; i++) {
@@ -107,7 +126,7 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         uint256 deadline
     ) external override whenNotPaused nonReentrant checkDeadline(deadline) returns (uint256 lpMinted) {
         if (amount == 0) revert ZeroAmount();
-        (uint256 priceIn, uint8 dIn) = _readUsdPrice1e18(token);
+        (uint256 priceIn, uint8 dIn) = _readAndGuardPrice(token);
         uint256 usdIn = (amount * priceIn) / (10 ** dIn);
 
         uint256 supply  = LP.totalSupply();
@@ -146,7 +165,7 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
 
         uint256 protFeeAmt;
         {
-            (uint256 priceOut, uint8 dOut) = _readUsdPrice1e18(tokenOut);
+            (uint256 priceOut, uint8 dOut) = _readAndGuardPrice(tokenOut);
             uint256 usdNet     = (usdRedeemed * (BPS - swapFeeBps)) / BPS;
             uint256 protFeeUsd = ((usdRedeemed - usdNet) * protocolFeeShareBps) / BPS;
             uint256 scale      = 10 ** dOut;
@@ -183,8 +202,8 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         uint256 protFee;
         uint256 lpFeeUsd1e18;
         {
-            (uint256 pIn,  uint8 dIn ) = _readUsdPrice1e18(tokenIn);
-            (uint256 pOut, uint8 dOut) = _readUsdPrice1e18(tokenOut);
+            (uint256 pIn,  uint8 dIn ) = _readAndGuardPrice(tokenIn);
+            (uint256 pOut, uint8 dOut) = _readAndGuardPrice(tokenOut);
 
             uint256 gross = _grossOut(amountIn, pIn, pOut, dIn, dOut);
             uint256 fee   = (gross * swapFeeBps) / BPS;
@@ -300,8 +319,10 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         emit Unpaused(msg.sender);
     }
 
-    function syncAcceptedPrice(address /*token*/) external override onlyOwner returns (uint256) {
-        // Implemented in T11 alongside PriceGuard.
-        revert("syncAcceptedPrice: not implemented (T11)");
+    function syncAcceptedPrice(address token) external override onlyOwner returns (uint256 price1e18) {
+        (price1e18, ) = _readUsdPrice1e18(token);
+        uint256 oldPrice = lastAcceptedPrice[token];
+        lastAcceptedPrice[token] = price1e18;
+        emit AcceptedPriceSynced(token, oldPrice, price1e18);
     }
 }

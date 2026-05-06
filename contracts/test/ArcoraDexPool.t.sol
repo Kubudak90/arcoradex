@@ -411,4 +411,88 @@ contract ArcoraDexPoolTest is Test {
         assertEq(eurc.balanceOf(charlie), outAmt);
         assertEq(eurc.balanceOf(bob), 0);
     }
+
+    // ── PriceGuard ──────────────────────────────────────────────────
+    function test_priceGuard_revertsOnExcessiveDeviation() public {
+        // EURC deviation cap = 150 bps. Push price by 200 bps after first accepted.
+        _seedAllThree();   // first reads accept current oracle prices.
+
+        // Move EURC oracle by +2% (200 bps over 110_000_000 → 112_200_000) — exceeds 150 bps cap.
+        // Initial fEurc was 11e7 = 110_000_000 (8 dec, $1.10).
+        fEurc.setAnswer(int256(112_200_000));
+
+        vm.prank(owner);
+        usdc.mint(bob, 100e6);
+        vm.startPrank(bob);
+        usdc.approve(address(pool), 100e6);
+        vm.expectRevert();   // PriceDeviation
+        pool.swap(address(usdc), address(eurc), 100e6, 0, block.timestamp, bob);
+        vm.stopPrank();
+    }
+
+    function test_priceGuard_acceptsWithinCap() public {
+        _seedAllThree();
+        // Move EURC by +1% (100 bps), within 150 bps cap.
+        fEurc.setAnswer(int256(111_100_000));   // 1.111 USD
+
+        vm.prank(owner);
+        usdc.mint(bob, 100e6);
+        vm.startPrank(bob);
+        usdc.approve(address(pool), 100e6);
+        pool.swap(address(usdc), address(eurc), 100e6, 0, block.timestamp, bob);
+        vm.stopPrank();
+    }
+
+    function test_priceGuard_staleOracle_reverts() public {
+        _seedAllThree();
+        // Advance time past MAX_STALE_SECONDS without updating feed timestamp.
+        vm.warp(block.timestamp + 1 hours + 1);
+
+        vm.prank(owner);
+        usdc.mint(bob, 100e6);
+        vm.startPrank(bob);
+        usdc.approve(address(pool), 100e6);
+        vm.expectRevert();   // PriceDeviation (used as stale proxy in current code)
+        pool.swap(address(usdc), address(eurc), 100e6, 0, block.timestamp, bob);
+        vm.stopPrank();
+    }
+
+    function test_syncAcceptedPrice_resetsBaseline() public {
+        _seedAllThree();
+        // Move EURC by +5% (500 bps) — exceeds 150 bps cap; would revert without sync.
+        fEurc.setAnswer(int256(115_500_000));   // 1.155 USD
+
+        // Owner syncs the new price as accepted baseline.
+        vm.prank(owner);
+        uint256 newBaseline = pool.syncAcceptedPrice(address(eurc));
+        assertEq(newBaseline, 1.155e18);
+        assertEq(pool.lastAcceptedPrice(address(eurc)), 1.155e18);
+
+        // Subsequent swap proceeds (deviation now measured from 1.155).
+        vm.prank(owner);
+        usdc.mint(bob, 100e6);
+        vm.startPrank(bob);
+        usdc.approve(address(pool), 100e6);
+        pool.swap(address(usdc), address(eurc), 100e6, 0, block.timestamp, bob);
+        vm.stopPrank();
+    }
+
+    function test_syncAcceptedPrice_revertsNotOwner() public {
+        vm.prank(alice);
+        vm.expectRevert();   // OZ Ownable
+        pool.syncAcceptedPrice(address(usdc));
+    }
+
+    // ── setSwapFeeBps ──────────────────────────────────────────────
+    function test_setSwapFeeBps_revertsAboveCap() public {
+        vm.prank(owner);
+        vm.expectRevert(abi.encodeWithSelector(IArcoraDexPool.InvalidFeeBps.selector, uint16(101)));
+        pool.setSwapFeeBps(101);
+    }
+
+    function test_setSwapFeeBps_succeedsAtCap() public {
+        vm.prank(owner);
+        pool.setSwapFeeBps(100);
+        assertEq(pool.swapFeeBps(), 100);
+    }
 }
