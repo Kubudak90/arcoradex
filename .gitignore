@@ -34,3 +34,10 @@ app/.env.*
 !app/.env.example
 app/tsconfig.tsbuildinfo
 app/coverage/
+
+# SDK package
+node_modules/
+packages/*/node_modules/
+packages/*/dist/
+packages/*/.tsbuildinfo
+packages/*/coverage/
