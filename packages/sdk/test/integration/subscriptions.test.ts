@@ -60,6 +60,9 @@ describe("subscribeSwaps", () => {
       tokenOut: eurc(),
       amountIn: 1_000_000n,
       slippageBps: 100,
+      // Bound the approval so swap.test.ts's "first auto-approve" expectation
+      // (with amountIn=10M) still triggers a fresh MAX approval.
+      exactApproval: true,
     });
 
     // viem polls at 200ms interval; give the watcher a moment to deliver
@@ -91,6 +94,7 @@ describe("subscribeSwaps", () => {
       tokenOut: eurc(),
       amountIn: 500_000n,
       slippageBps: 100,
+      exactApproval: true,
     });
     await new Promise((r) => setTimeout(r, 2_000));
 
