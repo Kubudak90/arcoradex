@@ -13,7 +13,7 @@
     "build":     "tsup",
     "test":      "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit",
-    "lint":      "eslint src test"
+    "lint":      "eslint src test --no-error-on-unmatched-pattern"
   },
   "peerDependencies": {
     "viem": "^2.20.0",
