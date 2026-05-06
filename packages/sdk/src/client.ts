@@ -9,6 +9,9 @@ import { getTokens } from "./actions/getTokens";
 import { getReserves } from "./actions/getReserves";
 import { getPosition } from "./actions/getPosition";
 import { getProtocolFees } from "./actions/getProtocolFees";
+import { swap, type SwapArgs } from "./actions/swap";
+import { deposit, type DepositArgs } from "./actions/deposit";
+import { withdraw, type WithdrawArgs } from "./actions/withdraw";
 import * as fmt from "./format";
 import * as slip from "./slippage";
 import { tokenLabel } from "./tokens/label";
@@ -35,6 +38,10 @@ export interface ArcoraDexClient {
   getReserves: () => ReturnType<typeof getReserves>;
   getPosition: (addr: `0x${string}`) => ReturnType<typeof getPosition>;
   getProtocolFees: (token: `0x${string}`) => ReturnType<typeof getProtocolFees>;
+
+  swap: (a: SwapArgs) => ReturnType<typeof swap>;
+  deposit: (a: DepositArgs) => ReturnType<typeof deposit>;
+  withdraw: (a: WithdrawArgs) => ReturnType<typeof withdraw>;
 
   format: typeof fmt & { tokenLabel: typeof tokenLabel };
   slippage: typeof slip;
@@ -70,6 +77,10 @@ export function createArcoraDex(params: CreateArcoraDexParams): ArcoraDexClient 
     getReserves: () => getReserves(client),
     getPosition: (addr) => getPosition(client, addr),
     getProtocolFees: (token) => getProtocolFees(client, token),
+
+    swap: (a) => swap(client, a),
+    deposit: (a) => deposit(client, a),
+    withdraw: (a) => withdraw(client, a),
 
     format: { ...fmt, tokenLabel },
     slippage: slip,
