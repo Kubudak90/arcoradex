@@ -90,12 +90,31 @@ export class DeadlinePassedError extends ArcoraDexError {
 
 interface RevertedShape {
   data?: { errorName?: string; args?: readonly unknown[] };
+  cause?: RevertedShape;
+}
+
+/**
+ * Walk the error's cause chain looking for a node that has
+ * `data.errorName` — that's the ContractFunctionRevertedError viem
+ * produces.  When writeContract throws a live revert it wraps the
+ * ContractFunctionRevertedError inside a ContractFunctionExecutionError,
+ * so we must recurse through `.cause` until we find the payload.
+ */
+function extractRevertData(
+  err: unknown,
+  depth = 0,
+): { errorName: string | undefined; args: readonly unknown[] } {
+  if (depth > 5 || err == null) return { errorName: undefined, args: [] };
+  const r = err as RevertedShape;
+  if (r?.data?.errorName != null) {
+    return { errorName: r.data.errorName, args: r.data.args ?? [] };
+  }
+  return extractRevertData(r?.cause, depth + 1);
 }
 
 export function parseContractError(err: unknown): ArcoraDexError {
-  const r = err as RevertedShape;
-  const name = r?.data?.errorName;
-  const args = (r?.data?.args ?? []) as readonly unknown[];
+  const { errorName: name, args: rawArgs } = extractRevertData(err);
+  const args = rawArgs as readonly unknown[];
 
   switch (name) {
     case "InsufficientOutput":

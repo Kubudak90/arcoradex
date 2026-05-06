@@ -18,4 +18,16 @@ export const poolAbi = parseAbi([
   "event Swapped(address indexed user, address indexed tokenIn, address indexed tokenOut, uint256 amountIn, uint256 amountOut, uint256 lpFeeUsd1e18, uint256 protocolFeeAmtOut, address recipient)",
   "event Deposited(address indexed user, address indexed token, uint256 amountIn, uint256 lpMinted, uint256 navBefore1e18, uint256 navAfter1e18)",
   "event Withdrew(address indexed user, address indexed tokenOut, uint256 lpBurned, uint256 amountOut, uint256 protocolFee, uint256 navBefore1e18, uint256 navAfter1e18)",
+  // Custom errors — required for viem to decode revert data into errorName/args
+  "error TokenNotActive(address token)",
+  "error SameToken(address token)",
+  "error ZeroAmount()",
+  "error DeadlinePassed()",
+  "error InsufficientLiquidity(address token, uint256 requested, uint256 available)",
+  "error InsufficientOutput(uint256 amountOut, uint256 minOut)",
+  "error PriceDeviation(address token, uint256 newPrice, uint256 lastAccepted, uint16 maxDevBps)",
+  "error InvalidOracleRound(address token, uint80 roundId, uint80 answeredInRound)",
+  "error InvalidOracleTimestamp(address token, uint256 updatedAt)",
+  "error InvalidFeeBps(uint16 bps)",
+  "error PoolPaused()",
 ]);
