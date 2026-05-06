@@ -25,7 +25,8 @@ export function usePoolStats(options?: UsePoolStatsOptions): UsePoolStatsResult 
 
   const { data: blockNumber } = useBlockNumber({
     watch: options?.refetchOnBlock ?? false,
-    chainId: sdk.chain.id,
+    // Cast: wagmi's `Register` narrows `chainId` in consumer apps; SDK is chain-agnostic.
+    chainId: sdk.chain.id as never,
   });
 
   useEffect(() => {

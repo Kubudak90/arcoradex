@@ -1,30 +1,18 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
-import { usePublicClient } from "wagmi";
+import { useMemo } from "react";
+import { useSwapHistory, useTokens } from "@arcoralabs/dex-sdk/react";
+import { fmtUnits, tokenLabel } from "@arcoralabs/dex-sdk";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
-import { POOL_ADDRESS, tokenLabel } from "@/lib/contracts";
-import { useTokens } from "@/lib/hooks/useTokens";
-import { fmtUnits } from "@/lib/format";
 import { shortAddr } from "@/lib/utils";
-import { parseAbiItem } from "viem";
 
-const SCAN_BLOCKS = 50_000n;
-
-interface Row {
-  txHash: `0x${string}`;
-  user: `0x${string}`;
-  tokenIn: `0x${string}`;
-  tokenOut: `0x${string}`;
-  amountIn: bigint;
-  amountOut: bigint;
-  blockNumber: bigint;
-}
+const SCAN_LIMIT = 50;
 
 export function SwapHistory() {
-  const client = usePublicClient();
   const { tokens } = useTokens();
-  const [rows, setRows] = useState<Row[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { events: rows, isLoading, error } = useSwapHistory({
+    limit: SCAN_LIMIT,
+    watch: true,
+  });
 
   // address (lowercase) → decimals lookup so we can format raw event amounts correctly.
   const decimalsByAddr = useMemo(() => {
@@ -34,54 +22,16 @@ export function SwapHistory() {
   }, [tokens]);
   const dec = (addr: string) => decimalsByAddr.get(addr.toLowerCase()) ?? 18;
 
-  useEffect(() => {
-    if (!client) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const head = await client.getBlockNumber();
-        const fromBlock = head > SCAN_BLOCKS ? head - SCAN_BLOCKS : 0n;
-        const logs = await client.getLogs({
-          address: POOL_ADDRESS,
-          event: parseAbiItem(
-            "event Swapped(address indexed user, address indexed tokenIn, address indexed tokenOut, uint256 amountIn, uint256 amountOut, uint256 lpFeeUsd1e18, uint256 protocolFeeAmtOut, address recipient)"
-          ),
-          fromBlock,
-          toBlock: head,
-        });
-        if (cancelled) return;
-        const out: Row[] = logs
-          .map((l) => ({
-            txHash: l.transactionHash!,
-            user: l.args.user!,
-            tokenIn: l.args.tokenIn!,
-            tokenOut: l.args.tokenOut!,
-            amountIn: l.args.amountIn!,
-            amountOut: l.args.amountOut!,
-            blockNumber: l.blockNumber!,
-          }))
-          .reverse()
-          .slice(0, 30);
-        setRows(out);
-      } catch (e) {
-        setError(e instanceof Error ? e.message : "Failed to load events");
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [client]);
-
   return (
     <Card>
       <CardHeader>
         <CardTitle>Recent swaps</CardTitle>
-        <span className="text-xs text-fg-muted">last {SCAN_BLOCKS.toString()} blocks</span>
+        <span className="text-xs text-fg-muted">last {SCAN_LIMIT} swaps</span>
       </CardHeader>
 
       {error ? (
-        <p className="text-sm text-danger">{error}</p>
-      ) : rows == null ? (
+        <p className="text-sm text-danger">{error.message}</p>
+      ) : isLoading ? (
         <p className="text-sm text-fg-muted">Loading…</p>
       ) : rows.length === 0 ? (
         <p className="text-sm text-fg-muted">No swaps yet.</p>
@@ -101,7 +51,10 @@ export function SwapHistory() {
                 const tIn = tokenLabel(r.tokenIn);
                 const tOut = tokenLabel(r.tokenOut);
                 return (
-                  <tr key={r.txHash} className="border-b border-border last:border-0">
+                  <tr
+                    key={`${r.txHash}-${r.logIndex}`}
+                    className="border-b border-border last:border-0"
+                  >
                     <td className="py-2 font-mono text-xs">{shortAddr(r.user)}</td>
                     <td className="py-2">
                       {fmtUnits(r.amountIn, dec(r.tokenIn), 4)} {tIn.symbol}

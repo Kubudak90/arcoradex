@@ -1,28 +1,18 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
-import {
-  useAccount,
-  useReadContract,
-  useWriteContract,
-  useWaitForTransactionReceipt,
-} from "wagmi";
+import { useAccount } from "wagmi";
+import { useTokens, useQuoteSwap, useSwap } from "@arcoralabs/dex-sdk/react";
+import { fmtUnits, tryParseUnits } from "@arcoralabs/dex-sdk";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { TokenSelect } from "@/components/common/TokenSelect";
-import { useTokens, useTokenAccount } from "@/lib/hooks/useTokens";
-import { poolAbi } from "@/lib/abi/pool";
-import { erc20Abi } from "@/lib/abi/erc20";
-import { POOL_ADDRESS } from "@/lib/contracts";
-import { fmtUnits, tryParseUnits } from "@/lib/format";
-import { minOut, deadline } from "@/lib/slippage";
-import { maxUint256 } from "viem";
 
 const SLIPPAGE_BPS = 50; // 0.5 %
 
 export function SwapCard() {
   const { activeTokens, isLoading } = useTokens();
-  const { address: account, isConnected } = useAccount();
+  const { isConnected } = useAccount();
 
   const [tokenIn, setTokenIn] = useState<`0x${string}` | undefined>();
   const [tokenOut, setTokenOut] = useState<`0x${string}` | undefined>();
@@ -39,59 +29,29 @@ export function SwapCard() {
 
   const amountIn = useMemo(
     () => (inMeta && amountStr ? tryParseUnits(amountStr, inMeta.decimals) : null),
-    [amountStr, inMeta]
+    [amountStr, inMeta],
   );
 
-  // Quote
-  const { data: quoted } = useReadContract({
-    address: POOL_ADDRESS,
-    abi: poolAbi,
-    functionName: "quote",
-    args: tokenIn && tokenOut && amountIn ? [tokenIn, tokenOut, amountIn] : undefined,
-    query: {
-      enabled: !!tokenIn && !!tokenOut && tokenIn !== tokenOut && amountIn != null && amountIn > 0n,
-    },
+  const { data: quoted } = useQuoteSwap({
+    tokenIn,
+    tokenOut,
+    amountIn: amountIn ?? undefined,
   });
 
-  // Balance + allowance
-  const { balance, allowance, refetch: refetchAccount } = useTokenAccount(
-    tokenIn,
-    account,
-    POOL_ADDRESS
-  );
+  const { mutate: swap, isPending, error, data: result } = useSwap();
 
-  const needsApproval = !!amountIn && allowance < amountIn;
-  const insufficientBalance = !!amountIn && balance < amountIn;
-
-  const { writeContract, data: txHash, isPending, reset } = useWriteContract();
-  const { isLoading: confirming, isSuccess } = useWaitForTransactionReceipt({ hash: txHash });
-
-  // After a successful swap, clear input + refresh balances
+  // Clear input on success
   useEffect(() => {
-    if (isSuccess) {
-      setAmountStr("");
-      refetchAccount();
-      reset();
-    }
-  }, [isSuccess, refetchAccount, reset]);
-
-  function onApprove() {
-    if (!tokenIn) return;
-    writeContract({
-      address: tokenIn,
-      abi: erc20Abi,
-      functionName: "approve",
-      args: [POOL_ADDRESS, maxUint256],
-    });
-  }
+    if (result) setAmountStr("");
+  }, [result]);
 
   function onSwap() {
-    if (!tokenIn || !tokenOut || !amountIn || quoted == null || !account) return;
-    writeContract({
-      address: POOL_ADDRESS,
-      abi: poolAbi,
-      functionName: "swap",
-      args: [tokenIn, tokenOut, amountIn, minOut(quoted as bigint, SLIPPAGE_BPS), deadline(), account],
+    if (!tokenIn || !tokenOut || !amountIn) return;
+    swap({
+      tokenIn,
+      tokenOut,
+      amountIn,
+      slippageBps: SLIPPAGE_BPS,
     });
   }
 
@@ -122,11 +82,6 @@ export function SwapCard() {
               className="w-44"
             />
           </div>
-          {inMeta && account ? (
-            <p className="text-xs text-fg-muted mt-1">
-              Balance: {fmtUnits(balance, inMeta.decimals)} {inMeta.symbol}
-            </p>
-          ) : null}
         </div>
 
         <div>
@@ -136,9 +91,7 @@ export function SwapCard() {
               type="text"
               readOnly
               value={
-                quoted != null && outMeta
-                  ? fmtUnits(quoted as bigint, outMeta.decimals, 6)
-                  : ""
+                quoted != null && outMeta ? fmtUnits(quoted, outMeta.decimals, 6) : ""
               }
               className="flex-1"
             />
@@ -158,37 +111,38 @@ export function SwapCard() {
           </p>
         ) : isLoading ? (
           <p className="text-sm text-fg-muted text-center pt-2">Loading registry…</p>
-        ) : insufficientBalance ? (
-          <Button disabled className="w-full">
-            Insufficient {inMeta?.symbol} balance
-          </Button>
-        ) : needsApproval ? (
-          <Button onClick={onApprove} disabled={isPending || confirming} className="w-full">
-            {isPending || confirming ? "Approving…" : `Approve ${inMeta?.symbol}`}
-          </Button>
         ) : (
           <Button
             onClick={onSwap}
-            disabled={!amountIn || amountIn === 0n || isPending || confirming || quoted == null}
+            disabled={!amountIn || amountIn === 0n || isPending || quoted == null}
             className="w-full"
           >
-            {isPending || confirming ? "Swapping…" : "Swap"}
+            {isPending ? "Swapping…" : "Swap"}
           </Button>
         )}
 
-        {txHash ? (
+        {result?.event ? (
+          <p className="text-xs text-success text-center">
+            Swapped {fmtUnits(result.event.amountIn, inMeta?.decimals ?? 18, 4)} {inMeta?.symbol} →{" "}
+            {fmtUnits(result.event.amountOut, outMeta?.decimals ?? 18, 4)} {outMeta?.symbol}
+          </p>
+        ) : null}
+
+        {result?.hash ? (
           <p className="text-xs text-fg-muted text-center">
             Tx:{" "}
             <a
-              href={`${process.env.NEXT_PUBLIC_BLOCK_EXPLORER || "https://testnet.arcscan.app"}/tx/${txHash}`}
+              href={`${process.env.NEXT_PUBLIC_BLOCK_EXPLORER || "https://testnet.arcscan.app"}/tx/${result.hash}`}
               target="_blank"
               rel="noreferrer"
               className="text-arcora-blue-500 hover:underline"
             >
-              {txHash.slice(0, 10)}…
+              {result.hash.slice(0, 10)}…
             </a>
           </p>
         ) : null}
+
+        {error ? <p className="text-xs text-danger text-center">{error.message}</p> : null}
       </div>
     </Card>
   );

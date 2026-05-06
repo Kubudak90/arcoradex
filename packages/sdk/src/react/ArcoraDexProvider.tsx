@@ -19,8 +19,11 @@ export function ArcoraDexProvider({ chain, addresses, children }: ArcoraDexProvi
   const effectiveChain: Chain = chain ?? arcTestnet;
   // useAccount is read for parity with the `wagmiChainId` dep — write hooks key off walletClient.
   useAccount();
-  const publicClient = usePublicClient({ chainId: effectiveChain.id });
-  const { data: walletClient } = useWalletClient({ chainId: effectiveChain.id });
+  // Cast through `any` because wagmi's `Register` may narrow `chainId` to a literal
+  // union in the consumer app, while we intentionally accept any `Chain.id: number`.
+  const chainId = effectiveChain.id as never;
+  const publicClient = usePublicClient({ chainId });
+  const { data: walletClient } = useWalletClient({ chainId });
 
   const sdk = useMemo<ArcoraDexClient | null>(() => {
     if (!publicClient) return null;

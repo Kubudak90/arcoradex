@@ -1,39 +1,24 @@
 "use client";
-import { useReadContract, useReadContracts } from "wagmi";
+import { useEffect, useState } from "react";
+import { usePoolStats, useTokens, useArcoraDex } from "@arcoralabs/dex-sdk/react";
+import { fmtUnits, fmtUSD } from "@arcoralabs/dex-sdk";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
-import { useTokens } from "@/lib/hooks/useTokens";
-import { poolAbi } from "@/lib/abi/pool";
-import { lpAbi } from "@/lib/abi/lp";
-import { POOL_ADDRESS, LP_ADDRESS } from "@/lib/contracts";
-import { fmtUnits, fmtUSD } from "@/lib/format";
 
 export function ReservesTable() {
+  const sdk = useArcoraDex();
   const { tokens } = useTokens();
+  const { stats } = usePoolStats({ refetchOnBlock: true });
+  const [reserves, setReserves] = useState<Record<`0x${string}`, bigint>>({});
 
-  const { data: nav } = useReadContract({
-    address: POOL_ADDRESS,
-    abi: poolAbi,
-    functionName: "totalReservesUSD",
-  });
-  const { data: supply } = useReadContract({
-    address: LP_ADDRESS,
-    abi: lpAbi,
-    functionName: "totalSupply",
-  });
-
-  const { data: reservesData } = useReadContracts({
-    contracts: tokens.map((t) => ({
-      address: POOL_ADDRESS,
-      abi: poolAbi,
-      functionName: "reserves" as const,
-      args: [t.address] as const,
-    })),
-    query: { enabled: tokens.length > 0 },
-  });
-
-  const navUsd = (nav as bigint) ?? 0n;
-  const lpSupply = (supply as bigint) ?? 0n;
-  const lpPriceUsd = lpSupply > 0n ? (navUsd * 10n ** 18n) / lpSupply : 0n;
+  useEffect(() => {
+    let cancelled = false;
+    sdk.getReserves().then((r) => {
+      if (!cancelled) setReserves(r);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [sdk, stats?.navUsd1e18]);
 
   return (
     <Card>
@@ -41,18 +26,18 @@ export function ReservesTable() {
         <CardTitle>Pool reserves</CardTitle>
         <div className="text-right text-sm">
           <p className="text-fg-muted text-xs uppercase">NAV</p>
-          <p className="font-semibold">{fmtUSD(navUsd)}</p>
+          <p className="font-semibold">{stats ? fmtUSD(stats.navUsd1e18) : "—"}</p>
         </div>
       </CardHeader>
 
       <div className="grid grid-cols-2 gap-6 mb-6 text-sm">
         <div>
           <p className="text-xs text-fg-muted uppercase">Total ADEX-LP</p>
-          <p className="font-semibold">{fmtUnits(lpSupply, 18, 4)}</p>
+          <p className="font-semibold">{stats ? fmtUnits(stats.lpSupply, 18, 4) : "—"}</p>
         </div>
         <div>
           <p className="text-xs text-fg-muted uppercase">Price (1 ADEX-LP)</p>
-          <p className="font-semibold">{fmtUSD(lpPriceUsd)}</p>
+          <p className="font-semibold">{stats ? fmtUSD(stats.lpPriceUsd1e18) : "—"}</p>
         </div>
       </div>
 
@@ -67,8 +52,8 @@ export function ReservesTable() {
             </tr>
           </thead>
           <tbody>
-            {tokens.map((t, i) => {
-              const reserve = reservesData?.[i]?.status === "success" ? (reservesData[i].result as bigint) : 0n;
+            {tokens.map((t) => {
+              const reserve = reserves[t.address] ?? 0n;
               return (
                 <tr key={t.address} className="border-b border-border last:border-0">
                   <td className="py-2">
@@ -85,7 +70,7 @@ export function ReservesTable() {
                       <span className="text-danger">Paused</span>
                     )}
                   </td>
-                  <td className="py-2 text-right text-fg-muted">{t.deviationBps} bps</td>
+                  <td className="py-2 text-right text-fg-muted">{t.maxOracleDeviationBps} bps</td>
                 </tr>
               );
             })}

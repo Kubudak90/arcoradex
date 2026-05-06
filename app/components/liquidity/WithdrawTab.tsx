@@ -1,26 +1,26 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
+import { useAccount, useReadContract } from "wagmi";
+import { parseAbi } from "viem";
 import {
-  useAccount,
-  useReadContract,
-  useWriteContract,
-  useWaitForTransactionReceipt,
-} from "wagmi";
+  useTokens,
+  useQuoteWithdraw,
+  useWithdraw,
+  useArcoraDex,
+} from "@arcoralabs/dex-sdk/react";
+import { fmtUnits, tryParseUnits } from "@arcoralabs/dex-sdk";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { TokenSelect } from "@/components/common/TokenSelect";
-import { useTokens } from "@/lib/hooks/useTokens";
-import { poolAbi } from "@/lib/abi/pool";
-import { lpAbi } from "@/lib/abi/lp";
-import { POOL_ADDRESS, LP_ADDRESS } from "@/lib/contracts";
-import { fmtUnits, tryParseUnits } from "@/lib/format";
-import { minOut, deadline } from "@/lib/slippage";
 
 const SLIPPAGE_BPS = 50;
+const lpAbi = parseAbi(["function balanceOf(address) view returns (uint256)"]);
 
 export function WithdrawTab() {
   const { activeTokens } = useTokens();
   const { address: account, isConnected } = useAccount();
+  const sdk = useArcoraDex();
+
   const [tokenOut, setTokenOut] = useState<`0x${string}` | undefined>();
   const [lpStr, setLpStr] = useState("");
 
@@ -32,46 +32,34 @@ export function WithdrawTab() {
   const lpAmount = useMemo(() => (lpStr ? tryParseUnits(lpStr, 18) : null), [lpStr]);
 
   const { data: lpBalance, refetch: refetchLp } = useReadContract({
-    address: LP_ADDRESS,
+    address: sdk.addresses.lp,
     abi: lpAbi,
     functionName: "balanceOf",
     args: account ? [account] : undefined,
     query: { enabled: !!account },
   });
 
-  const { data: withdrawQuote } = useReadContract({
-    address: POOL_ADDRESS,
-    abi: poolAbi,
-    functionName: "quoteWithdraw",
-    args: tokenOut && lpAmount ? [tokenOut, lpAmount] : undefined,
-    query: { enabled: !!tokenOut && !!lpAmount && lpAmount > 0n },
+  const { data: withdrawQuote } = useQuoteWithdraw({
+    tokenOut,
+    lpAmount: lpAmount ?? undefined,
   });
 
-  const insufficient = lpAmount != null && lpBalance != null && (lpAmount as bigint) > (lpBalance as bigint);
+  const insufficient =
+    lpAmount != null && lpBalance != null && lpAmount > (lpBalance as bigint);
 
-  const { writeContract, data: txHash, isPending, reset } = useWriteContract();
-  const { isLoading: confirming, isSuccess } = useWaitForTransactionReceipt({ hash: txHash });
+  const { mutate: withdraw, isPending, error, data: result } = useWithdraw();
 
   useEffect(() => {
-    if (isSuccess) {
+    if (result) {
       setLpStr("");
       refetchLp();
-      reset();
     }
-  }, [isSuccess, refetchLp, reset]);
+  }, [result, refetchLp]);
 
   function onWithdraw() {
-    if (!tokenOut || !lpAmount || withdrawQuote == null) return;
-    const [amountOut] = withdrawQuote as readonly [bigint, bigint];
-    writeContract({
-      address: POOL_ADDRESS,
-      abi: poolAbi,
-      functionName: "withdraw",
-      args: [tokenOut, lpAmount, minOut(amountOut, SLIPPAGE_BPS), deadline()],
-    });
+    if (!tokenOut || !lpAmount) return;
+    withdraw({ tokenOut, lpAmount, slippageBps: SLIPPAGE_BPS });
   }
-
-  const [estOut, estFee] = (withdrawQuote as readonly [bigint, bigint] | undefined) ?? [undefined, undefined];
 
   return (
     <div className="space-y-4">
@@ -106,13 +94,15 @@ export function WithdrawTab() {
         <div>
           <span className="text-fg-muted">You receive (estimate)</span>
           <span className="float-right">
-            {estOut != null && meta ? `${fmtUnits(estOut, meta.decimals, 6)} ${meta.symbol}` : "—"}
+            {withdrawQuote && meta
+              ? `${fmtUnits(withdrawQuote.amountOut, meta.decimals, 6)} ${meta.symbol}`
+              : "—"}
           </span>
         </div>
         <div>
           <span className="text-fg-muted">Protocol fee (in {meta?.symbol})</span>
           <span className="float-right">
-            {estFee != null && meta ? fmtUnits(estFee, meta.decimals, 6) : "—"}
+            {withdrawQuote && meta ? fmtUnits(withdrawQuote.protocolFee, meta.decimals, 6) : "—"}
           </span>
         </div>
       </div>
@@ -120,16 +110,26 @@ export function WithdrawTab() {
       {!isConnected ? (
         <p className="text-sm text-fg-muted text-center">Connect a wallet to withdraw.</p>
       ) : insufficient ? (
-        <Button disabled className="w-full">Insufficient ADEX-LP balance</Button>
+        <Button disabled className="w-full">
+          Insufficient ADEX-LP balance
+        </Button>
       ) : (
         <Button
           onClick={onWithdraw}
-          disabled={!lpAmount || lpAmount === 0n || isPending || confirming || withdrawQuote == null}
+          disabled={!lpAmount || lpAmount === 0n || isPending || withdrawQuote == null}
           className="w-full"
         >
-          {isPending || confirming ? "Withdrawing…" : "Withdraw"}
+          {isPending ? "Withdrawing…" : "Withdraw"}
         </Button>
       )}
+
+      {result?.event && meta ? (
+        <p className="text-xs text-success text-center">
+          Withdrew {fmtUnits(result.event.lpBurned, 18, 4)} ADEX-LP →{" "}
+          {fmtUnits(result.event.amountOut, meta.decimals, 4)} {meta.symbol}
+        </p>
+      ) : null}
+      {error ? <p className="text-xs text-danger text-center">{error.message}</p> : null}
     </div>
   );
 }

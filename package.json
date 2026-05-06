@@ -9,5 +9,11 @@
     "lint": "pnpm -r lint",
     "dev": "pnpm --filter app dev"
   },
-  "engines": { "node": ">=22", "pnpm": ">=10" }
+  "engines": { "node": ">=22", "pnpm": ">=10" },
+  "pnpm": {
+    "overrides": {
+      "viem": "2.48.8",
+      "wagmi": "2.19.5"
+    }
+  }
 }

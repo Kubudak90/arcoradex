@@ -25,7 +25,8 @@ const SWAPPED_EVENT = parseAbiItem(
 
 export function useSwapHistory(options?: UseSwapHistoryOptions): UseSwapHistoryResult {
   const sdk = useArcoraDex();
-  const publicClient = usePublicClient({ chainId: sdk.chain.id });
+  // Cast: wagmi's `Register` narrows `chainId` in consumer apps; SDK is chain-agnostic.
+  const publicClient = usePublicClient({ chainId: sdk.chain.id as never });
   const limit = options?.limit ?? 50;
   const watch = options?.watch ?? true;
   const fromBlock = options?.fromBlock;

@@ -1,5 +1,5 @@
 "use client";
-import type { TokenRow } from "@/lib/hooks/useTokens";
+import type { TokenInfo as TokenRow } from "@arcoralabs/dex-sdk";
 import { Select } from "@/components/ui/select";
 
 interface Props {
