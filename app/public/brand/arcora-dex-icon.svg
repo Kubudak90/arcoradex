@@ -1,0 +1,18 @@
+<svg width="360" height="360" viewBox="0 0 360 360" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">Arcora DEX app icon</title>
+  <desc id="desc">Arcora DEX icon with a rounded white tile and blue/teal exchange symbol.</desc>
+  <path d="M275 23H101C59.0264 23 25 57.0264 25 99V259C25 300.974 59.0264 335 101 335H275C316.974 335 351 300.974 351 259V99C351 57.0264 316.974 23 275 23Z" fill="white"/>
+  <path d="M271.994 25H104.006C60.3724 25 25 58.6363 25 100.129V259.871C25 301.364 60.3724 335 104.006 335H271.994C315.628 335 351 301.364 351 259.871V100.129C351 58.6363 315.628 25 271.994 25Z" stroke="#E6ECF2" stroke-width="1.5"/>
+  <path d="M174.691 59H261.818L212.888 124.4L261.818 159.8H181.32V124.4L103.663 221H44L174.691 59Z" fill="url(#paint0_linear_1_2)"/>
+  <path d="M263.227 130L331 195.493L263.227 264H220.108L263.227 221.252H157.088V264L104 221.252L157.088 176H263.227L263.227 130Z" fill="url(#paint1_linear_1_2)"/>
+  <defs>
+    <linearGradient id="paint0_linear_1_2" x1="93.2457" y1="132.8" x2="259.632" y2="228.122" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2563FF"/>
+      <stop offset="1" stop-color="#1D4FEA"/>
+    </linearGradient>
+    <linearGradient id="paint1_linear_1_2" x1="182.489" y1="177.07" x2="305.306" y2="287.019" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#00C2A8"/>
+      <stop offset="1" stop-color="#12B9B0"/>
+    </linearGradient>
+  </defs>
+</svg>

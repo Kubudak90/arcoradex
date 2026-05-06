@@ -1,0 +1,11 @@
+<svg width="1180" height="320" viewBox="0 0 1180 320" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">Arcora DEX monochrome logo</title>
+  <desc id="desc">Arcora DEX horizontal wordmark and exchange symbol in a single dark color.</desc>
+  <g fill="#0B1426">
+    <g id="symbol" transform="translate(0 -5) scale(.92)">
+      <path d="M174.691 59H261.818L212.888 124.4L261.818 159.8H181.32V124.4L103.663 221H44L174.691 59Z"/>
+      <path d="M263.227 130L331 195.493L263.227 264H220.108L263.227 221.252H157.088V264L104 221.252L157.088 176H263.227L263.227 130Z"/>
+    </g>
+    <text x="370" y="204" font-family="Inter, Manrope, Avenir Next, Arial, sans-serif" font-size="118" font-weight="800" letter-spacing="0">Arcora DEX</text>
+  </g>
+</svg>
