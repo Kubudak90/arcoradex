@@ -11,7 +11,7 @@
     "skipLibCheck": true,
     "isolatedModules": true,
     "jsx": "react-jsx",
-    "paths": { "@/*": ["./src/*"] }
+    "paths": { "@": ["./src/index.ts"], "@/*": ["./src/*"] }
   },
   "include": ["src/**/*", "test/**/*"],
   "exclude": ["dist", "node_modules"]

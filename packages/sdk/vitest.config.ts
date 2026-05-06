@@ -11,7 +11,7 @@ export default defineConfig({
       "test/react/**/*.test.tsx",
     ],
     testTimeout: 60_000,
-    // globalSetup: ["./test/setup.ts"],   // uncomment at T5 (Anvil bootstrap)
+    globalSetup: ["./test/setup.ts"],
     pool: "forks",
     poolOptions: { forks: { singleFork: true } },
     environmentMatchGlobs: [
