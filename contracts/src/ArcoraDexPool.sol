@@ -164,6 +164,7 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         uint256 usdRedeemed = (lpAmount * navBefore) / LP.totalSupply();
 
         uint256 protFeeAmt;
+        uint256 navAfter;
         {
             (uint256 priceOut, uint8 dOut) = _readAndGuardPrice(tokenOut);
             uint256 usdNet     = (usdRedeemed * (BPS - swapFeeBps)) / BPS;
@@ -171,6 +172,10 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
             uint256 scale      = 10 ** dOut;
             amountOut  = (usdNet * scale) / priceOut;
             protFeeAmt = (protFeeUsd * scale) / priceOut;
+            // NAV measures only `reserves[*]`; protocolFeesAccrued and the user's payout
+            // both leave reserves[tokenOut], while the LP-retained portion of the fee stays
+            // in reserves -> NAV grows for remaining LPs.
+            navAfter = navBefore - usdNet - protFeeUsd;
         }
 
         uint256 r = reserves[tokenOut];
@@ -183,7 +188,7 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
 
         IERC20(tokenOut).safeTransfer(msg.sender, amountOut);
 
-        emit Withdrew(msg.sender, tokenOut, lpAmount, amountOut, protFeeAmt, navBefore, navBefore - usdRedeemed);
+        emit Withdrew(msg.sender, tokenOut, lpAmount, amountOut, protFeeAmt, navBefore, navAfter);
     }
 
     // ── swap ─────────────────────────────────────────────────────────

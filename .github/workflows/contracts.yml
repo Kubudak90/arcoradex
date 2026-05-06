@@ -31,9 +31,11 @@ jobs:
         run: forge fmt --check
       - name: forge build --sizes
         run: forge build --sizes
-      - name: forge test (CI profile — 1024x128 invariants)
+      - name: forge test (CI profile — 1024x128 invariants, 10k fuzz)
         env:
           FOUNDRY_PROFILE: ci
         run: forge test -vvv
-      - name: forge snapshot
-        run: forge snapshot --check || forge snapshot
+      # Snapshot drift is a soft signal; we record but don't block on it.
+      - name: forge snapshot (record drift)
+        run: forge snapshot --check
+        continue-on-error: true

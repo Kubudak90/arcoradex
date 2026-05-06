@@ -1,9 +1,9 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { usePublicClient } from "wagmi";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
-import { poolAbi } from "@/lib/abi/pool";
 import { POOL_ADDRESS, tokenLabel } from "@/lib/contracts";
+import { useTokens } from "@/lib/hooks/useTokens";
 import { fmtUnits } from "@/lib/format";
 import { shortAddr } from "@/lib/utils";
 import { parseAbiItem } from "viem";
@@ -22,8 +22,17 @@ interface Row {
 
 export function SwapHistory() {
   const client = usePublicClient();
+  const { tokens } = useTokens();
   const [rows, setRows] = useState<Row[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // address (lowercase) → decimals lookup so we can format raw event amounts correctly.
+  const decimalsByAddr = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const t of tokens) m.set(t.address.toLowerCase(), t.decimals);
+    return m;
+  }, [tokens]);
+  const dec = (addr: string) => decimalsByAddr.get(addr.toLowerCase()) ?? 18;
 
   useEffect(() => {
     if (!client) return;
@@ -95,10 +104,10 @@ export function SwapHistory() {
                   <tr key={r.txHash} className="border-b border-border last:border-0">
                     <td className="py-2 font-mono text-xs">{shortAddr(r.user)}</td>
                     <td className="py-2">
-                      {fmtUnits(r.amountIn, 18, 4)} {tIn.symbol}
+                      {fmtUnits(r.amountIn, dec(r.tokenIn), 4)} {tIn.symbol}
                     </td>
                     <td className="py-2">
-                      {fmtUnits(r.amountOut, 18, 4)} {tOut.symbol}
+                      {fmtUnits(r.amountOut, dec(r.tokenOut), 4)} {tOut.symbol}
                     </td>
                     <td className="py-2 text-right">
                       <a

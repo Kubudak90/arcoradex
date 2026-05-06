@@ -1,4 +1,4 @@
-// Arcora v0.7 multi-feed price keeper.
+// ArcoraDEX multi-feed price keeper (renamed from arcora-v07-feeds).
 //
 // Pulls 6 USD prices from CoinGecko (USDC stays hardcoded at peg = $1.0000)
 // and pushes them into the corresponding MockChainlinkFeed contracts on Arc
