@@ -7,7 +7,7 @@ optimizer = true
 optimizer_runs = 200
 evm_version = "cancun"
 fs_permissions = [{ access = "read", path = "./"}]
-gas_reports = ["ArcFXGateway"]
+gas_reports = ["ArcoraDexPool"]
 ffi = true
 
 [profile.ci]

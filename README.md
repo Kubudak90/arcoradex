@@ -1,157 +1,25 @@
-# Arcora v0.7 — Shared-Vault Stablecoin Pool (drop-in package)
+# ArcoraDEX
 
-Self-contained snapshot of the v0.7 multi-stablecoin pool refactor as of
-**2026-05-01 ~02:30 TRT**. Lifted from `~/arc-fx-gateway` working tree at
-HEAD `e66cbf4`. The original repo is intact — this is a parallel copy you
-can pick up in a separate session without disturbing app/SDK/etc.
+> Oracle-priced multi-stablecoin DEX with public liquidity. Part of [ArcoraLabs](#).
 
-## What's in here
+ArcoraDEX is a shared-vault, oracle-priced swap protocol for stablecoins. Anyone can deposit any active stable, receive a single USD-denominated `ADEX-LP` token, and earn 90% of swap fees. Withdrawals are single-token at oracle price minus the swap fee.
 
-```
-contracts/
-├── foundry.toml              # solc 0.8.26, optimizer 200 runs, evm cancun
-├── remappings.txt
-├── src/
-│   ├── ArcFXGateway.sol      # v0.7 — token-agnostic, routes through StablePool
-│   ├── interfaces/
-│   │   └── IChainlinkAggregator.sol
-│   ├── libraries/
-│   │   └── PriceGuard.sol    # legacy — gateway no longer uses; pool has its own
-│   ├── pool/
-│   │   ├── IStablePool.sol
-│   │   └── StablePool.sol    # singleton shared-vault, per-token PriceGuard, Ownable2Step + Pausable
-│   ├── registry/
-│   │   ├── IStablecoinRegistry.sol
-│   │   └── StablecoinRegistry.sol  # Ownable2Step
-│   └── testnet/
-│       ├── MintableERC20.sol     # NEW — production-deployable mock
-│       └── MockChainlinkFeed.sol # carry-over from v0.6
-└── test/
-    ├── ArcFXGateway.fuzz.t.sol
-    ├── ArcFXGateway.invariant.t.sol
-    ├── ArcFXGateway.t.sol
-    ├── StablePool.t.sol           # NEW — 27 tests
-    ├── StablecoinRegistry.t.sol   # NEW — 14 tests
-    ├── handlers/
-    │   └── GatewayHandler.sol
-    └── helpers/
-        └── MockERC20.sol          # carry-over
-docs/
-├── 2026-04-29-plan-3-multi-stablecoin.md  # spec (pair-based version; rev2 was reverted in source repo)
-└── 2026-04-30-multi-stablecoin-pool.md    # full implementation plan, all 16 tasks
+## Status
+
+- **v1 (Phase A)** — under construction. See `docs/superpowers/specs/2026-05-06-arcoradex-spinoff-design.md` for the design and `docs/superpowers/plans/2026-05-06-arcoradex-spinoff.md` for the implementation plan.
+- **Roadmap** — Phase B (TypeScript SDK), Phase C (analytics dashboard), Phase D (docs site), Phase E (audit + Arc mainnet). See spec §10.
+- **Legacy** — the prior `arc-fx-gateway` + multi-stable pool state is preserved on the `legacy/v0.7-arc-fx-gateway` branch.
+
+## Local development
+
+```bash
+cd contracts
+forge install
+forge test
 ```
 
-## Architecture (the design we actually built)
+Contracts deploy via `script/DeployArcoraDex.s.sol`. Frontend lives under `app/` (Next.js 16); see its README once added.
 
-**Shared vault, no pairs.** One contract holds reserves for all active
-stables. Swap routes through per-token USD oracles:
+## License
 
-```
-swap(in, out, amountIn):
-  usdValueIn = amountIn * priceIn / 10^decimalsIn
-  usdValueNet = usdValueIn * (BPS - swapFeeBps) / BPS
-  amountOut   = usdValueNet * 10^decimalsOut / priceOut
-  require reserves[out] >= gross
-  reserves[in]  += amountIn
-  reserves[out] -= gross
-  protocolFeesAccrued[out] += fee
-```
-
-Per-token PriceGuard guards against bad oracle prints (50bps default,
-150bps for FX-pegged stables like EURC/TRYC/BRLC). Stale-oracle revert
-at 1 hour. Pausable. Ownable2Step on all three contracts.
-
-## What's done (Tasks 1–11)
-
-| # | Task | Tests | Notes |
-|---|---|---|---|
-| 1 | `IStablecoinRegistry` interface | — | |
-| 2 | `StablecoinRegistry` impl + Ownable2Step tests | 7 | |
-| 3 | Registry mutation tests (deactivate, setOracle, setDeviation, ordering) | +7 | total 14 |
-| 4 | `IStablePool` interface | — | |
-| 5 | `StablePool` deposit/withdraw/pause skeleton | 10 | |
-| 6 | `quote()` cross-decimal oracle math | +7 | USDC↔EURC, USDC↔DAI (6↔18) |
-| 7 | `swap()` state mutation, fee accrual, recipient routing | +5 | |
-| 8 | Per-token PriceGuard (last-accepted price) | +4 | total 27 pool tests |
-| 9 | `MintableERC20` (production-deployable mock) | — | |
-| 10 | `ArcFXGateway` v0.7 refactor | — | drops USDC/EURC immutables; routes through pool |
-| 11 | Migrate gateway test suite to v0.7 setup | 49 base + 1 fuzz + 2 invariants | all 158 tests in suite green |
-
-**Build status at HEAD:** `forge test --skip "script/*"` — 158/158 PASS.
-Old `script/Deploy.s.sol` and `script/DeployAll.s.sol` were NOT migrated
-and don't compile against the v0.7 gateway constructor — they will be
-superseded by Task 13's `DeployV07.s.sol`. Unrelated `script/` changes
-land in Task 13.
-
-## What's left (Tasks 12–16)
-
-12. **Cross-stable e2e gateway tests** — add USDT, PYUSD, DAI, TRYC, BRLC mocks and 5 new pay-flow tests.
-13. **`script/DeployV07.s.sol`** — single-shot deploy: registry + pool + gateway + 7 mocks + 7 feeds, lists tokens, seeds reserves. Also delete or migrate the old `Deploy.s.sol` / `DeployAll.s.sol`.
-14. **Live testnet deploy + 7-path smoke** — broadcast to Arc testnet, verify `cast code <addr>` for each contract (foundry-broadcast-lies trap), run 7 pay flows (same-token, USDC↔EURC bidirectional, USDT→USDC, PYUSD→DAI, DAI→TRYC, BRLC→EURC), record tx hashes in a rollout note.
-15. **VPS keeper extension** — `ops/keepalive/multi-feed-push.ts` pulls 6 prices from CoinGecko (USDC hardcoded peg=1), pushes to mock feeds with sanity-band gating. Update systemd unit on VPS.
-16. **PR + memory update** — full `forge test`, gas snapshot, push branch, open PR into `plan-1-protocol`, update `~/.claude/projects/.../memory/roadmap_open_items.md`.
-
-Full task texts with code blocks, file paths, and TDD steps are in
-`docs/2026-04-30-multi-stablecoin-pool.md`.
-
-## Known issue to address before Task 14
-
-**Iterator budget plateau in `_estimateAmountIn`.** The gateway's
-inversion of `POOL.quote(in, out, amountIn)` walks +1 wei at a time
-bounded by `ESTIMATE_MAX_STEPS = 8`. With StablePool's integer fee
-rounding, some realistic invoice amounts (~$46 was the smallest we hit)
-land on a plateau where 8 steps don't bridge the gap, and the swap
-reverts with `InsufficientOutput`.
-
-Two fixes possible:
-- **Quick:** raise `ESTIMATE_MAX_STEPS` to 32 (still well under any
-  meaningful gas penalty — each iteration is one view call).
-- **Proper:** bisection search over `amountIn` instead of linear walk.
-  Bigger refactor, but logarithmic in the gap size and works for any
-  rounding behavior.
-
-Subagent worked around this in tests by changing test amounts and
-wrapping fuzz `pay()` in try/catch. Not a production-acceptable fix.
-**Recommend bumping `ESTIMATE_MAX_STEPS` to 32 in Task 12 setup before
-the new cross-stable tests are written**, so the test amounts stay
-realistic.
-
-## Pick-up checklist for next session
-
-1. Drop the `contracts/` directory into a fresh `foundry-rs/forge`-init'd
-   repo, or merge it onto a checkout of `arc-fx-gateway` at HEAD `e66cbf4`.
-2. Run `forge install` for any missing deps (`openzeppelin-contracts`,
-   `forge-std`, `chainlink-brownie-contracts`).
-3. Run `forge test --skip "script/*"` — must show 158 passing.
-4. Read `docs/2026-04-30-multi-stablecoin-pool.md` for the full plan.
-5. Apply the iterator-budget fix in `ArcFXGateway.sol` (one-line change).
-6. Continue from Task 12.
-
-## Source commits (in `arc-fx-gateway` HEAD `e66cbf4` lineage)
-
-```
-e66cbf4 test(contracts): migrate gateway tests to v0.7 setup (registry + StablePool)
-6a688a2 feat(contracts): refactor ArcFXGateway to v0.7 (token-agnostic, pool-routed)
-63a3ecc feat(contracts): add MintableERC20 for testnet stable mocks
-c54c5ca feat(contracts): per-token PriceGuard with last-accepted price tracking
-a26fa56 feat(contracts): StablePool swap + fee accrual + recipient routing
-de50252 feat(contracts): StablePool quote with cross-decimal oracle math
-f33bd5e feat(contracts): StablePool deposit/withdraw/pause skeleton
-5c1d794 feat(contracts): add IStablePool interface
-77160b5 test(contracts): cover deactivate/setOracle/setDeviation + array order
-f041b40 feat(contracts): add StablecoinRegistry with Ownable2Step
-8d3a583 feat(contracts): add IStablecoinRegistry interface for v0.7 multi-stable pool
-```
-
-Branch: `plan-1-protocol` in `~/arc-fx-gateway`. The new files were
-landed directly on this branch since concurrent tooling kept the
-working tree on it.
-
-## Spec note
-
-The spec doc shipped here (`docs/2026-04-29-plan-3-multi-stablecoin.md`)
-is the **pair-based original** — a rev2 update was written to the
-shared-vault design we actually built, then reverted in the source repo
-between Tasks 7 and 11. The plan doc is what we executed against and
-matches the code. If you need the rev2 shared-vault spec, it's
-recoverable from `git show f80a888:docs/superpowers/specs/2026-04-29-plan-3-multi-stablecoin.md`.
+MIT
