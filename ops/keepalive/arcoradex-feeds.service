@@ -1,0 +1,12 @@
+[Unit]
+Description=ArcoraDEX — push CoinGecko prices to MockChainlinkFeeds (Arc testnet)
+Documentation=https://github.com/Kubudak90/arcoradex
+
+[Service]
+Type=oneshot
+WorkingDirectory=/root/arcoradex-feeds
+EnvironmentFile=/root/arcoradex-feeds/.env
+ExecStart=/usr/bin/node /root/arcoradex-feeds/multi-feed-push.mjs
+Nice=10
+StandardOutput=journal
+StandardError=journal

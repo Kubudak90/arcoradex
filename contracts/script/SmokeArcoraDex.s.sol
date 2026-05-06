@@ -29,7 +29,8 @@ contract SmokeArcoraDex is Script {
         // Deployer (the actor) is the token owner from the deploy script, so direct mint works.
         for (uint256 i = 0; i < toks.length; i++) {
             uint8 d = MintableERC20(toks[i]).decimals();
-            MintableERC20(toks[i]).mint(vm.addr(actorKey), 1_000 * 10 ** d);
+            // Mint enough to cover deposits (1000) + swaps (100s) with headroom.
+            MintableERC20(toks[i]).mint(vm.addr(actorKey), 2_000 * 10 ** d);
             MintableERC20(toks[i]).approve(address(pool), type(uint256).max);
         }
 

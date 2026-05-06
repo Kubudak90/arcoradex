@@ -60,7 +60,7 @@ const FEED_ABI = parseAbi([
 const REFRESH_THRESHOLD_SECONDS = 30 * 60;
 
 const ts = () => new Date().toISOString();
-const log = (msg) => console.log(`[arcora-v07-feeds] ${ts()} ${msg}`);
+const log = (msg) => console.log(`[arcoradex-feeds] ${ts()} ${msg}`);
 
 const priceTo1e8 = (usd) => BigInt(Math.round(usd * 1e8));
 

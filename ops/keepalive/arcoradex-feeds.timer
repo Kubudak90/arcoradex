@@ -1,12 +1,12 @@
 [Unit]
-Description=Arcora v0.7 feed keeper — fire every 30 minutes
+Description=ArcoraDEX feed keeper — fire every 30 minutes
 
 [Timer]
 OnBootSec=2min
 OnUnitActiveSec=30min
 AccuracySec=30s
 Persistent=true
-Unit=arcora-v07-feeds.service
+Unit=arcoradex-feeds.service
 
 [Install]
 WantedBy=timers.target
