@@ -126,6 +126,30 @@ describe("error path coverage", () => {
     }
   });
 
+  it("InsufficientLpOut: live deposit revert decodes to SlippageExceededError (regression test for missing ABI errors)", async () => {
+    const { poolAbi } = await import("@/abi/pool");
+    const sdk = writeSdk();
+
+    // The InsufficientLpOut check fires BEFORE transferFrom, so we don't need to mint or approve
+    // — keeps allowance state clean for downstream tests (T8 lesson).
+    // Force the revert with an unreachable minLpOut. Using the full poolAbi (with the
+    // InsufficientLpOut error declared) lets viem decode the selector into errorName.
+    try {
+      await sdk.walletClient!.writeContract({
+        address: sdk.addresses.pool,
+        abi: poolAbi,
+        functionName: "deposit",
+        args: [usdc(), 1_000_000n, 10n ** 36n, BigInt(Math.floor(Date.now() / 1000) + 60)],
+        chain: sdk.chain,
+        account: sdk.account!,
+      });
+      throw new Error("Expected revert");
+    } catch (e) {
+      const parsed = parseContractError(e);
+      expect(parsed).toBeInstanceOf(SlippageExceededError);
+    }
+  }, 30_000);
+
   it("parseContractError unknown selector falls back to ArcoraDexError", () => {
     const fake = {
       name: "ContractFunctionRevertedError",
