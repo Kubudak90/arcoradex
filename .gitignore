@@ -23,3 +23,14 @@ ops/keepalive/.env
 ops/keepalive/.env.*
 ops/keepalive/node_modules/
 ops/keepalive/package-lock.json
+
+# Next.js app
+app/node_modules/
+app/.next/
+app/out/
+app/.vercel/
+app/.env
+app/.env.*
+!app/.env.example
+app/tsconfig.tsbuildinfo
+app/coverage/
