@@ -27,12 +27,14 @@ export function ArcoraDexProvider({ chain, addresses, children }: ArcoraDexProvi
 
   const sdk = useMemo<ArcoraDexClient | null>(() => {
     if (!publicClient) return null;
-    // Derive a transport that delegates to wagmi's publicClient — simpler than reconfiguring.
+    // Derive a transport that delegates to wagmi's publicClient for read calls.
+    // For writes, we hand wagmi's walletClient through unchanged so its
+    // connector-backed transport handles signing.
     const transport = custom(publicClient);
     return createArcoraDex({
       chain: effectiveChain,
       transport,
-      account: walletClient?.account,
+      walletClient: walletClient ?? undefined,
       addresses,
     });
   }, [effectiveChain, publicClient, walletClient, addresses, wagmiChainId]);

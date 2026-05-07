@@ -23,6 +23,13 @@ import { subscribePoolStats } from "./subscriptions/subscribePoolStats";
 export interface CreateArcoraDexParams {
   chain: Chain;
   transport: Transport;
+  /**
+   * Pre-built wallet client (preferred when integrating with wagmi). When set,
+   * this client's transport is used for signing — important because wagmi's
+   * wallet client carries the connector's transport, while `transport` here
+   * is typically a public RPC that cannot sign.
+   */
+  walletClient?: WalletClient;
   account?: Account;
   addresses?: ArcoraDexAddresses;
 }
@@ -67,15 +74,18 @@ export function createArcoraDex(params: CreateArcoraDexParams): ArcoraDexClient 
     })();
 
   const publicClient = createPublicClient({ chain: params.chain, transport: params.transport });
-  const walletClient = params.account
-    ? createWalletClient({ chain: params.chain, transport: params.transport, account: params.account })
-    : undefined;
+  const walletClient = params.walletClient
+    ? params.walletClient
+    : params.account
+      ? createWalletClient({ chain: params.chain, transport: params.transport, account: params.account })
+      : undefined;
+  const account = (walletClient?.account ?? params.account) as Account | undefined;
 
   const client: ArcoraDexClient = {
     chain: params.chain,
     publicClient,
     walletClient,
-    account: params.account,
+    account,
     addresses,
 
     quoteSwap: (a) => quoteSwap(client, a),

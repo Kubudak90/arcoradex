@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { existsSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -8,10 +8,16 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const distDir = join(__dirname, "..", "..", "dist");
 
 describe("dist build artifacts", () => {
-  it("emits index.js (main ESM bundle)", () => {
+  it("emits index.js (main ESM bundle) backed by a code chunk", () => {
     const f = join(distDir, "index.js");
     expect(existsSync(f), `${f} missing — did you run pnpm build?`).toBe(true);
-    expect(statSync(f).size).toBeGreaterThan(1_000);
+    expect(statSync(f).size).toBeGreaterThan(100);
+    // tsup splits shared code into chunk-*.js — verify the bulk is present.
+    const chunks = readdirSync(distDir).filter(
+      (n) => n.startsWith("chunk-") && n.endsWith(".js"),
+    );
+    const total = chunks.reduce((acc, n) => acc + statSync(join(distDir, n)).size, 0);
+    expect(total, `expected non-trivial chunk output in ${distDir}`).toBeGreaterThan(10_000);
   });
 
   it("emits index.d.ts (type declarations)", () => {
