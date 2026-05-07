@@ -41,3 +41,6 @@ packages/*/node_modules/
 packages/*/dist/
 packages/*/.tsbuildinfo
 packages/*/coverage/
+
+# Vercel build output (root + workspace)
+.vercel/

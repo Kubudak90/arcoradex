@@ -8,7 +8,11 @@ import type { SwappedEvent } from "../types";
 export interface UseSwapHistoryOptions {
   limit?: number;
   watch?: boolean;
+  /** Block to start scanning from. Default: head − blockRange (~9000 blocks back),
+      so rate-limited RPCs (like Arc testnet's 10k getLogs cap) don't reject. */
   fromBlock?: bigint;
+  /** When fromBlock is unset, scan this many blocks back from head. Default 9000. */
+  blockRange?: bigint;
   /** Optional polling interval (ms) for the watch path. Useful for tests. */
   pollingInterval?: number;
 }
@@ -30,6 +34,7 @@ export function useSwapHistory(options?: UseSwapHistoryOptions): UseSwapHistoryR
   const limit = options?.limit ?? 50;
   const watch = options?.watch ?? true;
   const fromBlock = options?.fromBlock;
+  const blockRange = options?.blockRange ?? 9000n;
   const pollingInterval = options?.pollingInterval;
 
   const [events, setEvents] = useState<SwappedEvent[]>([]);
@@ -44,10 +49,15 @@ export function useSwapHistory(options?: UseSwapHistoryOptions): UseSwapHistoryR
     (async () => {
       try {
         setIsLoading(true);
+        let effectiveFromBlock = fromBlock;
+        if (effectiveFromBlock === undefined) {
+          const head = await publicClient.getBlockNumber();
+          effectiveFromBlock = head > blockRange ? head - blockRange : 0n;
+        }
         const logs = await publicClient.getLogs({
           address: sdk.addresses.pool,
           event: SWAPPED_EVENT,
-          fromBlock: fromBlock ?? 0n,
+          fromBlock: effectiveFromBlock,
         });
         if (cancelled) return;
         const parsed: SwappedEvent[] = logs
@@ -80,7 +90,7 @@ export function useSwapHistory(options?: UseSwapHistoryOptions): UseSwapHistoryR
     return () => {
       cancelled = true;
     };
-  }, [publicClient, sdk.addresses.pool, limit, fromBlock]);
+  }, [publicClient, sdk.addresses.pool, limit, fromBlock, blockRange]);
 
   // Watch for new events via the SDK subscription.
   useEffect(() => {
