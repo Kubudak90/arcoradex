@@ -4,6 +4,8 @@ import { usePathname } from "next/navigation";
 import { Wordmark } from "@/components/brand/Wordmark";
 import { ConnectButton } from "@/components/wallet/ConnectButton";
 import { FaucetButton } from "@/components/wallet/FaucetButton";
+import { NetworkButton } from "@/components/wallet/NetworkButton";
+import { CircleFaucetLink } from "@/components/wallet/CircleFaucetLink";
 
 const NAV = [
   { id: "swap", label: "Swap", href: "/" },
@@ -49,15 +51,8 @@ export function Header() {
           })}
         </nav>
         <div className="flex-1" />
-        <a
-          href="https://testnet.arcscan.app"
-          target="_blank"
-          rel="noreferrer"
-          className="hidden sm:flex items-center gap-1.5 text-[13px] text-arc-ink-500 hover:text-arc-ink-700 transition-colors"
-        >
-          <span className="dot live" />
-          Arc Testnet
-        </a>
+        <NetworkButton />
+        <CircleFaucetLink />
         <FaucetButton />
         <ConnectButton />
       </div>
