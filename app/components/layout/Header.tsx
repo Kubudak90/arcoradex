@@ -3,6 +3,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Wordmark } from "@/components/brand/Wordmark";
 import { ConnectButton } from "@/components/wallet/ConnectButton";
+import { FaucetButton } from "@/components/wallet/FaucetButton";
 
 const NAV = [
   { id: "swap", label: "Swap", href: "/" },
@@ -57,6 +58,7 @@ export function Header() {
           <span className="dot live" />
           Arc Testnet
         </a>
+        <FaucetButton />
         <ConnectButton />
       </div>
     </header>
