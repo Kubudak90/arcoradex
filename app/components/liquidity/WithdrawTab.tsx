@@ -64,20 +64,20 @@ export function WithdrawTab() {
   return (
     <div className="space-y-4">
       <div>
-        <label className="text-xs text-fg-muted block mb-1">Burn ADEX-LP</label>
+        <label className="t-label m-0 mb-2 block">Burn ADEX-LP</label>
         <Input
           type="text"
           inputMode="decimal"
-          placeholder="0.0"
+          placeholder="0.00"
           value={lpStr}
           onChange={(e) => setLpStr(e.target.value)}
         />
         {lpBalance != null ? (
-          <p className="text-xs text-fg-muted mt-1">
-            Balance: {fmtUnits(lpBalance as bigint, 18, 4)} ADEX-LP{" "}
+          <p className="text-xs text-arc-ink-500 mt-2">
+            Balance: <span className="t-mono">{fmtUnits(lpBalance as bigint, 18, 4)}</span> ADEX-LP{" "}
             <button
               onClick={() => setLpStr(fmtUnits(lpBalance as bigint, 18, 18))}
-              className="ml-1 text-arcora-blue-500 hover:underline"
+              className="ml-1 text-arc-blue-600 hover:underline"
             >
               max
             </button>
@@ -86,35 +86,39 @@ export function WithdrawTab() {
       </div>
 
       <div>
-        <label className="text-xs text-fg-muted block mb-1">Receive</label>
+        <label className="t-label m-0 mb-2 block">Receive</label>
         <TokenSelect tokens={activeTokens} value={tokenOut} onChange={setTokenOut} />
       </div>
 
-      <div className="rounded-md border border-border bg-bg-elevated p-3 text-sm space-y-1">
-        <div>
-          <span className="text-fg-muted">You receive (estimate)</span>
-          <span className="float-right">
+      <div className="rounded-2xl border border-arc-ink-100 bg-surface-tint p-3.5 text-sm space-y-1.5">
+        <div className="flex justify-between">
+          <span className="text-arc-ink-500">You receive (estimate)</span>
+          <span className="t-mono text-arc-ink-900">
             {withdrawQuote && meta
               ? `${fmtUnits(withdrawQuote.amountOut, meta.decimals, 6)} ${meta.symbol}`
               : "—"}
           </span>
         </div>
-        <div>
-          <span className="text-fg-muted">Protocol fee (in {meta?.symbol})</span>
-          <span className="float-right">
-            {withdrawQuote && meta ? fmtUnits(withdrawQuote.protocolFee, meta.decimals, 6) : "—"}
+        <div className="flex justify-between">
+          <span className="text-arc-ink-500">Protocol fee</span>
+          <span className="t-mono text-arc-ink-900">
+            {withdrawQuote && meta
+              ? `${fmtUnits(withdrawQuote.protocolFee, meta.decimals, 6)} ${meta.symbol}`
+              : "—"}
           </span>
         </div>
       </div>
 
       {!isConnected ? (
-        <p className="text-sm text-fg-muted text-center">Connect a wallet to withdraw.</p>
+        <p className="text-sm text-arc-ink-500 text-center">Connect a wallet to withdraw.</p>
       ) : insufficient ? (
-        <Button disabled className="w-full">
+        <Button disabled size="lg" className="w-full">
           Insufficient ADEX-LP balance
         </Button>
       ) : (
         <Button
+          variant="gradient"
+          size="lg"
           onClick={onWithdraw}
           disabled={!lpAmount || lpAmount === 0n || isPending || withdrawQuote == null}
           className="w-full"
@@ -124,12 +128,16 @@ export function WithdrawTab() {
       )}
 
       {result?.event && meta ? (
-        <p className="text-xs text-success text-center">
-          Withdrew {fmtUnits(result.event.lpBurned, 18, 4)} ADEX-LP →{" "}
+        <p className="text-xs text-center" style={{ color: "var(--color-success)" }}>
+          ✓ Withdrew {fmtUnits(result.event.lpBurned, 18, 4)} ADEX-LP →{" "}
           {fmtUnits(result.event.amountOut, meta.decimals, 4)} {meta.symbol}
         </p>
       ) : null}
-      {error ? <p className="text-xs text-danger text-center">{error.message}</p> : null}
+      {error ? (
+        <p className="text-xs text-center" style={{ color: "var(--color-danger)" }}>
+          {error.message}
+        </p>
+      ) : null}
     </div>
   );
 }

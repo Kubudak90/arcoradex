@@ -1,11 +1,8 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
 import { Providers } from "@/components/wallet/Providers";
 import { Header } from "@/components/layout/Header";
 import { Footer } from "@/components/layout/Footer";
 import "./globals.css";
-
-const inter = Inter({ variable: "--font-inter", subsets: ["latin"] });
 
 export const metadata: Metadata = {
   title: "ArcoraDEX — Oracle-priced multi-stable DEX",
@@ -22,11 +19,11 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" className={`${inter.variable} h-full`}>
-      <body className="min-h-full flex flex-col">
+    <html lang="en" className="h-full">
+      <body className="min-h-full flex flex-col bg-surface-page text-arc-ink-900">
         <Providers>
           <Header />
-          <main className="flex-1 mx-auto w-full max-w-5xl px-6 py-12">{children}</main>
+          <main className="flex-1 mx-auto w-full max-w-[1280px] px-8 py-8">{children}</main>
           <Footer />
         </Providers>
       </body>

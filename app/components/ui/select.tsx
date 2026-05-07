@@ -1,5 +1,4 @@
 "use client";
-import * as React from "react";
 import { cn } from "@/lib/utils";
 
 interface SelectProps {
@@ -15,8 +14,8 @@ export function Select({ value, onChange, options, className }: SelectProps) {
       value={value}
       onChange={(e) => onChange(e.target.value)}
       className={cn(
-        "h-10 rounded-md border border-border bg-bg px-3 text-sm text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-arcora-blue-500",
-        className
+        "h-11 rounded-full border border-arc-ink-200 bg-surface px-4 text-sm text-arc-ink-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-arc-blue-200 focus-visible:border-arc-blue-400 transition-shadow",
+        className,
       )}
     >
       {options.map((o) => (

@@ -44,31 +44,33 @@ export function DepositTab() {
   return (
     <div className="space-y-4">
       <div>
-        <label className="text-xs text-fg-muted block mb-1">Deposit</label>
+        <label className="t-label m-0 mb-2 block">Deposit</label>
         <div className="flex gap-2">
           <Input
             type="text"
             inputMode="decimal"
-            placeholder="0.0"
+            placeholder="0.00"
             value={amountStr}
             onChange={(e) => setAmountStr(e.target.value)}
             className="flex-1"
           />
-          <TokenSelect tokens={activeTokens} value={token} onChange={setToken} className="w-44" />
+          <TokenSelect tokens={activeTokens} value={token} onChange={setToken} className="w-40" />
         </div>
       </div>
 
-      <div className="rounded-md border border-border bg-bg-elevated p-3 text-sm">
-        <span className="text-fg-muted">You receive (estimate)</span>
-        <span className="float-right">
+      <div className="rounded-2xl border border-arc-ink-100 bg-surface-tint p-3.5 text-sm">
+        <span className="text-arc-ink-500">You receive (estimate)</span>
+        <span className="float-right t-mono text-arc-ink-900">
           {lpQuote != null ? `${fmtUnits(lpQuote, 18, 4)} ADEX-LP` : "—"}
         </span>
       </div>
 
       {!isConnected ? (
-        <p className="text-sm text-fg-muted text-center">Connect a wallet to deposit.</p>
+        <p className="text-sm text-arc-ink-500 text-center">Connect a wallet to deposit.</p>
       ) : (
         <Button
+          variant="gradient"
+          size="lg"
           onClick={onDeposit}
           disabled={!amount || amount === 0n || isPending || lpQuote == null}
           className="w-full"
@@ -78,12 +80,16 @@ export function DepositTab() {
       )}
 
       {result?.event ? (
-        <p className="text-xs text-success text-center">
-          Deposited {fmtUnits(result.event.amountIn, meta?.decimals ?? 18, 4)} {meta?.symbol},
-          minted {fmtUnits(result.event.lpMinted, 18, 4)} ADEX-LP
+        <p className="text-xs text-center" style={{ color: "var(--color-success)" }}>
+          ✓ Deposited {fmtUnits(result.event.amountIn, meta?.decimals ?? 18, 4)} {meta?.symbol}, minted{" "}
+          {fmtUnits(result.event.lpMinted, 18, 4)} ADEX-LP
         </p>
       ) : null}
-      {error ? <p className="text-xs text-danger text-center">{error.message}</p> : null}
+      {error ? (
+        <p className="text-xs text-center" style={{ color: "var(--color-danger)" }}>
+          {error.message}
+        </p>
+      ) : null}
     </div>
   );
 }

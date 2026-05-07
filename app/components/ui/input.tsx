@@ -6,11 +6,11 @@ export const Input = React.forwardRef<HTMLInputElement, React.InputHTMLAttribute
     <input
       ref={ref}
       className={cn(
-        "flex h-10 w-full rounded-md border border-border bg-bg px-3 py-2 text-sm text-fg placeholder:text-fg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-arcora-blue-500 disabled:opacity-50 disabled:cursor-not-allowed",
-        className
+        "flex h-11 w-full rounded-full border border-arc-ink-200 bg-surface px-4 text-sm text-arc-ink-900 placeholder:text-arc-ink-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-arc-blue-200 focus-visible:border-arc-blue-400 disabled:opacity-50 disabled:cursor-not-allowed transition-shadow",
+        className,
       )}
       {...props}
     />
-  )
+  ),
 );
 Input.displayName = "Input";

@@ -1,18 +1,13 @@
 import { SwapCard } from "@/components/swap/SwapCard";
+import { RecentSwapsCard } from "@/components/pool/RecentSwapsCard";
 
 export default function SwapPage() {
   return (
-    <div className="space-y-8">
-      <div className="text-center max-w-2xl mx-auto">
-        <h1 className="text-4xl font-bold tracking-tight">
-          Swap stablecoins on{" "}
-          <span className="text-wordmark">ArcoraDEX</span>
-        </h1>
-        <p className="mt-3 text-fg-muted">
-          Oracle-priced, public-LP, multi-stable shared vault on Arc.
-        </p>
-      </div>
+    <div className="grid grid-cols-1 lg:grid-cols-[420px_1fr] gap-8 items-start">
       <SwapCard />
+      <div className="flex flex-col gap-5">
+        <RecentSwapsCard />
+      </div>
     </div>
   );
 }

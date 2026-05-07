@@ -1,6 +1,6 @@
 "use client";
 import { useAccount, useConnect, useDisconnect, useChainId, useSwitchChain } from "wagmi";
-import { arcTestnet } from "@/lib/wagmi";
+import { arcTestnet } from "@arcoralabs/dex-sdk";
 import { shortAddr } from "@/lib/utils";
 
 export function ConnectButton() {
@@ -17,7 +17,8 @@ export function ConnectButton() {
       <button
         onClick={() => switchChain({ chainId: arcTestnet.id })}
         disabled={switchPending}
-        className="px-4 py-2 rounded-md bg-arcora-blue-500 text-white hover:bg-arcora-blue-600 transition disabled:opacity-50"
+        className="inline-flex items-center justify-center h-9 px-4 rounded-full text-sm font-medium text-white transition-all disabled:opacity-50"
+        style={{ background: "var(--grad-arcora)", boxShadow: "var(--shadow-glow)" }}
       >
         {switchPending ? "Switching…" : "Switch to Arc Testnet"}
       </button>
@@ -28,8 +29,10 @@ export function ConnectButton() {
     return (
       <button
         onClick={() => disconnect()}
-        className="px-4 py-2 rounded-md border border-border-strong text-fg hover:bg-bg-elevated transition"
+        className="inline-flex items-center gap-2 h-9 px-4 rounded-full text-[13px] font-medium bg-arc-ink-50 text-arc-ink-900 hover:bg-arc-ink-100 transition-colors"
+        style={{ fontFamily: "var(--font-mono)" }}
       >
+        <span className="dot" />
         {shortAddr(address)}
       </button>
     );
@@ -41,9 +44,9 @@ export function ConnectButton() {
     <button
       onClick={() => connect({ connector: injected })}
       disabled={isPending}
-      className="px-4 py-2 rounded-md bg-arcora-blue-500 text-white hover:bg-arcora-blue-600 transition disabled:opacity-50"
+      className="inline-flex items-center justify-center h-9 px-4 rounded-full text-sm font-medium text-white bg-arc-ink-900 hover:bg-arc-ink-800 transition-all disabled:opacity-50"
     >
-      {isPending ? "Connecting…" : "Connect Wallet"}
+      {isPending ? "Connecting…" : "Connect wallet"}
     </button>
   );
 }
