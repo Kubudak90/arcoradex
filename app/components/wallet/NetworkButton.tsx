@@ -37,32 +37,29 @@ export function NetworkButton() {
     }
   }
 
-  if (onArc) {
-    return (
-      <a
-        href={EXPLORER_URL}
-        target="_blank"
-        rel="noreferrer"
-        className="hidden sm:inline-flex items-center gap-1.5 h-9 px-3.5 rounded-full text-[13px] font-medium bg-arc-ink-50 text-arc-ink-900 hover:bg-arc-ink-100 transition-colors"
-        title="View Arc Testnet explorer"
-      >
-        <span className="dot live" />
-        Arc Testnet
-      </a>
-    );
-  }
+  const label = isPending
+    ? "Switching…"
+    : onArc
+      ? "Arc Testnet"
+      : isConnected
+        ? "Switch to Arc Testnet"
+        : "Add Arc Testnet";
 
   return (
     <button
       onClick={onClick}
       disabled={isPending}
       className="hidden sm:inline-flex items-center gap-1.5 h-9 px-3.5 rounded-full text-[13px] font-medium bg-arc-ink-50 text-arc-ink-900 hover:bg-arc-ink-100 transition-colors disabled:opacity-60"
-      title={isConnected ? "Switch to Arc Testnet" : "Add Arc Testnet to your wallet"}
+      title={onArc ? "Already on Arc Testnet — click to re-confirm" : "Force wallet to Arc Testnet"}
     >
-      <span className="ms" style={{ fontSize: 16 }}>
-        add_link
-      </span>
-      {isPending ? "Switching…" : isConnected ? "Switch network" : "Add Arc Testnet"}
+      {onArc ? (
+        <span className="dot live" />
+      ) : (
+        <span className="ms" style={{ fontSize: 16 }}>
+          add_link
+        </span>
+      )}
+      {label}
     </button>
   );
 }
