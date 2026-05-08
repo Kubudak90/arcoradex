@@ -38,19 +38,23 @@ const arcTestnet = defineChain({
 // market drifts faster than one tick: the keeper takes multiple ticks
 // to walk the on-chain answer toward the true price.
 const FEEDS = [
-    { symbol: "USDC",  feed: process.env.FEED_USDC,  hardcodedAnswer1e8: 100_000_000n, band: { min: 1.00, max: 1.00 }, maxDevBps: 50 },
-    { symbol: "USDT",  feed: process.env.FEED_USDT,  coingeckoId: "tether",          band: { min: 0.95, max: 1.05 }, maxDevBps: 50 },
-    { symbol: "PYUSD", feed: process.env.FEED_PYUSD, coingeckoId: "paypal-usd",      band: { min: 0.95, max: 1.05 }, maxDevBps: 50 },
-    { symbol: "DAI",   feed: process.env.FEED_DAI,   coingeckoId: "dai",             band: { min: 0.95, max: 1.05 }, maxDevBps: 50 },
-    { symbol: "EURC",  feed: process.env.FEED_EURC,  coingeckoVsCurrency: "eur",     band: { min: 1.00, max: 1.30 }, maxDevBps: 150 },
-    { symbol: "TRYC",  feed: process.env.FEED_TRYC,  coingeckoVsCurrency: "try",     band: { min: 0.01, max: 0.10 }, maxDevBps: 150 },
-    { symbol: "BRLC",  feed: process.env.FEED_BRLC,  coingeckoVsCurrency: "brl",     band: { min: 0.10, max: 0.30 }, maxDevBps: 150 },
+    { symbol: "USDC",  token: process.env.USDC_ADDR,  feed: process.env.FEED_USDC,  hardcodedAnswer1e8: 100_000_000n, band: { min: 1.00, max: 1.00 }, maxDevBps: 50 },
+    { symbol: "USDT",  token: process.env.USDT_ADDR,  feed: process.env.FEED_USDT,  coingeckoId: "tether",          band: { min: 0.95, max: 1.05 }, maxDevBps: 50 },
+    { symbol: "PYUSD", token: process.env.PYUSD_ADDR, feed: process.env.FEED_PYUSD, coingeckoId: "paypal-usd",      band: { min: 0.95, max: 1.05 }, maxDevBps: 50 },
+    { symbol: "DAI",   token: process.env.DAI_ADDR,   feed: process.env.FEED_DAI,   coingeckoId: "dai",             band: { min: 0.95, max: 1.05 }, maxDevBps: 50 },
+    { symbol: "EURC",  token: process.env.EURC_ADDR,  feed: process.env.FEED_EURC,  coingeckoVsCurrency: "eur",     band: { min: 1.00, max: 1.30 }, maxDevBps: 150 },
+    { symbol: "TRYC",  token: process.env.TRYC_ADDR,  feed: process.env.FEED_TRYC,  coingeckoVsCurrency: "try",     band: { min: 0.01, max: 0.10 }, maxDevBps: 150 },
+    { symbol: "BRLC",  token: process.env.BRLC_ADDR,  feed: process.env.FEED_BRLC,  coingeckoVsCurrency: "brl",     band: { min: 0.10, max: 0.30 }, maxDevBps: 150 },
 ];
 
 const FEED_ABI = parseAbi([
     "function setAnswer(int256 newAnswer) external",
     "function latestAnswer() view returns (int256)",
     "function latestUpdatedAt() view returns (uint256)",
+]);
+
+const POOL_ABI = parseAbi([
+    "function syncAcceptedPrice(address token) external returns (uint256 price1e18)",
 ]);
 
 // Push setAnswer even when the value is unchanged if the on-chain timestamp
@@ -122,6 +126,11 @@ async function main() {
         log("DEPLOYER_PRIVATE_KEY missing — abort");
         process.exit(2);
     }
+    const poolAddress = process.env.POOL_ADDR;
+    if (!poolAddress) {
+        log("POOL_ADDR missing — abort");
+        process.exit(2);
+    }
     const apiKey = process.env.COINGECKO_API_KEY || undefined;
 
     const account = privateKeyToAccount(pk);
@@ -137,6 +146,11 @@ async function main() {
     for (const f of FEEDS) {
         if (!f.feed) {
             log(`${f.symbol}: feed address env missing — skip`);
+            errored++;
+            continue;
+        }
+        if (!f.token) {
+            log(`${f.symbol}: token address env missing — skip`);
             errored++;
             continue;
         }
@@ -184,10 +198,17 @@ async function main() {
                 args: [newAnswer],
             });
             await publicClient.waitForTransactionReceipt({ hash });
+            const syncHash = await walletClient.writeContract({
+                address: poolAddress,
+                abi: POOL_ABI,
+                functionName: "syncAcceptedPrice",
+                args: [f.token],
+            });
+            await publicClient.waitForTransactionReceipt({ hash: syncHash });
             const reason = capped
                 ? `capped@${f.maxDevBps}bps (target=${targetAnswer})`
                 : prev === newAnswer ? "refresh" : "value";
-            log(`${f.symbol}: ${prev} -> ${newAnswer} (usd=${usd}, ${reason}, age=${ageSeconds}s) tx=${hash}`);
+            log(`${f.symbol}: ${prev} -> ${newAnswer} (usd=${usd}, ${reason}, age=${ageSeconds}s) tx=${hash} sync=${syncHash}`);
             updated++;
         } catch (err) {
             log(`${f.symbol}: ERROR ${err?.message || err}`);
