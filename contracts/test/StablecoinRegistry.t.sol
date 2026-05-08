@@ -68,6 +68,12 @@ contract StablecoinRegistryTest is Test {
         reg.listToken(address(usdc), 30, IChainlinkAggregator(address(usdcFeed)), 50);
     }
 
+    function test_ListToken_RevertsOnTokenDecimalMismatch() public {
+        vm.prank(owner);
+        vm.expectRevert(abi.encodeWithSelector(IStablecoinRegistry.TokenDecimalMismatch.selector, address(usdc), 18, 6));
+        reg.listToken(address(usdc), 18, IChainlinkAggregator(address(usdcFeed)), 50);
+    }
+
     function test_ListToken_RevertsOnInvalidDeviation() public {
         vm.prank(owner);
         vm.expectRevert(abi.encodeWithSelector(IStablecoinRegistry.InvalidDeviation.selector, 0));

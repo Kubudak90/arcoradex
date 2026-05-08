@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import { Ownable }       from "@openzeppelin/contracts/access/Ownable.sol";
 import { Ownable2Step }  from "@openzeppelin/contracts/access/Ownable2Step.sol";
+import { IERC20Metadata } from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 
 import { IStablecoinRegistry }  from "./IStablecoinRegistry.sol";
 import { IChainlinkAggregator } from "../interfaces/IChainlinkAggregator.sol";
@@ -39,6 +40,8 @@ contract StablecoinRegistry is IStablecoinRegistry, Ownable2Step {
     ) external override onlyOwner {
         if (token == address(0) || address(oracle) == address(0)) revert ZeroAddress();
         if (decimals_ == 0 || decimals_ > 18) revert InvalidDecimals(decimals_);
+        uint8 actualDecimals = IERC20Metadata(token).decimals();
+        if (decimals_ != actualDecimals) revert TokenDecimalMismatch(token, decimals_, actualDecimals);
         if (maxDeviationBps == 0 || maxDeviationBps > 10_000) revert InvalidDeviation(maxDeviationBps);
         if (_info[token].usdOracle != IChainlinkAggregator(address(0))) revert TokenAlreadyListed(token);
 

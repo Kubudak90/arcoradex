@@ -103,6 +103,28 @@ contract ArcFXGatewayTest is Test {
         assertTrue(active);
     }
 
+    function test_Constructor_RevertsAboveProtocolFeeCap() public {
+        vm.expectRevert(abi.encodeWithSelector(ArcFXGateway.InvalidProtocolFeeBps.selector, 101));
+        new ArcFXGateway(
+            IStablePool(address(pool)),
+            IStablecoinRegistry(address(reg)),
+            101,
+            address(this)
+        );
+    }
+
+    function test_Constructor_AllowsProtocolFeeAtCap() public {
+        ArcFXGateway capped = new ArcFXGateway(
+            IStablePool(address(pool)),
+            IStablecoinRegistry(address(reg)),
+            100,
+            address(this)
+        );
+
+        assertEq(capped.PROTOCOL_FEE_BPS(), 100);
+        assertEq(capped.MAX_PROTOCOL_FEE_BPS(), 100);
+    }
+
     function test_RegisterMerchant_SeparatePayoutAddress() public {
         address payoutWallet = makeAddr("payout");
         vm.prank(merchant);
@@ -966,6 +988,7 @@ contract ShortByOneStablePool is IStablePool {
     function deposit(address, uint256) external {}
     function withdraw(address, uint256, address) external {}
     function withdrawProtocolFees(address, uint256, address) external {}
+    function syncAcceptedPrice(address) external pure returns (uint256) { return 0; }
     function setSwapFeeBps(uint16) external {}
     function pause() external {}
     function unpause() external {}

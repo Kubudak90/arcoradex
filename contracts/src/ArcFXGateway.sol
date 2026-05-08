@@ -20,6 +20,7 @@ contract ArcFXGateway is Ownable2Step, ReentrancyGuard {
     IStablePool          public immutable POOL;
     IStablecoinRegistry  public immutable REGISTRY;
     uint256              public immutable PROTOCOL_FEE_BPS;
+    uint256              public constant MAX_PROTOCOL_FEE_BPS = 100;
 
     /// @dev Caps for the bisection-based `_estimateAmountIn`. Doubling finds
     /// an upper bound in O(log gap) view calls; bisection narrows in O(log gap)
@@ -114,6 +115,7 @@ contract ArcFXGateway is Ownable2Step, ReentrancyGuard {
     error DelegateNotAuthorized();
     error InvoiceNotRefundable(bytes32 globalId);
     error InsufficientFeesForRefund(uint256 required, uint256 accrued);
+    error InvalidProtocolFeeBps(uint256 bps);
 
     // ── Constructor ────────────────────────────────────────────────────
     constructor(
@@ -122,6 +124,7 @@ contract ArcFXGateway is Ownable2Step, ReentrancyGuard {
         uint256 protocolFeeBps,
         address initialOwner
     ) Ownable(initialOwner) {
+        if (protocolFeeBps > MAX_PROTOCOL_FEE_BPS) revert InvalidProtocolFeeBps(protocolFeeBps);
         POOL = pool;
         REGISTRY = registry;
         PROTOCOL_FEE_BPS = protocolFeeBps;

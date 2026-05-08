@@ -26,6 +26,8 @@ interface IStablePool {
     error InsufficientLiquidity(address token, uint256 requested, uint256 available);
     error InsufficientOutput(uint256 amountOut, uint256 minOut);
     error PriceDeviation(address token, uint256 newPrice, uint256 lastAccepted, uint16 maxBps);
+    error InvalidOracleRound(address token, uint80 roundId, uint80 answeredInRound);
+    error InvalidOracleTimestamp(address token, uint256 updatedAt);
     error InvalidFeeBps(uint16 bps);
     error PoolPaused();
 
@@ -37,6 +39,7 @@ interface IStablePool {
     function deposit(address token, uint256 amount) external;
     function withdraw(address token, uint256 amount, address to) external;
     function withdrawProtocolFees(address token, uint256 amount, address to) external;
+    function syncAcceptedPrice(address token) external returns (uint256 price1e18);
 
     function quote(address tokenIn, address tokenOut, uint256 amountIn) external view returns (uint256 amountOut);
 

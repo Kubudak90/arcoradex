@@ -69,6 +69,11 @@ contract StablePool is IStablePool, Ownable2Step, ReentrancyGuard {
         IERC20(token).safeTransfer(to, amount);
     }
 
+    function syncAcceptedPrice(address token) external override onlyOwner returns (uint256 price1e18) {
+        (price1e18,,) = _readUsdPrice1e18(token);
+        lastAcceptedPrice[token] = price1e18;
+    }
+
     // ── owner: parameters ────────────────────────────────────────────
 
     function setSwapFeeBps(uint16 newBps) external override onlyOwner {
@@ -102,8 +107,13 @@ contract StablePool is IStablePool, Ownable2Step, ReentrancyGuard {
         if (!info.isActive) revert TokenNotActive(token);
         tokenDecimals = info.decimals;
         maxDevBps     = info.maxOracleDeviationBps;
-        (, int256 answer, , uint256 updatedAt, ) = info.usdOracle.latestRoundData();
+        (uint80 roundId, int256 answer, , uint256 updatedAt, uint80 answeredInRound) =
+            info.usdOracle.latestRoundData();
+        if (roundId == 0 || answeredInRound < roundId) {
+            revert InvalidOracleRound(token, roundId, answeredInRound);
+        }
         if (answer <= 0) revert PriceDeviation(token, 0, 0, maxDevBps);
+        if (updatedAt == 0 || updatedAt > block.timestamp) revert InvalidOracleTimestamp(token, updatedAt);
         if (block.timestamp - updatedAt > MAX_STALE_SECONDS) {
             revert PriceDeviation(token, uint256(answer), updatedAt, maxDevBps);
         }

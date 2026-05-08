@@ -320,6 +320,93 @@ contract StablePoolTest is Test {
         assertApproxEqRel(pool.lastAcceptedPrice(address(eurc)), 1.0863e18, 1e15);
     }
 
+    function test_SyncAcceptedPrice_OwnerUpdatesBaseline() public {
+        usdcFeed.setAnswer(1.0030e8);
+
+        vm.prank(owner);
+        uint256 synced = pool.syncAcceptedPrice(address(usdc));
+
+        assertEq(synced, 1.003e18);
+        assertEq(pool.lastAcceptedPrice(address(usdc)), 1.003e18);
+    }
+
+    function test_SyncAcceptedPrice_RevertsIfNotOwner() public {
+        vm.prank(customer);
+        vm.expectRevert();
+        pool.syncAcceptedPrice(address(usdc));
+    }
+
+    function test_SyncAcceptedPrice_RevertsOnInactiveToken() public {
+        vm.prank(owner);
+        reg.deactivateToken(address(usdc));
+
+        vm.prank(owner);
+        vm.expectRevert(abi.encodeWithSelector(IStablePool.TokenNotActive.selector, address(usdc)));
+        pool.syncAcceptedPrice(address(usdc));
+    }
+
+    function test_OracleRead_RevertsOnIncompleteRound() public {
+        ConfigurableFeed badFeed = new ConfigurableFeed(8, 1.0000e8);
+        MockERC20 badToken = new MockERC20("BAD", "BAD", 6);
+        badFeed.setRound(2, 1.0000e8, block.timestamp, 1);
+
+        vm.prank(owner);
+        reg.listToken(address(badToken), 6, IChainlinkAggregator(address(badFeed)), TIGHT_DEV_BPS);
+
+        vm.expectRevert(abi.encodeWithSelector(IStablePool.InvalidOracleRound.selector, address(badToken), 2, 1));
+        pool.quote(address(badToken), address(usdc), 1e6);
+    }
+
+    function test_OracleRead_RevertsOnZeroUpdatedAt() public {
+        ConfigurableFeed badFeed = new ConfigurableFeed(8, 1.0000e8);
+        MockERC20 badToken = new MockERC20("BAD", "BAD", 6);
+        badFeed.setRound(1, 1.0000e8, 0, 1);
+
+        vm.prank(owner);
+        reg.listToken(address(badToken), 6, IChainlinkAggregator(address(badFeed)), TIGHT_DEV_BPS);
+
+        vm.expectRevert(abi.encodeWithSelector(IStablePool.InvalidOracleTimestamp.selector, address(badToken), 0));
+        pool.quote(address(badToken), address(usdc), 1e6);
+    }
+
+    function test_OracleRead_RevertsOnFutureUpdatedAt() public {
+        ConfigurableFeed badFeed = new ConfigurableFeed(8, 1.0000e8);
+        MockERC20 badToken = new MockERC20("BAD", "BAD", 6);
+        badFeed.setRound(1, 1.0000e8, block.timestamp + 1, 1);
+
+        vm.prank(owner);
+        reg.listToken(address(badToken), 6, IChainlinkAggregator(address(badFeed)), TIGHT_DEV_BPS);
+
+        vm.expectRevert(abi.encodeWithSelector(
+            IStablePool.InvalidOracleTimestamp.selector, address(badToken), block.timestamp + 1
+        ));
+        pool.quote(address(badToken), address(usdc), 1e6);
+    }
+
+    function test_SyncAcceptedPrice_AllowsKeeperStyleSteppedMoveBeforeNextSwap() public {
+        _seed(address(usdc), 100_000e6);
+        _seed(address(eurc), 100_000e6);
+
+        usdc.mint(customer, 2_000e6);
+        vm.startPrank(customer);
+        usdc.approve(address(pool), 2_000e6);
+        pool.swap(address(usdc), address(eurc), 1_000e6, 0, block.timestamp, customer);
+        vm.stopPrank();
+
+        usdcFeed.setAnswer(1.0050e8);
+        vm.prank(owner);
+        pool.syncAcceptedPrice(address(usdc));
+
+        usdcFeed.setAnswer(1.0100e8);
+        vm.prank(owner);
+        pool.syncAcceptedPrice(address(usdc));
+
+        vm.prank(customer);
+        pool.swap(address(usdc), address(eurc), 1_000e6, 0, block.timestamp, customer);
+
+        assertEq(pool.lastAcceptedPrice(address(usdc)), 1.01e18);
+    }
+
     function test_PriceGuard_RevertsOnLargeDeviation_USDC() public {
         // First, prime: usdc=1.0000.
         _seed(address(usdc), 100_000e6);
@@ -374,5 +461,38 @@ contract StablePoolTest is Test {
 
         vm.prank(customer);
         pool.swap(address(eurc), address(usdc), 1_000e6, 0, block.timestamp, customer);
+    }
+}
+
+contract ConfigurableFeed is IChainlinkAggregator {
+    uint8 public immutable decimalsValue;
+    uint80 public roundId = 1;
+    int256 public answer;
+    uint256 public updatedAt;
+    uint80 public answeredInRound = 1;
+
+    constructor(uint8 decimals_, int256 answer_) {
+        decimalsValue = decimals_;
+        answer = answer_;
+        updatedAt = block.timestamp;
+    }
+
+    function setRound(uint80 roundId_, int256 answer_, uint256 updatedAt_, uint80 answeredInRound_) external {
+        roundId = roundId_;
+        answer = answer_;
+        updatedAt = updatedAt_;
+        answeredInRound = answeredInRound_;
+    }
+
+    function decimals() external view returns (uint8) {
+        return decimalsValue;
+    }
+
+    function latestRoundData()
+        external
+        view
+        returns (uint80, int256, uint256, uint256, uint80)
+    {
+        return (roundId, answer, updatedAt, updatedAt, answeredInRound);
     }
 }

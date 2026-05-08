@@ -18,6 +18,10 @@ contracts/.env.*
 .vscode/
 .idea/
 
+# Local brainstorming companion
+.superpowers/
+.claude/
+
 # Keeper local test artifacts
 ops/keepalive/.env
 ops/keepalive/.env.*

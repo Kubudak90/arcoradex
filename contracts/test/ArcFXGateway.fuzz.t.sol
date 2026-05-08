@@ -21,23 +21,16 @@ contract ArcFXGatewayFuzzTest is ArcFXGatewayTest {
         uint256 before = usdc.balanceOf(merchant);
         uint256 feesBefore = gw.protocolFeesAccrued(address(usdc));
 
-        // Some amountOut values land on a fee-rounding plateau where the
-        // gateway's bounded (ESTIMATE_MAX_STEPS=8) iterator cannot land an
-        // amountIn whose quote covers amountOut exactly. The pool then
-        // reverts InsufficientOutput. The property under test only applies
-        // to successful pays — skip the fuzz case when the swap aborts.
         vm.prank(customer);
-        try gw.pay(g, type(uint128).max) {
-            uint256 got  = usdc.balanceOf(merchant) - before;
-            uint256 fee  = gw.protocolFeesAccrued(address(usdc)) - feesBefore;
+        gw.pay(g, type(uint128).max);
 
-            uint256 received = got + fee;
-            assertGe(received, uint256(amountOut));
-            assertEq(fee, (received * 10) / 10_000);
-            assertEq(got, received - fee);
-            assertLe(fee, got);
-        } catch {
-            // Iterator-budget shortfall: not relevant to the payout vs fee invariant.
-        }
+        uint256 got  = usdc.balanceOf(merchant) - before;
+        uint256 fee  = gw.protocolFeesAccrued(address(usdc)) - feesBefore;
+
+        uint256 received = got + fee;
+        assertGe(received, uint256(amountOut));
+        assertEq(fee, (received * 10) / 10_000);
+        assertEq(got, received - fee);
+        assertLe(fee, got);
     }
 }

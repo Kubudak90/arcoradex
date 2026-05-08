@@ -47,6 +47,7 @@ contract DeployV07 is Script {
 
         require(vm.addr(pk) == owner, "DeployV07: deployer must equal TREASURY_OWNER");
         require(swapFee <= type(uint16).max, "DeployV07: SWAP_FEE_BPS overflows uint16");
+        require(feeBps <= 100, "DeployV07: PROTOCOL_FEE_BPS too high");
 
         TokenSpec[7] memory specs = [
             TokenSpec("USD Coin",       "USDC",  6,  1.0000e8, 50,       1_000_000e6),

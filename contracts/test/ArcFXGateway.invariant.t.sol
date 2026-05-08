@@ -94,4 +94,10 @@ contract ArcFXGatewayInvariantTest is Test {
         // handler.totalFees tracks fee portion.  Together they equal total USDC moved.
         assertEq(merchantRecvNow + feesHeld, handler.totalPayoutsOut() + handler.totalFees());
     }
+
+    function invariant_PayFlowLiveness() public view {
+        if (handler.callsAttempted() == 0) return;
+        assertGt(handler.callsSucceeded(), 0);
+        assertEq(handler.payFailures(), 0);
+    }
 }

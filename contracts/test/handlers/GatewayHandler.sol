@@ -17,6 +17,8 @@ contract GatewayHandler is Test {
     uint256 public totalFees;
     uint256 public callsAttempted;
     uint256 public callsSucceeded;
+    uint256 public createFailures;
+    uint256 public payFailures;
 
     constructor(
         ArcFXGateway _gw,
@@ -43,6 +45,7 @@ contract GatewayHandler is Test {
         try gw.createInvoice(mid, address(eurc), amountOut, uint64(block.timestamp + 1 hours)) returns (bytes32 globalId) {
             g = globalId;
         } catch {
+            createFailures++;
             return;
         }
 
@@ -59,6 +62,8 @@ contract GatewayHandler is Test {
             totalPayoutsOut += paid;
             totalFees       += feeAccr;
             callsSucceeded++;
-        } catch {}
+        } catch {
+            payFailures++;
+        }
     }
 }

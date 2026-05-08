@@ -75,9 +75,11 @@ at 1 hour. Pausable. Ownable2Step on all three contracts.
 | 8 | Per-token PriceGuard (last-accepted price) | +4 | total 27 pool tests |
 | 9 | `MintableERC20` (production-deployable mock) | — | |
 | 10 | `ArcFXGateway` v0.7 refactor | — | drops USDC/EURC immutables; routes through pool |
-| 11 | Migrate gateway test suite to v0.7 setup | 49 base + 1 fuzz + 2 invariants | all 158 tests in suite green |
+| 11 | Migrate gateway test suite to v0.7 setup | 49 base + 1 fuzz + 2 invariants | gateway suite green |
 
-**Build status at HEAD:** `forge test --skip "script/*"` — 158/158 PASS.
+**Build status:** run `forge test --skip "script/*"` from `contracts/`
+after checkout; the suite covers registry, pool, gateway, fuzz, and
+invariants.
 Old `script/Deploy.s.sol` and `script/DeployAll.s.sol` were NOT migrated
 and don't compile against the v0.7 gateway constructor — they will be
 superseded by Task 13's `DeployV07.s.sol`. Unrelated `script/` changes
@@ -94,27 +96,21 @@ land in Task 13.
 Full task texts with code blocks, file paths, and TDD steps are in
 `docs/2026-04-30-multi-stablecoin-pool.md`.
 
-## Known issue to address before Task 14
+## Audit hardening notes
 
-**Iterator budget plateau in `_estimateAmountIn`.** The gateway's
-inversion of `POOL.quote(in, out, amountIn)` walks +1 wei at a time
-bounded by `ESTIMATE_MAX_STEPS = 8`. With StablePool's integer fee
-rounding, some realistic invoice amounts (~$46 was the smallest we hit)
-land on a plateau where 8 steps don't bridge the gap, and the swap
-reverts with `InsufficientOutput`.
+The old `_estimateAmountIn` iterator plateau has been replaced by a
+bounded doubling + bisection search. Fuzz and invariant tests no longer
+silently accept unexpected `pay()` reverts, so estimator liveness
+regressions should fail the suite.
 
-Two fixes possible:
-- **Quick:** raise `ESTIMATE_MAX_STEPS` to 32 (still well under any
-  meaningful gas penalty — each iteration is one view call).
-- **Proper:** bisection search over `amountIn` instead of linear walk.
-  Bigger refactor, but logarithmic in the gap size and works for any
-  rounding behavior.
+PriceGuard baseline drift is handled by `StablePool.syncAcceptedPrice`.
+The keeper updates each mock feed and then calls `syncAcceptedPrice(token)`
+on the pool, so tokens that go quiet between swaps do not accumulate an
+unobserved oracle delta that later bricks the first swap.
 
-Subagent worked around this in tests by changing test amounts and
-wrapping fuzz `pay()` in try/catch. Not a production-acceptable fix.
-**Recommend bumping `ESTIMATE_MAX_STEPS` to 32 in Task 12 setup before
-the new cross-stable tests are written**, so the test amounts stay
-realistic.
+Gateway protocol fees are capped at 100 bps at construction/deploy time,
+and registry token listings verify `IERC20Metadata(token).decimals()`
+against the supplied registry decimal.
 
 ## Pick-up checklist for next session
 
@@ -122,10 +118,9 @@ realistic.
    repo, or merge it onto a checkout of `arc-fx-gateway` at HEAD `e66cbf4`.
 2. Run `forge install` for any missing deps (`openzeppelin-contracts`,
    `forge-std`, `chainlink-brownie-contracts`).
-3. Run `forge test --skip "script/*"` — must show 158 passing.
+3. Run `forge test --skip "script/*"` — must pass.
 4. Read `docs/2026-04-30-multi-stablecoin-pool.md` for the full plan.
-5. Apply the iterator-budget fix in `ArcFXGateway.sol` (one-line change).
-6. Continue from Task 12.
+5. Continue from the latest rollout note.
 
 ## Source commits (in `arc-fx-gateway` HEAD `e66cbf4` lineage)
 

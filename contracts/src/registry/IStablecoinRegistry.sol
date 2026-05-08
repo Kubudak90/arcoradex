@@ -22,6 +22,7 @@ interface IStablecoinRegistry {
     error TokenAlreadyListed(address token);
     error TokenNotListed(address token);
     error InvalidDecimals(uint8 decimals);
+    error TokenDecimalMismatch(address token, uint8 expected, uint8 actual);
     error InvalidDeviation(uint16 bps);
     error ZeroAddress();
 
