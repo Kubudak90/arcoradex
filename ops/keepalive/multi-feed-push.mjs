@@ -196,7 +196,7 @@ async function main() {
     }
 
     log(`done updated=${updated} skipped=${skipped} errored=${errored}`);
-    if (errored === FEEDS.length) process.exit(1);
+    if (errored > 0) process.exit(1);
 }
 
 main().catch((err) => {
