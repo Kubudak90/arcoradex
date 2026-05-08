@@ -26,6 +26,9 @@ contract StressV07 is Script {
         string  symbol;
     }
 
+    uint256 public createFails;
+    uint256 public payFails;
+
     function run() external {
         uint256 pk    = vm.envUint("DEPLOYER_PRIVATE_KEY");
         address gwAdr = vm.envAddress("GATEWAY_ADDR");
@@ -69,6 +72,11 @@ contract StressV07 is Script {
         }
 
         vm.stopBroadcast();
+
+        if (createFails != 0 || payFails != 0) {
+            console2.log("stress failures: create=", createFails, " pay=", payFails);
+            revert("StressV07: flow failures");
+        }
     }
 
     function _runOne(
@@ -101,9 +109,11 @@ contract StressV07 is Script {
                 console2.log("ok", k, inIdx * 10 + outIdx);
             } catch {
                 console2.log("PAY-FAIL", k, inIdx * 10 + outIdx);
+                payFails++;
             }
         } catch {
             console2.log("CREATE-FAIL", k, inIdx * 10 + outIdx);
+            createFails++;
         }
     }
 }
