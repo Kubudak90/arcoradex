@@ -367,4 +367,4 @@ A migration is successful when **all** of the following hold:
 4. SSH password auth disabled. Only key auth works.
 5. `swap.arcorapay.xyz` faucet successfully mints from faucet EOA.
 6. `cast call $POOL totalReservesUSD()` returns same value (±dust) before vs. after migration.
-7. `forge test` 165+ tests still pass on the new contract suite.
+7. `forge test` passes on the post-migration suite: baseline 68 tests (origin/main as of 2026-05-09) plus the 6 new `MockChainlinkFeedV2` tests = 74 total.
