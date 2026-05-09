@@ -52,6 +52,7 @@ contract MigrateFeedsToV2 is Script {
     ) internal {
         IChainlinkAggregator oldOracle = reg.tokenInfo(token).usdOracle;
         (, int256 currentAnswer, , , ) = oldOracle.latestRoundData();
+        require(currentAnswer > 0, "old oracle answer is zero");
         uint8 oracleDec = oldOracle.decimals();
 
         MockChainlinkFeedV2 newFeed = new MockChainlinkFeedV2(
@@ -67,6 +68,7 @@ contract MigrateFeedsToV2 is Script {
         console2.log("  old oracle:", address(oldOracle));
         console2.log("  new oracle:", address(newFeed));
         console2.log("  answer    :", uint256(currentAnswer));
+        console2.log("  writer    :", keeperEOA);
 
         require(newFeed.writer() == keeperEOA, "writer != keeper");
         require(newFeed.owner()  == deployer, "owner != deployer");
