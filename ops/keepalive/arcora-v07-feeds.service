@@ -1,5 +1,5 @@
 [Unit]
-Description=ArcoraDEX — push CoinGecko prices to MockChainlinkFeedV2 contracts (Arc testnet)
+Description=Arcora v0.7 — push CoinGecko prices to MockChainlinkFeed contracts (Arc testnet, legacy)
 Documentation=https://github.com/Kubudak90/arcoradex
 After=network-online.target vault.service
 Wants=network-online.target
@@ -8,12 +8,12 @@ Wants=network-online.target
 Type=oneshot
 User=arcora
 Group=arcora
-WorkingDirectory=/home/arcora/arcoradex-feeds
-Environment=KEEPER_TENANT=arcoradex
+WorkingDirectory=/home/arcora/v07-feeds
+Environment=KEEPER_TENANT=v07
 ExecStartPre=/home/arcora/bin/fetch-keeper-secret.sh
 EnvironmentFile=/run/arcora/keeper.env
-EnvironmentFile=/home/arcora/arcoradex-feeds/.env
-ExecStart=/usr/bin/node /home/arcora/arcoradex-feeds/multi-feed-push.mjs
+EnvironmentFile=/home/arcora/v07-feeds/.env
+ExecStart=/usr/bin/node /home/arcora/v07-feeds/multi-feed-push.mjs
 ExecStopPost=/bin/rm -f /run/arcora/keeper.env
 Nice=10
 StandardOutput=journal
