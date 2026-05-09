@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import { Test, console2 } from "forge-std/Test.sol";
+import { Test } from "forge-std/Test.sol";
 import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 import { MockChainlinkFeedV2 } from "../src/testnet/MockChainlinkFeedV2.sol";
 
 contract MockChainlinkFeedV2Test is Test {
     MockChainlinkFeedV2 feed;
 
-    address owner   = address(0xA11CE);
-    address writer  = address(0xBEEF);
-    address other   = address(0xCAFE);
+    address owner   = makeAddr("owner");
+    address writer  = makeAddr("writer");
+    address other   = makeAddr("other");
 
     function setUp() public {
         feed = new MockChainlinkFeedV2(8, 1.0e8, writer, owner);
@@ -42,6 +42,14 @@ contract MockChainlinkFeedV2Test is Test {
         assertEq(feed.latestUpdatedAt(), block.timestamp);
     }
 
+    function test_setAnswer_emitsAnswerUpdated() public {
+        vm.warp(block.timestamp + 600);
+        vm.expectEmit(false, false, false, true, address(feed));
+        emit MockChainlinkFeedV2.AnswerUpdated(1.05e8, block.timestamp);
+        vm.prank(writer);
+        feed.setAnswer(1.05e8);
+    }
+
     function test_setWriter_revertsIfNotOwner() public {
         vm.prank(other);
         vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, other));
@@ -53,7 +61,7 @@ contract MockChainlinkFeedV2Test is Test {
     }
 
     function test_setWriter_updatesWriterAndOldWriterLosesAccess() public {
-        address newWriter = address(0xD00D);
+        address newWriter = makeAddr("newWriter");
         vm.prank(owner);
         feed.setWriter(newWriter);
         assertEq(feed.writer(), newWriter);
@@ -69,8 +77,16 @@ contract MockChainlinkFeedV2Test is Test {
         assertEq(feed.latestAnswer(), 1.10e8);
     }
 
+    function test_setWriter_emitsWriterUpdated() public {
+        address newWriter = makeAddr("newWriter");
+        vm.expectEmit(true, true, false, false, address(feed));
+        emit MockChainlinkFeedV2.WriterUpdated(writer, newWriter);
+        vm.prank(owner);
+        feed.setWriter(newWriter);
+    }
+
     function test_transferOwnership_isTwoStep() public {
-        address newOwner = address(0xE0F);
+        address newOwner = makeAddr("newOwner");
 
         vm.prank(owner);
         feed.transferOwnership(newOwner);
