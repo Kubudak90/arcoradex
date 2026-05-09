@@ -20,68 +20,56 @@ import { IChainlinkAggregator } from "../src/interfaces/IChainlinkAggregator.sol
 contract MigrateFeedsToV2 is Script {
     function run() external {
         uint256 pk        = vm.envUint("DEPLOYER_PRIVATE_KEY");
-        address registry  = vm.envAddress("REGISTRY_ADDR");
-        address poolAddr  = vm.envAddress("POOL_ADDR");
         address keeperEOA = vm.envAddress("KEEPER_EOA");
         address deployer  = vm.addr(pk);
 
-        ArcoraDexRegistry reg = ArcoraDexRegistry(registry);
-        ArcoraDexPool     pool = ArcoraDexPool(poolAddr);
+        ArcoraDexRegistry reg  = ArcoraDexRegistry(vm.envAddress("REGISTRY_ADDR"));
+        ArcoraDexPool     pool = ArcoraDexPool(vm.envAddress("POOL_ADDR"));
 
         uint256 navBefore = pool.totalReservesUSD();
         console2.log("NAV before:", navBefore);
 
+        vm.startBroadcast(pk);
         uint256 n = reg.tokensLength();
-
-        // Snapshot active token + current oracle list (read-only, no broadcast yet)
-        address[] memory tokensActive = new address[](n);
-        IChainlinkAggregator[] memory oraclesOld = new IChainlinkAggregator[](n);
-        uint8[]   memory decsList   = new uint8[](n);
-        uint256 activeCount = 0;
         for (uint256 i = 0; i < n; i++) {
             address t = reg.tokens(i);
             if (!reg.isActive(t)) continue;
-            tokensActive[activeCount] = t;
-            oraclesOld[activeCount]  = reg.tokenInfo(t).usdOracle;
-            decsList[activeCount]    = reg.tokenInfo(t).decimals;
-            activeCount++;
+            _migrateOne(reg, t, keeperEOA, deployer);
         }
-
-        vm.startBroadcast(pk);
-
-        for (uint256 i = 0; i < activeCount; i++) {
-            address t = tokensActive[i];
-            (, int256 currentAnswer, , , ) = oraclesOld[i].latestRoundData();
-            uint8 oracleDec = oraclesOld[i].decimals();
-
-            // initialAnswer at the same oracle decimals as v1 (8 here for MockChainlinkFeed)
-            MockChainlinkFeedV2 newFeed = new MockChainlinkFeedV2(
-                oracleDec,
-                currentAnswer,
-                keeperEOA,
-                deployer
-            );
-
-            reg.setOracle(t, IChainlinkAggregator(address(newFeed)));
-
-            console2.log("Migrated token:", t);
-            console2.log("  old oracle:", address(oraclesOld[i]));
-            console2.log("  new oracle:", address(newFeed));
-            console2.log("  answer    :", uint256(currentAnswer));
-
-            // Invariants per token
-            require(MockChainlinkFeedV2(address(newFeed)).writer() == keeperEOA, "writer != keeper");
-            require(MockChainlinkFeedV2(address(newFeed)).owner()  == deployer, "owner != deployer");
-            require(address(reg.tokenInfo(t).usdOracle) == address(newFeed), "registry not updated");
-        }
-
         vm.stopBroadcast();
 
         uint256 navAfter = pool.totalReservesUSD();
         console2.log("NAV after :", navAfter);
-
-        // ±1 wei tolerance for rounding (should be exactly equal in practice — answers copied 1:1)
         uint256 navDiff = navAfter > navBefore ? navAfter - navBefore : navBefore - navAfter;
         require(navDiff <= 1, "NAV invariant broken");
+    }
+
+    function _migrateOne(
+        ArcoraDexRegistry reg,
+        address token,
+        address keeperEOA,
+        address deployer
+    ) internal {
+        IChainlinkAggregator oldOracle = reg.tokenInfo(token).usdOracle;
+        (, int256 currentAnswer, , , ) = oldOracle.latestRoundData();
+        uint8 oracleDec = oldOracle.decimals();
+
+        MockChainlinkFeedV2 newFeed = new MockChainlinkFeedV2(
+            oracleDec,
+            currentAnswer,
+            keeperEOA,
+            deployer
+        );
+
+        reg.setOracle(token, IChainlinkAggregator(address(newFeed)));
+
+        console2.log("Migrated token:", token);
+        console2.log("  old oracle:", address(oldOracle));
+        console2.log("  new oracle:", address(newFeed));
+        console2.log("  answer    :", uint256(currentAnswer));
+
+        require(newFeed.writer() == keeperEOA, "writer != keeper");
+        require(newFeed.owner()  == deployer, "owner != deployer");
+        require(address(reg.tokenInfo(token).usdOracle) == address(newFeed), "registry not updated");
     }
 }
