@@ -8,6 +8,8 @@ Wants=network-online.target
 Type=oneshot
 User=arcora
 Group=arcora
+RuntimeDirectory=arcora
+RuntimeDirectoryMode=0700
 WorkingDirectory=/home/arcora/v07-feeds
 Environment=KEEPER_TENANT=v07
 ExecStartPre=/home/arcora/bin/fetch-keeper-secret.sh

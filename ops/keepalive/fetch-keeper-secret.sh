@@ -25,9 +25,9 @@ export VAULT_TOKEN
 TENANT="${KEEPER_TENANT:-arcoradex}"
 KEEPER_KEY="$(vault kv get -field=KEEPER_PRIVATE_KEY "kv/arcora/keeper-${TENANT}")"
 
-mkdir -p /run/arcora
-chown arcora:arcora /run/arcora
-chmod 700 /run/arcora
+# /run/arcora is created by systemd via RuntimeDirectory=arcora in the unit file.
+# When this script is invoked manually (e.g. plan Step 8.7), the operator must
+# pre-create /run/arcora as the arcora user is not allowed to mkdir under /run.
 
 umask 077
 cat > /run/arcora/keeper.env <<EOF
