@@ -4,8 +4,8 @@
 # for the multi-feed-push.mjs run. Cleaned up by ExecStopPost in the unit file.
 #
 # Inputs:
-#   /home/arcora/.vault/role_id     (chmod 400)
-#   /home/arcora/.vault/secret_id   (chmod 400)
+#   /home/arcora/.vault-creds/role_id     (chmod 400)
+#   /home/arcora/.vault-creds/secret_id   (chmod 400)
 # Env:
 #   KEEPER_TENANT  — "arcoradex" or "v07" (set per systemd unit via Environment=)
 # Output:
@@ -15,8 +15,8 @@
 set -euo pipefail
 export VAULT_ADDR="http://127.0.0.1:8200"
 
-ROLE_ID="$(cat /home/arcora/.vault/role_id)"
-SECRET_ID="$(cat /home/arcora/.vault/secret_id)"
+ROLE_ID="$(cat /home/arcora/.vault-creds/role_id)"
+SECRET_ID="$(cat /home/arcora/.vault-creds/secret_id)"
 
 VAULT_TOKEN="$(vault write -field=token auth/approle/login \
     role_id="$ROLE_ID" secret_id="$SECRET_ID")"
