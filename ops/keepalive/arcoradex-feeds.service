@@ -13,7 +13,7 @@ RuntimeDirectoryMode=0700
 WorkingDirectory=/home/arcora/arcoradex-feeds
 Environment=KEEPER_TENANT=arcoradex
 ExecStartPre=/home/arcora/bin/fetch-keeper-secret.sh
-EnvironmentFile=/run/arcora/keeper.env
+EnvironmentFile=-/run/arcora/keeper.env
 EnvironmentFile=/home/arcora/arcoradex-feeds/.env
 ExecStart=/usr/bin/node /home/arcora/arcoradex-feeds/multi-feed-push.mjs
 ExecStopPost=/bin/rm -f /run/arcora/keeper.env
