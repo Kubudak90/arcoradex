@@ -1,9 +1,9 @@
 {
-  "name": "arcora-v07-feeds-keeper",
+  "name": "arcoradex-feeds-keeper",
   "private": true,
   "type": "module",
-  "version": "0.7.0",
-  "description": "Push CoinGecko prices to v0.7 MockChainlinkFeed contracts on Arc testnet",
+  "version": "1.0.0",
+  "description": "Push CoinGecko prices to ArcoraDEX MockChainlinkFeedV2 contracts on Arc testnet",
   "main": "multi-feed-push.mjs",
   "scripts": {
     "push": "node multi-feed-push.mjs"
