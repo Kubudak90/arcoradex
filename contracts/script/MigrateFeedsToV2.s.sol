@@ -21,6 +21,7 @@ contract MigrateFeedsToV2 is Script {
     function run() external {
         uint256 pk        = vm.envUint("DEPLOYER_PRIVATE_KEY");
         address keeperEOA = vm.envAddress("KEEPER_EOA");
+        require(keeperEOA != address(0), "keeper EOA is zero");
         address deployer  = vm.addr(pk);
 
         ArcoraDexRegistry reg  = ArcoraDexRegistry(vm.envAddress("REGISTRY_ADDR"));
