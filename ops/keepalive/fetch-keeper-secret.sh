@@ -7,10 +7,10 @@
 #   /home/arcora/.vault-creds/role_id     (chmod 400)
 #   /home/arcora/.vault-creds/secret_id   (chmod 400)
 # Env:
-#   KEEPER_TENANT  — "arcoradex" or "v07" (set per systemd unit via Environment=)
+#   KEEPER_TENANT  — "arcoradex" (set per systemd unit via Environment=)
 # Output:
 #   /run/arcora/keeper.env  (mode 600, owned arcora:arcora)
-#     containing: DEPLOYER_PRIVATE_KEY=0x...
+#     containing: KEEPER_PRIVATE_KEY=0x...
 
 set -euo pipefail
 export VAULT_ADDR="http://127.0.0.1:8200"
@@ -31,7 +31,7 @@ KEEPER_KEY="$(vault kv get -field=KEEPER_PRIVATE_KEY "kv/arcora/keeper-${TENANT}
 
 umask 077
 cat > /run/arcora/keeper.env <<EOF
-DEPLOYER_PRIVATE_KEY=$KEEPER_KEY
+KEEPER_PRIVATE_KEY=$KEEPER_KEY
 EOF
 chown arcora:arcora /run/arcora/keeper.env
 chmod 600 /run/arcora/keeper.env

@@ -117,9 +117,9 @@ async function fetchAllPrices(feeds, apiKey) {
 }
 
 async function main() {
-    const pk = process.env.DEPLOYER_PRIVATE_KEY;
+    const pk = process.env.KEEPER_PRIVATE_KEY;
     if (!pk) {
-        log("DEPLOYER_PRIVATE_KEY missing — abort");
+        log("KEEPER_PRIVATE_KEY missing — abort");
         process.exit(2);
     }
     const apiKey = process.env.COINGECKO_API_KEY || undefined;

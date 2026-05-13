@@ -21,6 +21,7 @@ contracts/.env.*
 # Keeper local test artifacts
 ops/keepalive/.env
 ops/keepalive/.env.*
+!ops/keepalive/.env.example
 ops/keepalive/node_modules/
 ops/keepalive/package-lock.json
 
