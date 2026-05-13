@@ -24,6 +24,7 @@ interface IArcoraDexPool {
     error PriceDeviation(address token, uint256 newPrice1e18, uint256 prev1e18, uint16 maxDevBps);
     error NoValidPrice(address token);
     error EarlyWithdraw(uint256 unlockAt, uint256 nowAt);
+    error NotLP();
 
     // ── Events ────────────────────────────────────────────────────────
     event Deposited(
@@ -69,7 +70,7 @@ interface IArcoraDexPool {
     function lastAcceptedPrice(address token)    external view returns (uint256);
     function lastValidPrice(address token)   external view returns (uint256);
     function lastValidPriceAt(address token) external view returns (uint256);
-    // function lastMintAt(address account) external view returns (uint256); // added in Task 4
+    function lastMintAt(address account) external view returns (uint256);
     function swapFeeBps()           external view returns (uint16);
     function protocolFeeShareBps()  external view returns (uint16);
     function paused()               external view returns (bool);
@@ -103,4 +104,8 @@ interface IArcoraDexPool {
     function pause()   external;
     function unpause() external;
     function syncAcceptedPrice(address token) external returns (uint256 price1e18);
+
+    /// @notice Called by the LP token on every transfer to propagate min-hold.
+    /// Only the LP contract may call this.
+    function notifyLPTransfer(address from, address to) external;
 }

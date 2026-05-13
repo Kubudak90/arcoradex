@@ -40,13 +40,15 @@ contract ArcoraDexPoolFuzz is Test {
         vm.stopPrank();
     }
 
-    /// Deposit then immediate single-token withdraw of the same token loses at most ~swapFeeBps + tiny rounding.
+    /// Deposit then single-token withdraw of the same token loses at most ~swapFeeBps + tiny rounding.
     function testFuzz_deposit_then_withdraw_preserves_value(uint96 amountIn) public {
         amountIn = uint96(bound(amountIn, 10_000e6, 100_000e6));   // 10k–100k USDC
 
         vm.startPrank(alice);
         usdc.approve(address(pool), amountIn);
         uint256 lpMinted = pool.deposit(address(usdc), amountIn, 0, block.timestamp);
+        // Bypass MIN_HOLD_SECONDS (Task 4: 1-hour LP min-hold)
+        vm.warp(block.timestamp + 1 hours);
         uint256 amountOut = pool.withdraw(address(usdc), lpMinted, 0, block.timestamp);
         vm.stopPrank();
 

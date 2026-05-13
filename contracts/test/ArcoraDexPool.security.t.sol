@@ -131,6 +131,109 @@ contract ArcoraDexPoolSecurityTest is Test {
             "orphaned donation should sit outside reserves[]");
     }
 
+    function test_jit_mev_blocked_by_min_hold() public {
+        address bot = address(0xB07);
+        usdc.mint(bot, 1_000_000_000); // 1000 USDC
+
+        vm.startPrank(bot);
+        usdc.approve(address(pool), type(uint256).max);
+        pool.deposit(address(usdc), 100_000_000, 0, block.timestamp + 60); // 100 USDC
+        uint256 botLp = pool.LP().balanceOf(bot);
+        uint256 expectedUnlock = block.timestamp + 1 hours;
+
+        // Simulate keeper oracle update (price up)
+        vm.stopPrank();
+        vm.prank(DEPLOYER);
+        fUsdc.setAnswer(100_500_000); // 0.5% up
+        vm.startPrank(bot);
+
+        // Immediate withdraw must revert (1h min-hold)
+        vm.expectRevert(abi.encodeWithSelector(IArcoraDexPool.EarlyWithdraw.selector, expectedUnlock, block.timestamp));
+        pool.withdraw(address(usdc), botLp, 0, block.timestamp + 60);
+
+        // After 59m 59s — still blocked
+        vm.warp(block.timestamp + 1 hours - 1);
+        vm.expectRevert(abi.encodeWithSelector(IArcoraDexPool.EarlyWithdraw.selector, expectedUnlock, block.timestamp));
+        pool.withdraw(address(usdc), botLp, 0, block.timestamp + 60);
+
+        // After exactly 1h from mint — allowed
+        vm.warp(block.timestamp + 1);
+        pool.withdraw(address(usdc), botLp, 0, block.timestamp + 60);
+        vm.stopPrank();
+
+        assertGt(usdc.balanceOf(bot), 0, "withdraw should succeed after 1h");
+    }
+
+    /// @notice Verifies the LP-transfer hook closes the deposit→transfer→withdraw
+    /// JIT bypass. Without the hook, a fresh wallet receiving LP could withdraw
+    /// immediately because its lastMintAt = 0.
+    function test_jit_mev_blocked_by_lp_transfer_hook() public {
+        address botA = address(0xB0A);
+        address botB = address(0xB0B); // fresh, never deposited
+
+        usdc.mint(botA, 1_000_000_000); // 1000 USDC
+
+        // Bot deposits to wallet A
+        vm.startPrank(botA);
+        usdc.approve(address(pool), type(uint256).max);
+        pool.deposit(address(usdc), 100_000_000, 0, block.timestamp + 60);
+        uint256 botLp = pool.LP().balanceOf(botA);
+        uint256 expectedUnlock = block.timestamp + 1 hours;
+
+        // Bot transfers all LP to fresh wallet B (same block as deposit)
+        pool.LP().transfer(botB, botLp);
+        vm.stopPrank();
+
+        // The hook should have propagated lastMintAt[A] to lastMintAt[B]
+        assertEq(pool.lastMintAt(botB), pool.lastMintAt(botA), "transfer must propagate lastMintAt");
+
+        // B tries to withdraw — must revert because of inherited lock
+        vm.prank(botB);
+        vm.expectRevert(abi.encodeWithSelector(IArcoraDexPool.EarlyWithdraw.selector, expectedUnlock, block.timestamp));
+        pool.withdraw(address(usdc), botLp, 0, block.timestamp + 60);
+
+        // Warp past the lock
+        vm.warp(block.timestamp + 1 hours);
+
+        // Now B can withdraw
+        vm.prank(botB);
+        pool.withdraw(address(usdc), botLp, 0, block.timestamp + 60);
+        assertGt(usdc.balanceOf(botB), 0, "post-lock withdraw should succeed");
+    }
+
+    /// @notice Verifies that a second deposit during the hold window extends
+    /// the unlock time (resets the clock to block.timestamp + MIN_HOLD_SECONDS).
+    function test_second_deposit_extends_minhold() public {
+        address alice = address(0xA11);
+        usdc.mint(alice, 1_000_000_000);
+
+        vm.startPrank(alice);
+        usdc.approve(address(pool), type(uint256).max);
+        uint256 firstDepositAt = block.timestamp;
+        pool.deposit(address(usdc), 50_000_000, 0, block.timestamp + 60);
+        assertEq(pool.lastMintAt(alice), firstDepositAt);
+
+        // Advance 30 minutes (inside the 1-hour window)
+        vm.warp(block.timestamp + 30 minutes);
+
+        // Second deposit resets the clock
+        uint256 secondDepositAt = block.timestamp;
+        pool.deposit(address(usdc), 50_000_000, 0, block.timestamp + 60);
+        assertEq(pool.lastMintAt(alice), secondDepositAt, "second deposit must overwrite lastMintAt");
+
+        // Withdraw 45 minutes after FIRST deposit (15 min after second) — still locked
+        vm.warp(firstDepositAt + 45 minutes);
+        uint256 aliceLp = pool.LP().balanceOf(alice);
+        uint256 expectedUnlock = secondDepositAt + 1 hours;
+        vm.expectRevert(abi.encodeWithSelector(IArcoraDexPool.EarlyWithdraw.selector, expectedUnlock, block.timestamp));
+        pool.withdraw(address(usdc), aliceLp, 0, block.timestamp + 60);
+
+        // Warp 1h after SECOND deposit — now allowed
+        vm.warp(secondDepositAt + 1 hours);
+        pool.withdraw(address(usdc), pool.LP().balanceOf(alice), 0, block.timestamp + 60);
+        vm.stopPrank();
+    }
+
     /// @notice Verifies that virtual shares defeat the round-down-dust dilution
     /// vector even at the worst-case NAV/supply ratio.
     ///

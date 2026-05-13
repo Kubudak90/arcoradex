@@ -37,6 +37,11 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
     uint256 internal constant VIRTUAL_SHARES = 1e6;
     uint256 internal constant VIRTUAL_ASSETS = 1;
 
+    /// @dev LP token min-hold period to defeat JIT/MEV sandwich attacks
+    /// that try to capture oracle-update NAV deltas via atomic deposit-then-withdraw.
+    /// Keeper cadence is 30 min; 1 hour guarantees at least one oracle cycle elapsed.
+    uint256 public constant MIN_HOLD_SECONDS = 1 hours;
+
     // ── Immutables ───────────────────────────────────────────────────
     IArcoraDexRegistry public immutable override REGISTRY;
     IArcoraDexLP       public immutable override LP;
@@ -47,6 +52,7 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
     mapping(address token => uint256) public override lastAcceptedPrice;
     mapping(address token => uint256) public override lastValidPrice;     // 1e18-scaled USD price (cache)
     mapping(address token => uint256) public override lastValidPriceAt;   // block.timestamp of cache write
+    mapping(address account => uint256) public override lastMintAt;
     uint16 public override swapFeeBps;
     uint16 public override protocolFeeShareBps;
     bool   public override paused;
@@ -238,6 +244,7 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
             LP.mint(DEAD_ADDRESS, MINIMUM_LIQUIDITY);
         }
         LP.mint(msg.sender, lpMinted);
+        lastMintAt[msg.sender] = block.timestamp;
 
         emit Deposited(msg.sender, token, amount, lpMinted, navBefore, navBefore + usdIn);
     }
@@ -249,6 +256,8 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         uint256 deadline
     ) external override whenNotPaused nonReentrant checkDeadline(deadline) returns (uint256 amountOut) {
         if (lpAmount == 0) revert ZeroAmount();
+        uint256 unlockAt = lastMintAt[msg.sender] + MIN_HOLD_SECONDS;
+        if (block.timestamp < unlockAt) revert EarlyWithdraw(unlockAt, block.timestamp);
 
         uint256 navBefore = _totalReservesUSDMut();
         uint256 usdRedeemed = (lpAmount * (navBefore + VIRTUAL_ASSETS)) / (LP.totalSupply() + VIRTUAL_SHARES);
@@ -412,6 +421,19 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
     function unpause() external override onlyOwner {
         paused = false;
         emit Unpaused(msg.sender);
+    }
+
+    /// @notice Hook invoked by ArcoraDexLP on every transfer to propagate
+    /// the deposit-side min-hold lock. The recipient inherits the stricter
+    /// of (their existing lock, the sender's lock) — preventing the
+    /// deposit→transfer→withdraw JIT bypass.
+    /// @dev Only the LP contract may call this.
+    function notifyLPTransfer(address from, address to) external override {
+        if (msg.sender != address(LP)) revert NotLP();
+        uint256 fromLock = lastMintAt[from];
+        if (fromLock > lastMintAt[to]) {
+            lastMintAt[to] = fromLock;
+        }
     }
 
     function syncAcceptedPrice(address token) external override onlyOwner returns (uint256 price1e18) {

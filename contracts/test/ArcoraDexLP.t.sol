@@ -5,21 +5,44 @@ import { Test } from "forge-std/Test.sol";
 import { ArcoraDexLP }  from "../src/ArcoraDexLP.sol";
 import { IArcoraDexLP } from "../src/interfaces/IArcoraDexLP.sol";
 
+/// @dev Minimal stub that satisfies the notifyLPTransfer callback so LP unit
+/// tests don't need a full pool deployment. It records the last call for
+/// assertion purposes but otherwise does nothing.
+contract MockMinter {
+    address public lastFrom;
+    address public lastTo;
+
+    // Expose mint/burn so the test can drive them without prank overhead.
+    function mint(ArcoraDexLP lp, address to, uint256 amount) external {
+        lp.mint(to, amount);
+    }
+
+    function burn(ArcoraDexLP lp, address from, uint256 amount) external {
+        lp.burn(from, amount);
+    }
+
+    function notifyLPTransfer(address from, address to) external {
+        lastFrom = from;
+        lastTo   = to;
+    }
+}
+
 contract ArcoraDexLPTest is Test {
+    MockMinter  minterContract;
     ArcoraDexLP lp;
-    address minter = makeAddr("minter");
-    address alice  = makeAddr("alice");
-    address bob    = makeAddr("bob");
+    address alice = makeAddr("alice");
+    address bob   = makeAddr("bob");
 
     function setUp() public {
-        lp = new ArcoraDexLP(minter);
+        minterContract = new MockMinter();
+        lp = new ArcoraDexLP(address(minterContract));
     }
 
     function test_metadata() public view {
         assertEq(lp.name(), "Arcora DEX LP");
         assertEq(lp.symbol(), "ADEX-LP");
         assertEq(lp.decimals(), 18);
-        assertEq(lp.MINTER(), minter);
+        assertEq(lp.MINTER(), address(minterContract));
         assertEq(lp.totalSupply(), 0);
     }
 
@@ -29,7 +52,7 @@ contract ArcoraDexLPTest is Test {
     }
 
     function test_mint_byMinter() public {
-        vm.prank(minter);
+        vm.prank(address(minterContract));
         lp.mint(alice, 100e18);
         assertEq(lp.balanceOf(alice), 100e18);
         assertEq(lp.totalSupply(), 100e18);
@@ -42,7 +65,7 @@ contract ArcoraDexLPTest is Test {
     }
 
     function test_burn_byMinter() public {
-        vm.startPrank(minter);
+        vm.startPrank(address(minterContract));
         lp.mint(alice, 100e18);
         lp.burn(alice, 40e18);
         vm.stopPrank();
@@ -51,7 +74,7 @@ contract ArcoraDexLPTest is Test {
     }
 
     function test_burn_revertsNotMinter() public {
-        vm.prank(minter);
+        vm.prank(address(minterContract));
         lp.mint(alice, 100e18);
 
         vm.prank(alice);
@@ -60,12 +83,36 @@ contract ArcoraDexLPTest is Test {
     }
 
     function test_transfer_works_freely() public {
-        vm.prank(minter);
+        vm.prank(address(minterContract));
         lp.mint(alice, 100e18);
 
         vm.prank(alice);
         lp.transfer(bob, 30e18);
         assertEq(lp.balanceOf(alice), 70e18);
         assertEq(lp.balanceOf(bob), 30e18);
+    }
+
+    /// @notice Verifies the _update hook invokes notifyLPTransfer on the minter
+    /// for wallet-to-wallet transfers (not for mints or burns).
+    function test_transfer_hook_calls_notifyLPTransfer() public {
+        vm.prank(address(minterContract));
+        lp.mint(alice, 100e18);
+
+        // Mint (from==0) must NOT call notifyLPTransfer — lastFrom/To stay zero.
+        assertEq(minterContract.lastFrom(), address(0));
+        assertEq(minterContract.lastTo(),   address(0));
+
+        // Normal transfer must invoke notifyLPTransfer.
+        vm.prank(alice);
+        lp.transfer(bob, 50e18);
+        assertEq(minterContract.lastFrom(), alice);
+        assertEq(minterContract.lastTo(),   bob);
+
+        // Burn (to==0) must NOT update lastFrom/To (the hook skips burns).
+        vm.prank(address(minterContract));
+        lp.burn(bob, 50e18);
+        // lastFrom/To remain as set by the transfer above.
+        assertEq(minterContract.lastFrom(), alice);
+        assertEq(minterContract.lastTo(),   bob);
     }
 }

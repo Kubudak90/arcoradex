@@ -170,6 +170,12 @@ contract ArcoraDexPoolTest is Test {
         pool.deposit(address(usdc), 2000e6, 0, block.timestamp);
         uint256 aliceLp = lp.balanceOf(alice);
 
+        // Bypass MIN_HOLD_SECONDS (Task 4: 1-hour LP min-hold).
+        // Warp exactly 1 hour so the hold expires without pushing past the
+        // USDC oracle's maxStaleSeconds (also 3600 s). The check in withdraw()
+        // is strict-less-than, so block.timestamp == unlockAt is allowed.
+        vm.warp(block.timestamp + 1 hours);
+
         // Withdraw half as USDC.
         uint256 lpToBurn = aliceLp / 2;
         uint256 amountOut = pool.withdraw(address(usdc), lpToBurn, 0, block.timestamp);
