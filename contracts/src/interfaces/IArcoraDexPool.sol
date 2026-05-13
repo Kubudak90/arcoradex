@@ -22,6 +22,8 @@ interface IArcoraDexPool {
     error InvalidOracleRound(address token, uint80 roundId, uint80 answeredInRound);
     error InvalidOracleTimestamp(address token, uint256 updatedAt);
     error PriceDeviation(address token, uint256 newPrice1e18, uint256 prev1e18, uint16 maxDevBps);
+    error NoValidPrice(address token);
+    error EarlyWithdraw(uint256 unlockAt, uint256 nowAt);
 
     // ── Events ────────────────────────────────────────────────────────
     event Deposited(
@@ -57,6 +59,7 @@ interface IArcoraDexPool {
     event Paused (address indexed by);
     event Unpaused(address indexed by);
     event AcceptedPriceSynced(address indexed token, uint256 oldPrice1e18, uint256 newPrice1e18);
+    event PriceCacheUpdated(address indexed token, uint256 price1e18, uint256 updatedAt);
 
     // ── Views ─────────────────────────────────────────────────────────
     function REGISTRY()             external view returns (IArcoraDexRegistry);
@@ -64,6 +67,9 @@ interface IArcoraDexPool {
     function reserves(address token)             external view returns (uint256);
     function protocolFeesAccrued(address token)  external view returns (uint256);
     function lastAcceptedPrice(address token)    external view returns (uint256);
+    function lastValidPrice(address token)   external view returns (uint256);
+    function lastValidPriceAt(address token) external view returns (uint256);
+    // function lastMintAt(address account) external view returns (uint256); // added in Task 4
     function swapFeeBps()           external view returns (uint16);
     function protocolFeeShareBps()  external view returns (uint16);
     function paused()               external view returns (bool);

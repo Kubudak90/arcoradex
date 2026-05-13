@@ -34,23 +34,26 @@ contract ArcoraDexRegistry is IArcoraDexRegistry, Ownable2Step {
         address token,
         uint8 decimals_,
         IChainlinkAggregator oracle,
-        uint16 maxDeviationBps
+        uint16 maxDeviationBps,
+        uint32 maxStaleSeconds_
     ) external override onlyOwner {
         if (token == address(0) || address(oracle) == address(0)) revert ZeroAddress();
         if (decimals_ == 0 || decimals_ > 18) revert InvalidDecimals(decimals_);
         uint8 actualDecimals = IERC20Metadata(token).decimals();
         if (decimals_ != actualDecimals) revert TokenDecimalMismatch(token, decimals_, actualDecimals);
         if (maxDeviationBps == 0 || maxDeviationBps > 10_000) revert InvalidDeviation(maxDeviationBps);
+        if (maxStaleSeconds_ < 60 || maxStaleSeconds_ > 7 days) revert InvalidStaleSeconds(maxStaleSeconds_);
         if (_info[token].usdOracle != IChainlinkAggregator(address(0))) revert TokenAlreadyListed(token);
 
         _info[token] = TokenInfo({
             decimals: decimals_,
             isActive: true,
             usdOracle: oracle,
-            maxOracleDeviationBps: maxDeviationBps
+            maxOracleDeviationBps: maxDeviationBps,
+            maxStaleSeconds: maxStaleSeconds_
         });
         tokens.push(token);
-        emit TokenListed(token, decimals_, address(oracle), maxDeviationBps);
+        emit TokenListed(token, decimals_, address(oracle), maxDeviationBps, maxStaleSeconds_);
     }
 
     function setOracle(address token, IChainlinkAggregator newOracle) external override onlyOwner {
@@ -69,6 +72,15 @@ contract ArcoraDexRegistry is IArcoraDexRegistry, Ownable2Step {
         uint16 old = info.maxOracleDeviationBps;
         info.maxOracleDeviationBps = maxDeviationBps;
         emit DeviationUpdated(token, old, maxDeviationBps);
+    }
+
+    function setMaxStaleSeconds(address token, uint32 maxStaleSeconds_) external override onlyOwner {
+        if (maxStaleSeconds_ < 60 || maxStaleSeconds_ > 7 days) revert InvalidStaleSeconds(maxStaleSeconds_);
+        TokenInfo storage info = _info[token];
+        if (info.usdOracle == IChainlinkAggregator(address(0))) revert TokenNotListed(token);
+        uint32 old = info.maxStaleSeconds;
+        info.maxStaleSeconds = maxStaleSeconds_;
+        emit MaxStaleSecondsUpdated(token, old, maxStaleSeconds_);
     }
 
     function deactivateToken(address token) external override onlyOwner {

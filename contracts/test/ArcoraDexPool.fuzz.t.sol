@@ -31,8 +31,8 @@ contract ArcoraDexPoolFuzz is Test {
         lp   = ArcoraDexLP(address(pool.LP()));
 
         vm.startPrank(owner);
-        reg.listToken(address(usdc), 6, IChainlinkAggregator(address(fUsdc)),  50);
-        reg.listToken(address(eurc), 6, IChainlinkAggregator(address(fEurc)), 150);
+        reg.listToken(address(usdc), 6, IChainlinkAggregator(address(fUsdc)),  50,  3600);
+        reg.listToken(address(eurc), 6, IChainlinkAggregator(address(fEurc)), 150, 14400);
 
         usdc.mint(alice, 1_000_000e6);
         usdc.mint(bob,   1_000_000e6);

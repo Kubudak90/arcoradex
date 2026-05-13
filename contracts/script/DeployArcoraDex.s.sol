@@ -16,6 +16,7 @@ contract DeployArcoraDex is Script {
         uint8   decimals;
         int256  initialPrice1e8;   // 8-dec Chainlink scale, e.g. 1e8 = $1.00
         uint16  deviationBps;
+        uint32  maxStaleSeconds;
     }
 
     function run() external {
@@ -23,13 +24,13 @@ contract DeployArcoraDex is Script {
         address deployer    = vm.addr(deployerKey);
 
         StableConfig[7] memory cfg = [
-            StableConfig("USD Coin",          "USDC",  6,  int256(1e8),         50),
-            StableConfig("Tether USD",        "USDT",  6,  int256(1e8),         50),
-            StableConfig("PayPal USD",        "PYUSD", 6,  int256(1e8),         50),
-            StableConfig("Dai",               "DAI",  18,  int256(1e8),         50),
-            StableConfig("Euro Coin",         "EURC",  6,  int256(108e6),      150),
-            StableConfig("Turkish Lira Coin", "TRYC",  6,  int256(2_900_000), 5000),
-            StableConfig("Brazilian Real C",  "BRLC",  6,  int256(20_000_000),5000)
+            StableConfig("USD Coin",          "USDC",  6,  int256(1e8),          50,  3600),
+            StableConfig("Tether USD",        "USDT",  6,  int256(1e8),          50,  3600),
+            StableConfig("PayPal USD",        "PYUSD", 6,  int256(1e8),          50,  3600),
+            StableConfig("Dai",               "DAI",  18,  int256(1e8),          50,  3600),
+            StableConfig("Euro Coin",         "EURC",  6,  int256(108e6),       150, 14400),
+            StableConfig("Turkish Lira Coin", "TRYC",  6,  int256(2_900_000), 5000, 86400),
+            StableConfig("Brazilian Real C",  "BRLC",  6,  int256(20_000_000),5000, 86400)
         ];
 
         vm.startBroadcast(deployerKey);
@@ -45,7 +46,7 @@ contract DeployArcoraDex is Script {
         for (uint256 i = 0; i < cfg.length; i++) {
             MintableERC20     t = new MintableERC20(cfg[i].name, cfg[i].symbol, cfg[i].decimals, deployer);
             MockChainlinkFeed f = new MockChainlinkFeed(8, cfg[i].initialPrice1e8);
-            reg.listToken(address(t), cfg[i].decimals, IChainlinkAggregator(address(f)), cfg[i].deviationBps);
+            reg.listToken(address(t), cfg[i].decimals, IChainlinkAggregator(address(f)), cfg[i].deviationBps, cfg[i].maxStaleSeconds);
             console2.log(cfg[i].symbol, address(t), address(f));
 
             // $10,000 seed per token: amount = $10_000 * 10^decimals / price
