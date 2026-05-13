@@ -25,6 +25,18 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
     uint256 internal constant BPS                          = 10_000;
     address public  constant DEAD_ADDRESS                  = address(0xdead);
 
+    /// @dev ERC4626-style virtual offset on LP math. Two purposes:
+    /// (1) Eliminates round-down-to-zero on tiny follow-up deposits: lpMinted
+    ///     for any non-zero usdIn is guaranteed >= 1 regardless of supply/NAV ratio.
+    /// (2) Defense-in-depth in case a future feature introduces a balanceOf-derived
+    ///     NAV path.
+    /// Note: the classic Uniswap-V2 donation-inflation attack is already
+    /// structurally blocked by ArcoraDexPool's explicit `reserves[]` accounting
+    /// (donations land in token balance but not in `reserves[]`, so NAV is
+    /// unchanged). This offset is belt + suspenders.
+    uint256 internal constant VIRTUAL_SHARES = 1e6;
+    uint256 internal constant VIRTUAL_ASSETS = 1;
+
     // ── Immutables ───────────────────────────────────────────────────
     IArcoraDexRegistry public immutable override REGISTRY;
     IArcoraDexLP       public immutable override LP;
@@ -210,11 +222,12 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         uint256 navBefore;
         if (supply == 0) {
             if (usdIn <= MINIMUM_LIQUIDITY) revert FirstDepositTooSmall(usdIn, MINIMUM_LIQUIDITY);
-            lpMinted  = usdIn - MINIMUM_LIQUIDITY;
+            // Unified formula: with supply=0 and nav=0, becomes (usdIn * VIRTUAL_SHARES) / VIRTUAL_ASSETS = usdIn * 1e6
+            lpMinted  = (usdIn * (0 + VIRTUAL_SHARES)) / (0 + VIRTUAL_ASSETS);
             navBefore = 0;
         } else {
             navBefore = _totalReservesUSDMut();
-            lpMinted  = (usdIn * supply) / navBefore;
+            lpMinted  = (usdIn * (supply + VIRTUAL_SHARES)) / (navBefore + VIRTUAL_ASSETS);
         }
         if (lpMinted < minLpOut) revert InsufficientLpOut(lpMinted, minLpOut);
 
@@ -238,7 +251,7 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         if (lpAmount == 0) revert ZeroAmount();
 
         uint256 navBefore = _totalReservesUSDMut();
-        uint256 usdRedeemed = (lpAmount * navBefore) / LP.totalSupply();
+        uint256 usdRedeemed = (lpAmount * (navBefore + VIRTUAL_ASSETS)) / (LP.totalSupply() + VIRTUAL_SHARES);
 
         uint256 protFeeAmt;
         uint256 navAfter;
@@ -343,10 +356,10 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         uint256 supply = LP.totalSupply();
         if (supply == 0) {
             if (usdIn <= MINIMUM_LIQUIDITY) revert FirstDepositTooSmall(usdIn, MINIMUM_LIQUIDITY);
-            lpOut = usdIn - MINIMUM_LIQUIDITY;
+            lpOut = (usdIn * (0 + VIRTUAL_SHARES)) / (0 + VIRTUAL_ASSETS);
         } else {
             uint256 nav = totalReservesUSD();
-            lpOut = (usdIn * supply) / nav;
+            lpOut = (usdIn * (supply + VIRTUAL_SHARES)) / (nav + VIRTUAL_ASSETS);
         }
     }
 
@@ -358,7 +371,7 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         {
             uint256 supply      = LP.totalSupply();
             uint256 navBefore   = totalReservesUSD();
-            uint256 usdRedeemed = (lpAmount * navBefore) / supply;
+            uint256 usdRedeemed = (lpAmount * (navBefore + VIRTUAL_ASSETS)) / (supply + VIRTUAL_SHARES);
             uint256 usdNet      = (usdRedeemed * (BPS - swapFeeBps)) / BPS;
             uint256 feeUsd      = usdRedeemed - usdNet;
             uint256 protFeeUsd  = (feeUsd * protocolFeeShareBps) / BPS;

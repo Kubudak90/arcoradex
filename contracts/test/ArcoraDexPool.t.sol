@@ -77,18 +77,19 @@ contract ArcoraDexPoolTest is Test {
 
     // ── deposit (first deposit + subsequent) ─────────────────────────
     function test_deposit_first_burns_minimum_liquidity_and_mints_residual() public {
-        // Alice deposits 1000 USDC at $1.00 → usdValue = 1000 * 1e18.
+        // Alice deposits 1000 USDC at $1.00 → usdValue = 1000e18.
+        // With virtual shares: lpMinted = usdIn * VIRTUAL_SHARES / VIRTUAL_ASSETS = 1000e18 * 1e6 / 1 = 1000e24.
         uint256 amount = 1000e6;
         vm.startPrank(alice);
         usdc.approve(address(pool), amount);
         uint256 lpMinted = pool.deposit(address(usdc), amount, 0, block.timestamp);
         vm.stopPrank();
 
-        // Expected: usdValue 1000e18; user gets 1000e18 - 1000.
-        assertEq(lpMinted, 1000e18 - 1000);
-        assertEq(lp.balanceOf(alice), 1000e18 - 1000);
+        // Expected: usdValue 1000e18; lpMinted = 1000e18 * 1e6 = 1000e24.
+        assertEq(lpMinted, 1000e24);
+        assertEq(lp.balanceOf(alice), 1000e24);
         assertEq(lp.balanceOf(address(0xdead)), 1000);
-        assertEq(lp.totalSupply(), 1000e18);
+        assertEq(lp.totalSupply(), 1000e24 + 1000);
         assertEq(pool.reserves(address(usdc)), amount);
     }
 
@@ -113,22 +114,23 @@ contract ArcoraDexPoolTest is Test {
         uint256 supplyAfter1 = lp.totalSupply();
         uint256 navAfter1    = pool.totalReservesUSD();
 
-        // Bob deposits 500 USDC. lpMinted = 500e18 * supply / nav.
+        // Bob deposits 500 USDC. lpMinted = 500e18 * (supply + VIRTUAL_SHARES) / (nav + VIRTUAL_ASSETS).
+        // VIRTUAL_SHARES = 1e6, VIRTUAL_ASSETS = 1.
         vm.startPrank(bob);
         usdc.approve(address(pool), 500e6);
         uint256 lpMintedBob = pool.deposit(address(usdc), 500e6, 0, block.timestamp);
         vm.stopPrank();
 
-        assertEq(lpMintedBob, (500e18 * supplyAfter1) / navAfter1);
+        assertEq(lpMintedBob, (500e18 * (supplyAfter1 + 1e6)) / (navAfter1 + 1));
         assertEq(lp.balanceOf(bob), lpMintedBob);
     }
 
     function test_deposit_revertsSlippage() public {
         vm.startPrank(alice);
         usdc.approve(address(pool), 1000e6);
-        // First deposit yields 1000e18 - 1000; require minLpOut = 1000e18 (impossible).
-        vm.expectRevert(abi.encodeWithSelector(IArcoraDexPool.InsufficientLpOut.selector, uint256(1000e18 - 1000), uint256(1000e18)));
-        pool.deposit(address(usdc), 1000e6, 1000e18, block.timestamp);
+        // First deposit yields 1000e24 (virtual shares); require minLpOut = 1000e24 + 1 (impossible).
+        vm.expectRevert(abi.encodeWithSelector(IArcoraDexPool.InsufficientLpOut.selector, uint256(1000e24), uint256(1000e24 + 1)));
+        pool.deposit(address(usdc), 1000e6, 1000e24 + 1, block.timestamp);
         vm.stopPrank();
     }
 
@@ -255,8 +257,9 @@ contract ArcoraDexPoolTest is Test {
     }
 
     function test_quoteDeposit_first_deduct_minimum_liquidity() public view {
+        // With virtual shares: lpOut = usdIn * VIRTUAL_SHARES / VIRTUAL_ASSETS = 1000e18 * 1e6 = 1000e24.
         uint256 lpOut = pool.quoteDeposit(address(usdc), 1000e6);
-        assertEq(lpOut, 1000e18 - 1000);
+        assertEq(lpOut, 1000e24);
     }
 
     function test_quoteDeposit_proportional_after_seed() public {
@@ -266,7 +269,9 @@ contract ArcoraDexPoolTest is Test {
         vm.stopPrank();
 
         uint256 lpOut = pool.quoteDeposit(address(usdc), 500e6);
-        uint256 expected = (500e18 * lp.totalSupply()) / pool.totalReservesUSD();
+        // With virtual shares: lpOut = usdIn * (supply + VIRTUAL_SHARES) / (nav + VIRTUAL_ASSETS).
+        // VIRTUAL_SHARES = 1e6, VIRTUAL_ASSETS = 1.
+        uint256 expected = (500e18 * (lp.totalSupply() + 1e6)) / (pool.totalReservesUSD() + 1);
         assertEq(lpOut, expected);
     }
 
