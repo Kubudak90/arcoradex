@@ -234,6 +234,165 @@ contract ArcoraDexPoolSecurityTest is Test {
         vm.stopPrank();
     }
 
+    /// @notice Scenario B (intentional STRICTER-than-swap): live oracle has
+    /// moved past the cache-deviation cap; Task 2's cache guard shields swap()
+    /// so it silently executes at the cached price. quote() OVER-REVERTS to
+    /// give integrators an early-warning signal that the executed price would
+    /// be stale.
+    function test_quote_over_reverts_when_cache_guard_would_shield_swap() public {
+        usdc.mint(ALICE, 1_000_000_000);
+        eurc.mint(ALICE, 1_000_000_000);
+        vm.startPrank(ALICE);
+        usdc.approve(address(pool), type(uint256).max);
+        eurc.approve(address(pool), type(uint256).max);
+        pool.deposit(address(usdc), 100_000_000, 0, block.timestamp + 60);
+        pool.deposit(address(eurc), 100_000_000, 0, block.timestamp + 60);
+        vm.stopPrank();
+
+        // After seeding: lastAcceptedPrice[eurc] = $1.10, cache = $1.10.
+        // Move oracle to $1.132 — 290 bps above the cache; EURC's cap is 150 bps.
+        // Cache-deviation guard will reject this update; cache stays at $1.10.
+        // swap() will silently execute at $1.10. quote() over-reverts.
+        vm.prank(DEPLOYER);
+        fEurc.setAnswer(113_200_000);
+
+        // Sanity: cache untouched by a read (until a state-changing op).
+        // quote() reverts PriceDeviation on the EURC leg (raw oracle $1.132
+        // vs lastAcceptedPrice $1.10 is 290 bps > 150 bps cap).
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IArcoraDexPool.PriceDeviation.selector,
+                address(eurc),
+                uint256(1.132e18),
+                uint256(1.10e18),
+                uint16(150)
+            )
+        );
+        pool.quote(address(usdc), address(eurc), 10_000_000);
+
+        // swap() in the same state SILENTLY succeeds at the cached price.
+        // This documents the intentional behavioral asymmetry.
+        usdc.mint(address(this), 10_000_000);
+        usdc.approve(address(pool), 10_000_000);
+        uint256 amountOut = pool.swap(
+            address(usdc),
+            address(eurc),
+            10_000_000,
+            0,
+            block.timestamp + 60,
+            address(this)
+        );
+        assertGt(amountOut, 0, "swap should silently execute at cached price");
+
+        // After syncAcceptedPrice, quote unblocks (lastAcceptedPrice catches up).
+        vm.prank(DEPLOYER);
+        pool.syncAcceptedPrice(address(eurc));
+        uint256 q = pool.quote(address(usdc), address(eurc), 10_000_000);
+        assertGt(q, 0, "quote should return a value after sync");
+    }
+
+    /// @notice Scenario C (MATCH): cache has tracked the oracle in small steps,
+    /// pushing past the lastAcceptedPrice cap; both quote() and swap() revert.
+    /// This is the genuine parity case stated by the spec.
+    function test_quote_and_swap_both_revert_when_cache_drifted_past_cap() public {
+        usdc.mint(ALICE, 1_000_000_000);
+        eurc.mint(ALICE, 10_000_000_000);
+        vm.startPrank(ALICE);
+        usdc.approve(address(pool), type(uint256).max);
+        eurc.approve(address(pool), type(uint256).max);
+        pool.deposit(address(usdc), 100_000_000, 0, block.timestamp + 60);
+        pool.deposit(address(eurc), 100_000_000, 0, block.timestamp + 60);
+        vm.stopPrank();
+
+        // After seeding: lastAcceptedPrice[eurc] = $1.10, cache = $1.10.
+        //
+        // Walk the cache up in TWO steps, each within the 150 bps cache-deviation
+        // cap, but each step also advancing lastAcceptedPrice via a swap. Then
+        // freeze lastAcceptedPrice (by stopping swaps on EURC) while letting the
+        // cache walk further. Concretely:
+        //
+        // Step a: oracle $1.10 -> $1.112 (109 bps from cache, accepted). Swap to
+        //         advance both cache and lastAcceptedPrice.
+        // Step b: oracle $1.112 -> $1.124 (108 bps from cache, accepted). Same.
+        //         Now cache = lastAcceptedPrice = $1.124.
+        // Step c: oracle $1.124 -> $1.136 (107 bps from cache, accepted by cache
+        //         guard). But this time DON'T do a swap, so lastAcceptedPrice
+        //         stays at $1.124 while cache moves to $1.136.
+        //
+        // The trick: in Task 2's design, `lastValidPrice` only updates inside
+        // `_readUsdPrice1e18Mut` (called by deposit/withdraw/swap), so to "walk
+        // the cache without updating lastAcceptedPrice" we trigger any mutating
+        // call that calls `_totalReservesUSDMut` but NOT `_readAndGuardPrice` on
+        // EURC specifically. A USDC swap touches USDC's lastAcceptedPrice but
+        // calls _totalReservesUSDMut for NAV, which updates all caches.
+        //
+        // After step c, cache = $1.136 vs lastAcceptedPrice $1.124 = 109 bps
+        // (within 150 bps cap, so guard doesn't fire yet).
+        //
+        // Step d: oracle $1.136 -> $1.148 (106 bps from cache). Another NAV
+        //         iteration via deposit/withdraw will move cache to $1.148.
+        //         Cache vs lastAcceptedPrice: $1.148 vs $1.124 = 213 bps > 150
+        //         bps. Now both quote and swap revert.
+
+        // Step a: oracle bump + USDC->EURC swap to advance EURC's lastAcceptedPrice
+        vm.prank(DEPLOYER);
+        fEurc.setAnswer(111_200_000); // $1.112
+
+        vm.startPrank(ALICE);
+        pool.swap(address(usdc), address(eurc), 1_000_000, 0, block.timestamp + 60, ALICE);
+        vm.stopPrank();
+        // Now lastAcceptedPrice[eurc] = cache[eurc] = $1.112
+
+        // Step b: oracle bump + another swap
+        vm.prank(DEPLOYER);
+        fEurc.setAnswer(112_400_000); // $1.124
+        vm.startPrank(ALICE);
+        pool.swap(address(usdc), address(eurc), 1_000_000, 0, block.timestamp + 60, ALICE);
+        vm.stopPrank();
+        // Now lastAcceptedPrice[eurc] = cache[eurc] = $1.124
+
+        // Step c: oracle bump, then deposit USDC (touches NAV iteration -> updates
+        // cache[eurc] WITHOUT calling _readAndGuardPrice on EURC, so EURC's
+        // lastAcceptedPrice is NOT updated).
+        vm.prank(DEPLOYER);
+        fEurc.setAnswer(113_600_000); // $1.136
+
+        vm.startPrank(ALICE);
+        pool.deposit(address(usdc), 1_000_000, 0, block.timestamp + 60);
+        vm.stopPrank();
+        // Now cache[eurc] = $1.136, lastAcceptedPrice[eurc] = $1.124 (gap = 108 bps)
+
+        // Step d: another oracle bump + NAV iteration via deposit
+        vm.prank(DEPLOYER);
+        fEurc.setAnswer(114_800_000); // $1.148
+
+        vm.startPrank(ALICE);
+        pool.deposit(address(usdc), 1_000_000, 0, block.timestamp + 60);
+        vm.stopPrank();
+        // Now cache[eurc] = $1.148, lastAcceptedPrice[eurc] = $1.124 (gap = 213 bps > 150)
+
+        // Now: cache has drifted past the ratchet cap relative to lastAccepted.
+        // Both quote() and swap() should revert with PriceDeviation.
+
+        // quote: WithGuard's fresh-branch (raw $1.148 vs lastAccepted $1.124 = 213 bps) reverts.
+        vm.expectRevert();
+        pool.quote(address(usdc), address(eurc), 10_000_000);
+
+        // swap: _readAndGuardPrice uses cache ($1.148) and checks vs lastAccepted ($1.124),
+        // diff 213 bps > 150 bps cap, reverts PriceDeviation.
+        usdc.mint(address(this), 10_000_000);
+        usdc.approve(address(pool), 10_000_000);
+        vm.expectRevert();
+        pool.swap(
+            address(usdc),
+            address(eurc),
+            10_000_000,
+            0,
+            block.timestamp + 60,
+            address(this)
+        );
+    }
+
     /// @notice Verifies that virtual shares defeat the round-down-dust dilution
     /// vector even at the worst-case NAV/supply ratio.
     ///

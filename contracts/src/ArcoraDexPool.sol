@@ -172,6 +172,64 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         if (price1e18 == 0) revert NoValidPrice(token);
     }
 
+    /// @dev View-only deviation guard for `quote*()` callers. Reverts when the
+    /// current oracle state (or fallback cache) deviates from `lastAcceptedPrice`
+    /// by more than `maxOracleDeviationBps`. Does NOT mutate state.
+    ///
+    /// Behavior is intentionally STRICTER than `swap()` in one scenario:
+    ///
+    /// - Fresh oracle, raw price within cache-deviation cap of lastAcceptedPrice:
+    ///   quote returns the price, swap executes at the same price. (MATCH)
+    /// - Fresh oracle, raw price beyond cache-deviation cap from the cache (but
+    ///   the cache itself is near lastAcceptedPrice): swap() SILENTLY executes
+    ///   at the cached price (Task 2's cache-deviation guard shields the pool
+    ///   from oracle whipsaws). quote() REVERTS PriceDeviation here, alerting
+    ///   integrators that live oracle has diverged significantly from the
+    ///   tradable cache price. This is a deliberate over-revert: integrators
+    ///   using quote() as a preflight see an early warning that the executed
+    ///   price would be stale. (STRICTER)
+    /// - Fresh oracle, raw price beyond cap of lastAcceptedPrice AND the cache
+    ///   has tracked the oracle past the cap: both quote() and swap() revert.
+    ///   (MATCH)
+    /// - Stale oracle, cache near lastAcceptedPrice: both succeed at cache.
+    ///   (MATCH)
+    /// - Stale oracle, cache drifted from lastAcceptedPrice: both revert.
+    ///   (MATCH)
+    ///
+    /// Implementation reads the raw oracle first (via `_readOracle`) to detect
+    /// fresh-but-cache-rejected jumps; then falls back to `_readUsdPrice1e18View`
+    /// for the canonical return value when no revert fires.
+    function _readUsdPrice1e18WithGuard(address token)
+        internal view returns (uint256 price1e18, uint8 tokenDecimals)
+    {
+        IArcoraDexRegistry.TokenInfo memory info = REGISTRY.tokenInfo(token);
+        uint256 prev = lastAcceptedPrice[token];
+
+        // Fetch raw oracle first to detect ratchet violations on fresh readings.
+        uint256 rawPrice1e18;
+        bool isFresh;
+        (rawPrice1e18, tokenDecimals, isFresh) = _readOracle(token);
+
+        if (isFresh && prev != 0) {
+            uint256 diff = rawPrice1e18 > prev ? rawPrice1e18 - prev : prev - rawPrice1e18;
+            if (diff * BPS > prev * uint256(info.maxOracleDeviationBps)) {
+                revert PriceDeviation(token, rawPrice1e18, prev, info.maxOracleDeviationBps);
+            }
+        }
+
+        // Resolve the canonical (cache-guarded) price for the actual return value.
+        (price1e18, tokenDecimals) = _readUsdPrice1e18View(token);
+
+        // Also check the cache-guarded price against lastAcceptedPrice in case the
+        // oracle is stale (isFresh=false) and the cache itself has drifted.
+        if (!isFresh && prev != 0) {
+            uint256 diff = price1e18 > prev ? price1e18 - prev : prev - price1e18;
+            if (diff * BPS > prev * uint256(info.maxOracleDeviationBps)) {
+                revert PriceDeviation(token, price1e18, prev, info.maxOracleDeviationBps);
+            }
+        }
+    }
+
     /// @dev Stateful: reads oracle, runs PriceGuard against last accepted, updates last accepted.
     function _readAndGuardPrice(address token)
         internal
@@ -350,8 +408,8 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
     {
         if (tokenIn == tokenOut) revert SameToken(tokenIn);
         if (amountIn == 0)       revert ZeroAmount();
-        (uint256 pIn,  uint8 dIn ) = _readUsdPrice1e18View(tokenIn);
-        (uint256 pOut, uint8 dOut) = _readUsdPrice1e18View(tokenOut);
+        (uint256 pIn,  uint8 dIn ) = _readUsdPrice1e18WithGuard(tokenIn);
+        (uint256 pOut, uint8 dOut) = _readUsdPrice1e18WithGuard(tokenOut);
         uint256 gross = _grossOut(amountIn, pIn, pOut, dIn, dOut);
         amountOut     = gross - (gross * swapFeeBps) / BPS;
     }
@@ -360,7 +418,7 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         external view override returns (uint256 lpOut)
     {
         if (amount == 0) revert ZeroAmount();
-        (uint256 pIn, uint8 dIn) = _readUsdPrice1e18View(token);
+        (uint256 pIn, uint8 dIn) = _readUsdPrice1e18WithGuard(token);
         uint256 usdIn  = (amount * pIn) / (10 ** dIn);
         uint256 supply = LP.totalSupply();
         if (supply == 0) {
@@ -376,7 +434,7 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         external view override returns (uint256 amountOut, uint256 protocolFee)
     {
         if (lpAmount == 0) revert ZeroAmount();
-        (uint256 pOut, uint8 dOut) = _readUsdPrice1e18View(tokenOut);
+        (uint256 pOut, uint8 dOut) = _readUsdPrice1e18WithGuard(tokenOut);
         {
             uint256 supply      = LP.totalSupply();
             uint256 navBefore   = totalReservesUSD();
