@@ -22,9 +22,25 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
     uint16  public  constant MAX_SWAP_FEE_BPS              = 100;
     uint16  public  constant MAX_PROTOCOL_FEE_SHARE_BPS    = 2500;
     uint256 public  constant MINIMUM_LIQUIDITY             = 1000;
-    uint256 public  constant MAX_STALE_SECONDS             = 1 hours;
     uint256 internal constant BPS                          = 10_000;
     address public  constant DEAD_ADDRESS                  = address(0xdead);
+
+    /// @dev ERC4626-style virtual offset on LP math. Two purposes:
+    /// (1) Eliminates round-down-to-zero on tiny follow-up deposits: lpMinted
+    ///     for any non-zero usdIn is guaranteed >= 1 regardless of supply/NAV ratio.
+    /// (2) Defense-in-depth in case a future feature introduces a balanceOf-derived
+    ///     NAV path.
+    /// Note: the classic Uniswap-V2 donation-inflation attack is already
+    /// structurally blocked by ArcoraDexPool's explicit `reserves[]` accounting
+    /// (donations land in token balance but not in `reserves[]`, so NAV is
+    /// unchanged). This offset is belt + suspenders.
+    uint256 internal constant VIRTUAL_SHARES = 1e6;
+    uint256 internal constant VIRTUAL_ASSETS = 1;
+
+    /// @dev LP token min-hold period to defeat JIT/MEV sandwich attacks
+    /// that try to capture oracle-update NAV deltas via atomic deposit-then-withdraw.
+    /// Keeper cadence is 30 min; 1 hour guarantees at least one oracle cycle elapsed.
+    uint256 public constant MIN_HOLD_SECONDS = 1 hours;
 
     // ── Immutables ───────────────────────────────────────────────────
     IArcoraDexRegistry public immutable override REGISTRY;
@@ -34,6 +50,9 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
     mapping(address token => uint256) public override reserves;
     mapping(address token => uint256) public override protocolFeesAccrued;
     mapping(address token => uint256) public override lastAcceptedPrice;
+    mapping(address token => uint256) public override lastValidPrice;     // 1e18-scaled USD price (cache)
+    mapping(address token => uint256) public override lastValidPriceAt;   // block.timestamp of cache write
+    mapping(address account => uint256) public override lastMintAt;
     uint16 public override swapFeeBps;
     uint16 public override protocolFeeShareBps;
     bool   public override paused;
@@ -62,31 +81,153 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         _;
     }
 
-    // ── Pricing helpers (PriceGuard added in T11) ────────────────────
-    /// @dev Reads the oracle once and returns 1e18-scaled USD price.
-    /// PriceGuard / staleness logic ships in T11 (replaces this helper).
-    function _readUsdPrice1e18(address token)
-        internal
-        view
-        returns (uint256 price1e18, uint8 tokenDecimals)
+    // ── Pricing helpers ──────────────────────────────────────────────
+    /// @dev Shared internal reader. Returns (price1e18, decimals, isFresh).
+    ///      Does NOT mutate state. Callers decide what to do when not fresh.
+    ///      All oracle failure modes (bad round, bad timestamp, negative answer,
+    ///      staleness) fold into isFresh=false so callers can use the cache
+    ///      rather than reverting — preserving pool availability (spec §3.4).
+    function _readOracle(address token)
+        internal view
+        returns (uint256 price1e18, uint8 tokenDecimals, bool isFresh)
     {
         IArcoraDexRegistry.TokenInfo memory info = REGISTRY.tokenInfo(token);
         if (!info.isActive) revert TokenNotActive(token);
         tokenDecimals = info.decimals;
+
         (uint80 roundId, int256 answer, , uint256 updatedAt, uint80 answeredInRound) =
             info.usdOracle.latestRoundData();
-        if (roundId == 0 || answeredInRound < roundId) {
-            revert InvalidOracleRound(token, roundId, answeredInRound);
+
+        bool roundOk     = (roundId != 0 && answeredInRound >= roundId);
+        bool timestampOk = (updatedAt != 0 && updatedAt <= block.timestamp);
+        bool ageOk       = timestampOk && (block.timestamp - updatedAt) <= info.maxStaleSeconds;
+        bool answerOk    = (answer > 0);
+
+        isFresh = roundOk && timestampOk && ageOk && answerOk;
+        if (isFresh) {
+            uint8 oracleDec = info.usdOracle.decimals();
+            if (oracleDec == 18)      price1e18 = uint256(answer);
+            else if (oracleDec < 18)  price1e18 = uint256(answer) * (10 ** (18 - oracleDec));
+            else                      price1e18 = uint256(answer) / (10 ** (oracleDec - 18));
         }
-        if (answer <= 0) revert PriceDeviation(token, 0, 0, info.maxOracleDeviationBps);
-        if (updatedAt == 0 || updatedAt > block.timestamp) revert InvalidOracleTimestamp(token, updatedAt);
-        if (block.timestamp - updatedAt > MAX_STALE_SECONDS) {
-            revert PriceDeviation(token, uint256(answer), updatedAt, info.maxOracleDeviationBps);
+    }
+
+    /// @dev Stateful wrapper: updates cache on fresh read; falls back to cache on stale.
+    ///      Cache-deviation guard: a fresh oracle reading that diverges too far from
+    ///      the existing cache (by more than maxOracleDeviationBps) is treated as
+    ///      not-fresh and falls back to the cache, preventing a compromised oracle
+    ///      from poisoning the cache within a single block.
+    function _readUsdPrice1e18Mut(address token)
+        internal returns (uint256 price1e18, uint8 tokenDecimals)
+    {
+        bool isFresh;
+        (price1e18, tokenDecimals, isFresh) = _readOracle(token);
+
+        uint256 cached = lastValidPrice[token];
+
+        if (isFresh && cached != 0) {
+            // Cache-deviation guard: a fresh oracle reading that diverges too far
+            // from the previous cache cannot poison the cache. Fall through to
+            // the cached value below.
+            IArcoraDexRegistry.TokenInfo memory info = REGISTRY.tokenInfo(token);
+            uint256 diff = price1e18 > cached ? price1e18 - cached : cached - price1e18;
+            if (diff * BPS > cached * uint256(info.maxOracleDeviationBps)) {
+                isFresh = false;
+            }
         }
-        uint8 oracleDec = info.usdOracle.decimals();
-        if (oracleDec == 18)      price1e18 = uint256(answer);
-        else if (oracleDec < 18)  price1e18 = uint256(answer) * (10 ** (18 - oracleDec));
-        else                      price1e18 = uint256(answer) / (10 ** (oracleDec - 18));
+
+        if (isFresh) {
+            lastValidPrice[token]   = price1e18;
+            lastValidPriceAt[token] = block.timestamp;
+            emit PriceCacheUpdated(token, price1e18, block.timestamp);
+            return (price1e18, tokenDecimals);
+        }
+
+        // Stale or cache-rejected — fall back to cache
+        price1e18 = cached;
+        if (price1e18 == 0) revert NoValidPrice(token);
+    }
+
+    /// @dev View-only equivalent: returns cached fallback price without updating it.
+    ///      Applies the same cache-deviation guard as _readUsdPrice1e18Mut.
+    function _readUsdPrice1e18View(address token)
+        internal view returns (uint256 price1e18, uint8 tokenDecimals)
+    {
+        bool isFresh;
+        (price1e18, tokenDecimals, isFresh) = _readOracle(token);
+
+        uint256 cached = lastValidPrice[token];
+
+        if (isFresh && cached != 0) {
+            IArcoraDexRegistry.TokenInfo memory info = REGISTRY.tokenInfo(token);
+            uint256 diff = price1e18 > cached ? price1e18 - cached : cached - price1e18;
+            if (diff * BPS > cached * uint256(info.maxOracleDeviationBps)) {
+                isFresh = false;
+            }
+        }
+
+        if (isFresh) return (price1e18, tokenDecimals);
+
+        price1e18 = cached;
+        if (price1e18 == 0) revert NoValidPrice(token);
+    }
+
+    /// @dev View-only deviation guard for `quote*()` callers. Reverts when the
+    /// current oracle state (or fallback cache) deviates from `lastAcceptedPrice`
+    /// by more than `maxOracleDeviationBps`. Does NOT mutate state.
+    ///
+    /// Behavior is intentionally STRICTER than `swap()` in one scenario:
+    ///
+    /// - Fresh oracle, raw price within cache-deviation cap of lastAcceptedPrice:
+    ///   quote returns the price, swap executes at the same price. (MATCH)
+    /// - Fresh oracle, raw price beyond cache-deviation cap from the cache (but
+    ///   the cache itself is near lastAcceptedPrice): swap() SILENTLY executes
+    ///   at the cached price (Task 2's cache-deviation guard shields the pool
+    ///   from oracle whipsaws). quote() REVERTS PriceDeviation here, alerting
+    ///   integrators that live oracle has diverged significantly from the
+    ///   tradable cache price. This is a deliberate over-revert: integrators
+    ///   using quote() as a preflight see an early warning that the executed
+    ///   price would be stale. (STRICTER)
+    /// - Fresh oracle, raw price beyond cap of lastAcceptedPrice AND the cache
+    ///   has tracked the oracle past the cap: both quote() and swap() revert.
+    ///   (MATCH)
+    /// - Stale oracle, cache near lastAcceptedPrice: both succeed at cache.
+    ///   (MATCH)
+    /// - Stale oracle, cache drifted from lastAcceptedPrice: both revert.
+    ///   (MATCH)
+    ///
+    /// Implementation reads the raw oracle first (via `_readOracle`) to detect
+    /// fresh-but-cache-rejected jumps; then falls back to `_readUsdPrice1e18View`
+    /// for the canonical return value when no revert fires.
+    function _readUsdPrice1e18WithGuard(address token)
+        internal view returns (uint256 price1e18, uint8 tokenDecimals)
+    {
+        IArcoraDexRegistry.TokenInfo memory info = REGISTRY.tokenInfo(token);
+        uint256 prev = lastAcceptedPrice[token];
+
+        // Fetch raw oracle first to detect ratchet violations on fresh readings.
+        uint256 rawPrice1e18;
+        bool isFresh;
+        (rawPrice1e18, tokenDecimals, isFresh) = _readOracle(token);
+
+        if (isFresh && prev != 0) {
+            uint256 diff = rawPrice1e18 > prev ? rawPrice1e18 - prev : prev - rawPrice1e18;
+            if (diff * BPS > prev * uint256(info.maxOracleDeviationBps)) {
+                revert PriceDeviation(token, rawPrice1e18, prev, info.maxOracleDeviationBps);
+            }
+        }
+
+        // Resolve the canonical (cache-guarded) price for the actual return value.
+        (price1e18, tokenDecimals) = _readUsdPrice1e18View(token);
+
+        // Also check the cache-guarded price against lastAcceptedPrice in case the
+        // oracle is stale (isFresh=false) and the cache itself has drifted.
+        if (!isFresh && prev != 0) {
+            uint256 diff = price1e18 > prev ? price1e18 - prev : prev - price1e18;
+            if (diff * BPS > prev * uint256(info.maxOracleDeviationBps)) {
+                revert PriceDeviation(token, price1e18, prev, info.maxOracleDeviationBps);
+            }
+        }
     }
 
     /// @dev Stateful: reads oracle, runs PriceGuard against last accepted, updates last accepted.
@@ -96,7 +237,7 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
     {
         IArcoraDexRegistry.TokenInfo memory info = REGISTRY.tokenInfo(token);
         uint16 maxDevBps;
-        (price1e18, tokenDecimals) = _readUsdPrice1e18(token);
+        (price1e18, tokenDecimals) = _readUsdPrice1e18Mut(token);
         maxDevBps = info.maxOracleDeviationBps;
         uint256 prev = lastAcceptedPrice[token];
         if (prev != 0) {
@@ -108,12 +249,24 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         lastAcceptedPrice[token] = price1e18;
     }
 
+    /// @dev Stateful: refreshes cache on every fresh oracle read.
+    function _totalReservesUSDMut() internal returns (uint256 navE18) {
+        uint256 n = REGISTRY.tokensLength();
+        for (uint256 i = 0; i < n; i++) {
+            address t = REGISTRY.tokens(i);
+            if (!REGISTRY.isActive(t)) continue;
+            (uint256 p, uint8 d) = _readUsdPrice1e18Mut(t);
+            navE18 += (reserves[t] * p) / (10 ** d);
+        }
+    }
+
+    /// @dev View shim used by external view functions and external quote*() callers.
     function totalReservesUSD() public view override returns (uint256 navE18) {
         uint256 n = REGISTRY.tokensLength();
         for (uint256 i = 0; i < n; i++) {
             address t = REGISTRY.tokens(i);
             if (!REGISTRY.isActive(t)) continue;
-            (uint256 p, uint8 d) = _readUsdPrice1e18(t);
+            (uint256 p, uint8 d) = _readUsdPrice1e18View(t);
             navE18 += (reserves[t] * p) / (10 ** d);
         }
     }
@@ -133,11 +286,12 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         uint256 navBefore;
         if (supply == 0) {
             if (usdIn <= MINIMUM_LIQUIDITY) revert FirstDepositTooSmall(usdIn, MINIMUM_LIQUIDITY);
-            lpMinted  = usdIn - MINIMUM_LIQUIDITY;
+            // Unified formula: with supply=0 and nav=0, becomes (usdIn * VIRTUAL_SHARES) / VIRTUAL_ASSETS = usdIn * 1e6
+            lpMinted  = (usdIn * (0 + VIRTUAL_SHARES)) / (0 + VIRTUAL_ASSETS);
             navBefore = 0;
         } else {
-            navBefore = totalReservesUSD();
-            lpMinted  = (usdIn * supply) / navBefore;
+            navBefore = _totalReservesUSDMut();
+            lpMinted  = (usdIn * (supply + VIRTUAL_SHARES)) / (navBefore + VIRTUAL_ASSETS);
         }
         if (lpMinted < minLpOut) revert InsufficientLpOut(lpMinted, minLpOut);
 
@@ -148,6 +302,7 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
             LP.mint(DEAD_ADDRESS, MINIMUM_LIQUIDITY);
         }
         LP.mint(msg.sender, lpMinted);
+        lastMintAt[msg.sender] = block.timestamp;
 
         emit Deposited(msg.sender, token, amount, lpMinted, navBefore, navBefore + usdIn);
     }
@@ -159,9 +314,11 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         uint256 deadline
     ) external override whenNotPaused nonReentrant checkDeadline(deadline) returns (uint256 amountOut) {
         if (lpAmount == 0) revert ZeroAmount();
+        uint256 unlockAt = lastMintAt[msg.sender] + MIN_HOLD_SECONDS;
+        if (block.timestamp < unlockAt) revert EarlyWithdraw(unlockAt, block.timestamp);
 
-        uint256 navBefore = totalReservesUSD();
-        uint256 usdRedeemed = (lpAmount * navBefore) / LP.totalSupply();
+        uint256 navBefore = _totalReservesUSDMut();
+        uint256 usdRedeemed = (lpAmount * (navBefore + VIRTUAL_ASSETS)) / (LP.totalSupply() + VIRTUAL_SHARES);
 
         uint256 protFeeAmt;
         uint256 navAfter;
@@ -251,8 +408,8 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
     {
         if (tokenIn == tokenOut) revert SameToken(tokenIn);
         if (amountIn == 0)       revert ZeroAmount();
-        (uint256 pIn,  uint8 dIn ) = _readUsdPrice1e18(tokenIn);
-        (uint256 pOut, uint8 dOut) = _readUsdPrice1e18(tokenOut);
+        (uint256 pIn,  uint8 dIn ) = _readUsdPrice1e18WithGuard(tokenIn);
+        (uint256 pOut, uint8 dOut) = _readUsdPrice1e18WithGuard(tokenOut);
         uint256 gross = _grossOut(amountIn, pIn, pOut, dIn, dOut);
         amountOut     = gross - (gross * swapFeeBps) / BPS;
     }
@@ -261,15 +418,15 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         external view override returns (uint256 lpOut)
     {
         if (amount == 0) revert ZeroAmount();
-        (uint256 pIn, uint8 dIn) = _readUsdPrice1e18(token);
+        (uint256 pIn, uint8 dIn) = _readUsdPrice1e18WithGuard(token);
         uint256 usdIn  = (amount * pIn) / (10 ** dIn);
         uint256 supply = LP.totalSupply();
         if (supply == 0) {
             if (usdIn <= MINIMUM_LIQUIDITY) revert FirstDepositTooSmall(usdIn, MINIMUM_LIQUIDITY);
-            lpOut = usdIn - MINIMUM_LIQUIDITY;
+            lpOut = (usdIn * (0 + VIRTUAL_SHARES)) / (0 + VIRTUAL_ASSETS);
         } else {
             uint256 nav = totalReservesUSD();
-            lpOut = (usdIn * supply) / nav;
+            lpOut = (usdIn * (supply + VIRTUAL_SHARES)) / (nav + VIRTUAL_ASSETS);
         }
     }
 
@@ -277,11 +434,11 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         external view override returns (uint256 amountOut, uint256 protocolFee)
     {
         if (lpAmount == 0) revert ZeroAmount();
-        (uint256 pOut, uint8 dOut) = _readUsdPrice1e18(tokenOut);
+        (uint256 pOut, uint8 dOut) = _readUsdPrice1e18WithGuard(tokenOut);
         {
             uint256 supply      = LP.totalSupply();
             uint256 navBefore   = totalReservesUSD();
-            uint256 usdRedeemed = (lpAmount * navBefore) / supply;
+            uint256 usdRedeemed = (lpAmount * (navBefore + VIRTUAL_ASSETS)) / (supply + VIRTUAL_SHARES);
             uint256 usdNet      = (usdRedeemed * (BPS - swapFeeBps)) / BPS;
             uint256 feeUsd      = usdRedeemed - usdNet;
             uint256 protFeeUsd  = (feeUsd * protocolFeeShareBps) / BPS;
@@ -324,8 +481,37 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         emit Unpaused(msg.sender);
     }
 
+    /// @notice Hook invoked by ArcoraDexLP on every transfer to propagate
+    /// the deposit-side min-hold lock. The recipient inherits the stricter
+    /// of (their existing lock, the sender's lock) — preventing the
+    /// deposit→transfer→withdraw JIT bypass.
+    /// @dev Only the LP contract may call this.
+    function notifyLPTransfer(address from, address to) external override {
+        if (msg.sender != address(LP)) revert NotLP();
+        uint256 fromLock = lastMintAt[from];
+        if (fromLock > lastMintAt[to]) {
+            lastMintAt[to] = fromLock;
+        }
+    }
+
     function syncAcceptedPrice(address token) external override onlyOwner returns (uint256 price1e18) {
-        (price1e18, ) = _readUsdPrice1e18(token);
+        // Owner-only escape hatch: bypasses the cache-deviation guard so the operator
+        // can force-accept an out-of-band price after a large legitimate move and
+        // simultaneously reset both the cache and the lastAcceptedPrice baseline.
+        uint8 tokenDecimals;
+        bool isFresh;
+        (price1e18, tokenDecimals, isFresh) = _readOracle(token);
+        if (!isFresh) {
+            // If the oracle itself is stale, fall back to the existing cache so the
+            // operator still gets a sensible (if old) baseline reset.
+            price1e18 = lastValidPrice[token];
+            if (price1e18 == 0) revert NoValidPrice(token);
+        } else {
+            // Update cache unconditionally (operator-approved override).
+            lastValidPrice[token]   = price1e18;
+            lastValidPriceAt[token] = block.timestamp;
+            emit PriceCacheUpdated(token, price1e18, block.timestamp);
+        }
         uint256 oldPrice = lastAcceptedPrice[token];
         lastAcceptedPrice[token] = price1e18;
         emit AcceptedPriceSynced(token, oldPrice, price1e18);

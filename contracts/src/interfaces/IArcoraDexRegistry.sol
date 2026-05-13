@@ -9,6 +9,7 @@ interface IArcoraDexRegistry {
         bool                 isActive;
         IChainlinkAggregator usdOracle;
         uint16               maxOracleDeviationBps;
+        uint32               maxStaleSeconds;
     }
 
     // ── Errors ────────────────────────────────────────────────────────
@@ -16,20 +17,35 @@ interface IArcoraDexRegistry {
     error InvalidDecimals(uint8 decimals);
     error TokenDecimalMismatch(address token, uint8 declared, uint8 actual);
     error InvalidDeviation(uint16 bps);
+    error InvalidStaleSeconds(uint32 maxStaleSeconds);
     error TokenAlreadyListed(address token);
     error TokenNotListed(address token);
 
     // ── Events ────────────────────────────────────────────────────────
-    event TokenListed     (address indexed token, uint8 decimals, address oracle, uint16 maxDeviationBps);
+    event TokenListed(
+        address indexed token,
+        uint8   decimals,
+        address indexed oracle,
+        uint16  maxOracleDeviationBps,
+        uint32  maxStaleSeconds
+    );
     event OracleUpdated   (address indexed token, address oldOracle, address newOracle);
     event DeviationUpdated(address indexed token, uint16 oldBps, uint16 newBps);
+    event MaxStaleSecondsUpdated(address indexed token, uint32 oldVal, uint32 newVal);
     event TokenDeactivated(address indexed token);
     event TokenReactivated(address indexed token);
 
     // ── Mutators ──────────────────────────────────────────────────────
-    function listToken     (address token, uint8 decimals_, IChainlinkAggregator oracle, uint16 maxDeviationBps) external;
-    function setOracle     (address token, IChainlinkAggregator newOracle) external;
-    function setDeviation  (address token, uint16 maxDeviationBps) external;
+    function listToken(
+        address token,
+        uint8 decimals_,
+        IChainlinkAggregator oracle,
+        uint16 maxDeviationBps,
+        uint32 maxStaleSeconds_
+    ) external;
+    function setOracle         (address token, IChainlinkAggregator newOracle) external;
+    function setDeviation      (address token, uint16 maxDeviationBps) external;
+    function setMaxStaleSeconds(address token, uint32 maxStaleSeconds_) external;
     function deactivateToken(address token) external;
     function reactivateToken(address token) external;
 

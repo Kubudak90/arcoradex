@@ -38,9 +38,9 @@ contract ArcoraDexPoolInvariant is StdInvariant, Test {
         lp   = ArcoraDexLP(address(pool.LP()));
 
         vm.startPrank(owner);
-        reg.listToken(address(usdc), 6,  IChainlinkAggregator(address(fUsdc)),  50);
-        reg.listToken(address(eurc), 6,  IChainlinkAggregator(address(fEurc)), 150);
-        reg.listToken(address(dai), 18,  IChainlinkAggregator(address(fDai)),   50);
+        reg.listToken(address(usdc), 6,  IChainlinkAggregator(address(fUsdc)),  50,  3600);
+        reg.listToken(address(eurc), 6,  IChainlinkAggregator(address(fEurc)), 150, 14400);
+        reg.listToken(address(dai), 18,  IChainlinkAggregator(address(fDai)),   50,  3600);
         vm.stopPrank();
 
         // Pre-mint generous balances to each actor (handler can't mint due to onlyOwner).

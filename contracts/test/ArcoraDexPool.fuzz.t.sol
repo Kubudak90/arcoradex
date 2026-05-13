@@ -31,8 +31,8 @@ contract ArcoraDexPoolFuzz is Test {
         lp   = ArcoraDexLP(address(pool.LP()));
 
         vm.startPrank(owner);
-        reg.listToken(address(usdc), 6, IChainlinkAggregator(address(fUsdc)),  50);
-        reg.listToken(address(eurc), 6, IChainlinkAggregator(address(fEurc)), 150);
+        reg.listToken(address(usdc), 6, IChainlinkAggregator(address(fUsdc)),  50,  3600);
+        reg.listToken(address(eurc), 6, IChainlinkAggregator(address(fEurc)), 150, 14400);
 
         usdc.mint(alice, 1_000_000e6);
         usdc.mint(bob,   1_000_000e6);
@@ -40,13 +40,15 @@ contract ArcoraDexPoolFuzz is Test {
         vm.stopPrank();
     }
 
-    /// Deposit then immediate single-token withdraw of the same token loses at most ~swapFeeBps + tiny rounding.
+    /// Deposit then single-token withdraw of the same token loses at most ~swapFeeBps + tiny rounding.
     function testFuzz_deposit_then_withdraw_preserves_value(uint96 amountIn) public {
         amountIn = uint96(bound(amountIn, 10_000e6, 100_000e6));   // 10k–100k USDC
 
         vm.startPrank(alice);
         usdc.approve(address(pool), amountIn);
         uint256 lpMinted = pool.deposit(address(usdc), amountIn, 0, block.timestamp);
+        // Bypass MIN_HOLD_SECONDS (Task 4: 1-hour LP min-hold)
+        vm.warp(block.timestamp + 1 hours);
         uint256 amountOut = pool.withdraw(address(usdc), lpMinted, 0, block.timestamp);
         vm.stopPrank();
 

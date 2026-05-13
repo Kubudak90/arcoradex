@@ -40,9 +40,9 @@ contract ArcoraDexPoolTest is Test {
         lp   = ArcoraDexLP(address(pool.LP()));
 
         vm.startPrank(owner);
-        reg.listToken(address(usdc), 6,  IChainlinkAggregator(address(fUsdc)),  50);
-        reg.listToken(address(eurc), 6,  IChainlinkAggregator(address(fEurc)), 150);
-        reg.listToken(address(dai),  18, IChainlinkAggregator(address(fDai)),   50);
+        reg.listToken(address(usdc), 6,  IChainlinkAggregator(address(fUsdc)),  50,  3600);
+        reg.listToken(address(eurc), 6,  IChainlinkAggregator(address(fEurc)), 150, 14400);
+        reg.listToken(address(dai),  18, IChainlinkAggregator(address(fDai)),   50,  3600);
         vm.stopPrank();
 
         // Mint to alice/bob via owner (MintableERC20 mint may be owner-only — check).
@@ -77,18 +77,19 @@ contract ArcoraDexPoolTest is Test {
 
     // ── deposit (first deposit + subsequent) ─────────────────────────
     function test_deposit_first_burns_minimum_liquidity_and_mints_residual() public {
-        // Alice deposits 1000 USDC at $1.00 → usdValue = 1000 * 1e18.
+        // Alice deposits 1000 USDC at $1.00 → usdValue = 1000e18.
+        // With virtual shares: lpMinted = usdIn * VIRTUAL_SHARES / VIRTUAL_ASSETS = 1000e18 * 1e6 / 1 = 1000e24.
         uint256 amount = 1000e6;
         vm.startPrank(alice);
         usdc.approve(address(pool), amount);
         uint256 lpMinted = pool.deposit(address(usdc), amount, 0, block.timestamp);
         vm.stopPrank();
 
-        // Expected: usdValue 1000e18; user gets 1000e18 - 1000.
-        assertEq(lpMinted, 1000e18 - 1000);
-        assertEq(lp.balanceOf(alice), 1000e18 - 1000);
+        // Expected: usdValue 1000e18; lpMinted = 1000e18 * 1e6 = 1000e24.
+        assertEq(lpMinted, 1000e24);
+        assertEq(lp.balanceOf(alice), 1000e24);
         assertEq(lp.balanceOf(address(0xdead)), 1000);
-        assertEq(lp.totalSupply(), 1000e18);
+        assertEq(lp.totalSupply(), 1000e24 + 1000);
         assertEq(pool.reserves(address(usdc)), amount);
     }
 
@@ -113,22 +114,23 @@ contract ArcoraDexPoolTest is Test {
         uint256 supplyAfter1 = lp.totalSupply();
         uint256 navAfter1    = pool.totalReservesUSD();
 
-        // Bob deposits 500 USDC. lpMinted = 500e18 * supply / nav.
+        // Bob deposits 500 USDC. lpMinted = 500e18 * (supply + VIRTUAL_SHARES) / (nav + VIRTUAL_ASSETS).
+        // VIRTUAL_SHARES = 1e6, VIRTUAL_ASSETS = 1.
         vm.startPrank(bob);
         usdc.approve(address(pool), 500e6);
         uint256 lpMintedBob = pool.deposit(address(usdc), 500e6, 0, block.timestamp);
         vm.stopPrank();
 
-        assertEq(lpMintedBob, (500e18 * supplyAfter1) / navAfter1);
+        assertEq(lpMintedBob, (500e18 * (supplyAfter1 + 1e6)) / (navAfter1 + 1));
         assertEq(lp.balanceOf(bob), lpMintedBob);
     }
 
     function test_deposit_revertsSlippage() public {
         vm.startPrank(alice);
         usdc.approve(address(pool), 1000e6);
-        // First deposit yields 1000e18 - 1000; require minLpOut = 1000e18 (impossible).
-        vm.expectRevert(abi.encodeWithSelector(IArcoraDexPool.InsufficientLpOut.selector, uint256(1000e18 - 1000), uint256(1000e18)));
-        pool.deposit(address(usdc), 1000e6, 1000e18, block.timestamp);
+        // First deposit yields 1000e24 (virtual shares); require minLpOut = 1000e24 + 1 (impossible).
+        vm.expectRevert(abi.encodeWithSelector(IArcoraDexPool.InsufficientLpOut.selector, uint256(1000e24), uint256(1000e24 + 1)));
+        pool.deposit(address(usdc), 1000e6, 1000e24 + 1, block.timestamp);
         vm.stopPrank();
     }
 
@@ -167,6 +169,12 @@ contract ArcoraDexPoolTest is Test {
         usdc.approve(address(pool), 2000e6);
         pool.deposit(address(usdc), 2000e6, 0, block.timestamp);
         uint256 aliceLp = lp.balanceOf(alice);
+
+        // Bypass MIN_HOLD_SECONDS (Task 4: 1-hour LP min-hold).
+        // Warp exactly 1 hour so the hold expires without pushing past the
+        // USDC oracle's maxStaleSeconds (also 3600 s). The check in withdraw()
+        // is strict-less-than, so block.timestamp == unlockAt is allowed.
+        vm.warp(block.timestamp + 1 hours);
 
         // Withdraw half as USDC.
         uint256 lpToBurn = aliceLp / 2;
@@ -255,8 +263,9 @@ contract ArcoraDexPoolTest is Test {
     }
 
     function test_quoteDeposit_first_deduct_minimum_liquidity() public view {
+        // With virtual shares: lpOut = usdIn * VIRTUAL_SHARES / VIRTUAL_ASSETS = 1000e18 * 1e6 = 1000e24.
         uint256 lpOut = pool.quoteDeposit(address(usdc), 1000e6);
-        assertEq(lpOut, 1000e18 - 1000);
+        assertEq(lpOut, 1000e24);
     }
 
     function test_quoteDeposit_proportional_after_seed() public {
@@ -266,7 +275,9 @@ contract ArcoraDexPoolTest is Test {
         vm.stopPrank();
 
         uint256 lpOut = pool.quoteDeposit(address(usdc), 500e6);
-        uint256 expected = (500e18 * lp.totalSupply()) / pool.totalReservesUSD();
+        // With virtual shares: lpOut = usdIn * (supply + VIRTUAL_SHARES) / (nav + VIRTUAL_ASSETS).
+        // VIRTUAL_SHARES = 1e6, VIRTUAL_ASSETS = 1.
+        uint256 expected = (500e18 * (lp.totalSupply() + 1e6)) / (pool.totalReservesUSD() + 1);
         assertEq(lpOut, expected);
     }
 
@@ -413,9 +424,15 @@ contract ArcoraDexPoolTest is Test {
     }
 
     // ── PriceGuard ──────────────────────────────────────────────────
-    function test_priceGuard_revertsOnExcessiveDeviation() public {
+    function test_priceGuard_excessiveDeviationRejectedByCache() public {
         // EURC deviation cap = 150 bps. Push price by 200 bps after first accepted.
-        _seedAllThree();   // first reads accept current oracle prices.
+        // With the cache-deviation guard, excessive oracle moves are now rejected at the
+        // cache level: the swap proceeds using the old cached price and the cache is NOT
+        // updated — rather than reverting, the pool stays available.
+        _seedAllThree();   // first reads accept current oracle prices; cache = $1.10.
+
+        uint256 cachedEurcBefore   = pool.lastValidPrice(address(eurc));
+        uint256 cachedEurcAtBefore = pool.lastValidPriceAt(address(eurc));
 
         // Move EURC oracle by +2% (200 bps over 110_000_000 → 112_200_000) — exceeds 150 bps cap.
         // Initial fEurc was 11e7 = 110_000_000 (8 dec, $1.10).
@@ -425,9 +442,14 @@ contract ArcoraDexPoolTest is Test {
         usdc.mint(bob, 100e6);
         vm.startPrank(bob);
         usdc.approve(address(pool), 100e6);
-        vm.expectRevert();   // PriceDeviation
-        pool.swap(address(usdc), address(eurc), 100e6, 0, block.timestamp, bob);
+        // Swap proceeds using cached (guard-rejected oracle) price — no revert.
+        uint256 amountOut = pool.swap(address(usdc), address(eurc), 100e6, 0, block.timestamp, bob);
         vm.stopPrank();
+
+        assertGt(amountOut, 0, "swap should proceed using cached price");
+        // Cache must remain unchanged — the excessive oracle value was rejected.
+        assertEq(pool.lastValidPrice(address(eurc)),   cachedEurcBefore,   "cache value must not update on excessive deviation");
+        assertEq(pool.lastValidPriceAt(address(eurc)), cachedEurcAtBefore, "cache timestamp must not update on excessive deviation");
     }
 
     function test_priceGuard_acceptsWithinCap() public {
@@ -443,18 +465,27 @@ contract ArcoraDexPoolTest is Test {
         vm.stopPrank();
     }
 
-    function test_priceGuard_staleOracle_reverts() public {
+    function test_priceGuard_staleOracle_usesCache() public {
         _seedAllThree();
-        // Advance time past MAX_STALE_SECONDS without updating feed timestamp.
+        // Advance time past USDC maxStaleSeconds (3600s) without updating feed timestamp.
+        // New behavior: stale feed falls back to cached price (no revert) because cache is seeded.
         vm.warp(block.timestamp + 1 hours + 1);
+
+        // Capture cache state BEFORE the swap — the stale fallback should not update it.
+        uint256 cachedUsdcBefore   = pool.lastValidPrice(address(usdc));
+        uint256 cachedUsdcAtBefore = pool.lastValidPriceAt(address(usdc));
 
         vm.prank(owner);
         usdc.mint(bob, 100e6);
         vm.startPrank(bob);
         usdc.approve(address(pool), 100e6);
-        vm.expectRevert();   // PriceDeviation (used as stale proxy in current code)
-        pool.swap(address(usdc), address(eurc), 100e6, 0, block.timestamp, bob);
+        // Should succeed using cached USDC price (not revert).
+        uint256 amountOut = pool.swap(address(usdc), address(eurc), 100e6, 0, block.timestamp, bob);
         vm.stopPrank();
+
+        assertEq(pool.lastValidPrice(address(usdc)),   cachedUsdcBefore,   "stale fallback should not update cache value");
+        assertEq(pool.lastValidPriceAt(address(usdc)), cachedUsdcAtBefore, "stale fallback should not update cache timestamp");
+        assertGt(amountOut, 0);
     }
 
     function test_syncAcceptedPrice_resetsBaseline() public {
