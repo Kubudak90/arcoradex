@@ -24,23 +24,11 @@ library SafeSigHelpers {
         address payable refundReceiver;
     }
 
-    /// @notice Sign + pack signatures from `signerKeys` (sorted by signer address ASC)
-    /// and call `safe.execTransaction(...)`.
-    /// @param safe         The Safe contract to execute against.
-    /// @param p            Transaction parameters.
-    /// @param signerKeys   Private keys of the signers (must be >= threshold).
-    function signAndExec(Safe safe, SafeTxParams memory p, uint256[] memory signerKeys)
+    /// @dev Build sorted, packed signature blob from signerKeys for a given safeTxHash.
+    function _buildPackedSigs(bytes32 safeTxHash, uint256[] memory signerKeys)
         internal
-        returns (bool success)
+        returns (bytes memory packed)
     {
-        uint256 nonce = safe.nonce();
-        bytes32 safeTxHash = safe.getTransactionHash(
-            p.to, p.value, p.data, p.operation,
-            p.safeTxGas, p.baseGas, p.gasPrice, p.gasToken, p.refundReceiver,
-            nonce
-        );
-
-        // Derive addresses + signatures
         uint256 n = signerKeys.length;
         address[] memory signers = new address[](n);
         bytes[]   memory sigs    = new bytes[](n);
@@ -58,10 +46,27 @@ library SafeSigHelpers {
             }
         }
 
-        bytes memory packed;
         for (uint256 i = 0; i < n; i++) {
             packed = bytes.concat(packed, sigs[i]);
         }
+    }
+
+    /// @notice Sign + pack signatures from `signerKeys` (sorted by signer address ASC)
+    /// and call `safe.execTransaction(...)`.
+    /// @param safe         The Safe contract to execute against.
+    /// @param p            Transaction parameters.
+    /// @param signerKeys   Private keys of the signers (must be >= threshold).
+    function signAndExec(Safe safe, SafeTxParams memory p, uint256[] memory signerKeys)
+        internal
+        returns (bool success)
+    {
+        bytes32 safeTxHash = safe.getTransactionHash(
+            p.to, p.value, p.data, p.operation,
+            p.safeTxGas, p.baseGas, p.gasPrice, p.gasToken, p.refundReceiver,
+            safe.nonce()
+        );
+
+        bytes memory packed = _buildPackedSigs(safeTxHash, signerKeys);
 
         success = safe.execTransaction(
             p.to, p.value, p.data, p.operation,
