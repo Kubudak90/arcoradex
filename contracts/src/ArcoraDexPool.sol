@@ -56,6 +56,7 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
     uint16 public override swapFeeBps;
     uint16 public override protocolFeeShareBps;
     bool   public override paused;
+    address public override pauseGuardian;
 
     constructor(
         address registry,
@@ -74,6 +75,10 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
 
     modifier whenNotPaused() {
         if (paused) revert PoolPaused();
+        _;
+    }
+    modifier onlyOwnerOrGuardian() {
+        if (msg.sender != owner() && msg.sender != pauseGuardian) revert NotAuthorized();
         _;
     }
     modifier checkDeadline(uint256 deadline) {
@@ -471,12 +476,12 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         emit ProtocolFeesWithdrawn(token, amount, to);
     }
 
-    function pause() external override onlyOwner {
+    function pause() external override onlyOwnerOrGuardian {
         paused = true;
         emit Paused(msg.sender);
     }
 
-    function unpause() external override onlyOwner {
+    function unpause() external override onlyOwnerOrGuardian {
         paused = false;
         emit Unpaused(msg.sender);
     }
@@ -492,6 +497,12 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         if (fromLock > lastMintAt[to]) {
             lastMintAt[to] = fromLock;
         }
+    }
+
+    function setPauseGuardian(address newGuardian) external override onlyOwner {
+        if (newGuardian == address(0)) revert ZeroAddress();
+        emit PauseGuardianUpdated(pauseGuardian, newGuardian);
+        pauseGuardian = newGuardian;
     }
 
     function syncAcceptedPrice(address token) external override onlyOwner returns (uint256 price1e18) {

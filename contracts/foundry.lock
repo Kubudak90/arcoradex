@@ -1,0 +1,8 @@
+{
+  "lib/safe-contracts": {
+    "tag": {
+      "name": "v1.4.1",
+      "rev": "bf943f80fec5ac647159d26161446ac5d716a294"
+    }
+  }
+}

@@ -1,3 +1,4 @@
 forge-std/=lib/forge-std/src/
 @openzeppelin/=lib/openzeppelin-contracts/
 @chainlink/=lib/chainlink-brownie-contracts/contracts/
+@safe-global/safe-contracts/=lib/safe-contracts/
