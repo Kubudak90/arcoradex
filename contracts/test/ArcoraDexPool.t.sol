@@ -526,4 +526,43 @@ contract ArcoraDexPoolTest is Test {
         pool.setSwapFeeBps(100);
         assertEq(pool.swapFeeBps(), 100);
     }
+
+    // ── pauseGuardian role (Phase 2) ──
+    function test_setPauseGuardian_byOwner_emitsAndStores() public {
+        address guardian = address(0xC0DE);
+        vm.expectEmit(true, true, false, true);
+        emit IArcoraDexPool.PauseGuardianUpdated(address(0), guardian);
+        vm.prank(owner);
+        pool.setPauseGuardian(guardian);
+        assertEq(pool.pauseGuardian(), guardian);
+    }
+
+    function test_setPauseGuardian_byNonOwner_reverts() public {
+        address attacker = address(0xBAD);
+        vm.prank(attacker);
+        vm.expectRevert();
+        pool.setPauseGuardian(address(0xC0DE));
+    }
+
+    function test_pause_byGuardian_succeeds_byThirdParty_reverts() public {
+        address guardian = address(0xC0DE);
+        address attacker = address(0xBAD);
+        vm.prank(owner);
+        pool.setPauseGuardian(guardian);
+
+        // Guardian can pause
+        vm.prank(guardian);
+        pool.pause();
+        assertEq(pool.paused(), true);
+
+        // Guardian can unpause
+        vm.prank(guardian);
+        pool.unpause();
+        assertEq(pool.paused(), false);
+
+        // Random third party cannot
+        vm.prank(attacker);
+        vm.expectRevert(abi.encodeWithSelector(IArcoraDexPool.NotAuthorized.selector));
+        pool.pause();
+    }
 }
