@@ -105,9 +105,16 @@ contract DeployGovernanceP2 is Script {
             pgAddrs[i] = vm.addr(pgKeys[i]);
         }
 
-        // 1. Fund signers
-        for (uint256 i = 0; i < 5; i++) payable(govAddrs[i]).transfer(SIGNER_FUND_AMT);
-        for (uint256 i = 0; i < 3; i++) payable(pgAddrs[i]).transfer(SIGNER_FUND_AMT);
+        // 1. Fund signers — use .call to forward all gas (Arc testnet has code at
+        // these well-known mnemonic-derived addresses, so .transfer's 2300 stipend OOMs).
+        for (uint256 i = 0; i < 5; i++) {
+            (bool ok,) = payable(govAddrs[i]).call{value: SIGNER_FUND_AMT}("");
+            require(ok, "fund gov signer failed");
+        }
+        for (uint256 i = 0; i < 3; i++) {
+            (bool ok,) = payable(pgAddrs[i]).call{value: SIGNER_FUND_AMT}("");
+            require(ok, "fund pg signer failed");
+        }
         console2.log("Funded 8 signers (0.1 ARC each)");
 
         // 2. Deploy Safe singleton + factory
