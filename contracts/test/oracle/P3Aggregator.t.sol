@@ -2,10 +2,16 @@
 pragma solidity ^0.8.26;
 
 import { Test } from "forge-std/Test.sol";
+import { TimelockController } from "@openzeppelin/contracts/governance/TimelockController.sol";
+import { Safe } from "@safe-global/safe-contracts/contracts/Safe.sol";
+import { SafeProxyFactory } from "@safe-global/safe-contracts/contracts/proxies/SafeProxyFactory.sol";
 import { IChainlinkAggregator } from "../../src/interfaces/IChainlinkAggregator.sol";
 import { MockChainlinkFeedV2 } from "../../src/testnet/MockChainlinkFeedV2.sol";
 import { OracleAggregator } from "../../src/oracle/OracleAggregator.sol";
 import { RevertingMockFeed } from "./RevertingMockFeed.sol";
+import { ArcoraDexRegistry } from "../../src/ArcoraDexRegistry.sol";
+import { MockERC20 } from "../helpers/MockERC20.sol";
+import { SafeSigHelpers } from "../governance/SafeSigHelpers.sol";
 
 contract P3AggregatorTest is Test {
     address constant OWNER = address(0x0a);
@@ -182,5 +188,139 @@ contract P3AggregatorTest is Test {
         (bool p2Ok, bool s2Ok) = agg2.sourceHealth();
         assertTrue(p2Ok, "primary should be healthy");
         assertTrue(s2Ok, "secondary should be healthy");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// P3AggregatorGovernanceTest
+//
+// End-to-end governance integration test: proves the P3 OracleAggregator
+// migration via the P2 governance stack (Safe 3/5 + TimelockController 48h).
+//
+// Sequence: schedule → cannot-execute-before-delay → warp 48h → execute →
+//           verify Registry.tokenInfo(usdc).usdOracle == aggregator address.
+// ─────────────────────────────────────────────────────────────────────────────
+contract P3AggregatorGovernanceTest is Test {
+    using SafeSigHelpers for Safe;
+
+    // Standard Foundry/Hardhat test mnemonic — deterministic throwaway keys.
+    string constant MNEMONIC =
+        "test test test test test test test test test test test junk";
+    uint256 constant TIMELOCK_DELAY = 48 hours;
+
+    address constant DEPLOYER = address(0xD3);
+
+    Safe                governanceSafe;
+    TimelockController  timelock;
+    ArcoraDexRegistry   reg;
+    MockChainlinkFeedV2 primary;
+    MockChainlinkFeedV2 secondary;
+    OracleAggregator    aggregator;
+
+    uint256[5] govKeys;
+    MockERC20  usdc;
+
+    function setUp() public {
+        // Advance past timestamp=1 (OZ TimelockController uses DONE_TIMESTAMP=1;
+        // delay=0 at timestamp=1 would set _timestamps[id]=1 which looks Done).
+        vm.warp(1_000_000);
+
+        // Derive 5 governance signer keys/addresses from standard test mnemonic.
+        address[] memory govOwners = new address[](5);
+        for (uint256 i = 0; i < 5; i++) {
+            govKeys[i] = vm.deriveKey(MNEMONIC, uint32(i));
+            govOwners[i] = vm.addr(govKeys[i]);
+        }
+
+        // Deploy Safe singleton + factory, then create a 3/5 governance Safe.
+        Safe safeSingleton = new Safe();
+        SafeProxyFactory factory = new SafeProxyFactory();
+        bytes memory govSetup = abi.encodeCall(
+            Safe.setup,
+            (govOwners, 3, address(0), bytes(""), address(0), address(0), 0, payable(address(0)))
+        );
+        governanceSafe = Safe(payable(address(factory.createProxyWithNonce(address(safeSingleton), govSetup, 1))));
+
+        // TimelockController: minDelay = 0 (setup mode), proposer = govSafe, executors open.
+        address[] memory proposers = new address[](1);
+        proposers[0] = address(governanceSafe);
+        address[] memory executors = new address[](1);
+        executors[0] = address(0); // open execution
+        timelock = new TimelockController(0, proposers, executors, address(0));
+
+        // Deploy Registry + mock token + initial oracle feed under DEPLOYER.
+        vm.startPrank(DEPLOYER);
+        reg     = new ArcoraDexRegistry(DEPLOYER);
+        usdc    = new MockERC20("USDC", "USDC", 6);
+        primary = new MockChainlinkFeedV2(8, 100_000_000, DEPLOYER, DEPLOYER);
+        reg.listToken(address(usdc), 6, IChainlinkAggregator(address(primary)), 50, 3600);
+        reg.transferOwnership(address(timelock));
+        vm.stopPrank();
+
+        // Timelock (at delay=0) accepts Registry ownership.
+        _govExec(address(timelock), abi.encodeCall(TimelockController.schedule,
+            (address(reg), 0, abi.encodeCall(reg.acceptOwnership, ()), bytes32(0), bytes32(0), 0)));
+        _govExec(address(timelock), abi.encodeCall(TimelockController.execute,
+            (address(reg), 0, abi.encodeCall(reg.acceptOwnership, ()), bytes32(0), bytes32(0))));
+
+        // Lockdown: raise minDelay to 48h (mirrors P2 setup).
+        _govExec(address(timelock), abi.encodeCall(TimelockController.schedule,
+            (address(timelock), 0, abi.encodeCall(TimelockController.updateDelay, (TIMELOCK_DELAY)), bytes32(0), bytes32(0), 0)));
+        _govExec(address(timelock), abi.encodeCall(TimelockController.execute,
+            (address(timelock), 0, abi.encodeCall(TimelockController.updateDelay, (TIMELOCK_DELAY)), bytes32(0), bytes32(0))));
+
+        // Deploy the P3 OracleAggregator (two matching-decimals sources, 2% cap).
+        secondary = new MockChainlinkFeedV2(8, 100_000_000, DEPLOYER, DEPLOYER);
+        aggregator = new OracleAggregator(
+            IChainlinkAggregator(address(primary)),
+            IChainlinkAggregator(address(secondary)),
+            200,
+            address(governanceSafe)
+        );
+    }
+
+    /// @notice Proves the full Registry.setOracle migration sequence:
+    ///   1. Governance schedules setOracle through the Timelock.
+    ///   2. Execution is blocked before the 48h delay elapses.
+    ///   3. After warping 48h+1s, execution succeeds.
+    ///   4. Registry now points at the new OracleAggregator.
+    ///   5. The aggregator returns the expected average price.
+    function test_governance_migrates_registry_to_aggregator() public {
+        bytes memory call = abi.encodeCall(
+            reg.setOracle,
+            (address(usdc), IChainlinkAggregator(address(aggregator)))
+        );
+
+        // 1. Schedule with the 48h delay.
+        _govExec(address(timelock), abi.encodeCall(TimelockController.schedule,
+            (address(reg), 0, call, bytes32(0), bytes32(0), TIMELOCK_DELAY)));
+
+        // 2. Attempt execution before delay — must revert.
+        vm.expectRevert();
+        timelock.execute(address(reg), 0, call, bytes32(0), bytes32(0));
+
+        // 3. Warp past the delay and execute.
+        vm.warp(block.timestamp + TIMELOCK_DELAY + 1);
+        timelock.execute(address(reg), 0, call, bytes32(0), bytes32(0));
+
+        // 4. Registry must now point at the aggregator.
+        assertEq(
+            address(reg.tokenInfo(address(usdc)).usdOracle),
+            address(aggregator),
+            "Registry.usdOracle must point at the new OracleAggregator"
+        );
+
+        // 5. Aggregator returns the average of both $1.00 sources = $1.00.
+        (, int256 ans, , , ) = aggregator.latestRoundData();
+        assertEq(ans, int256(100_000_000), "aggregator returns avg of two $1.00 sources");
+    }
+
+    /// @dev Signs + executes a call via the governance Safe (3-of-5 signers).
+    function _govExec(address to, bytes memory data) internal {
+        uint256[] memory keys = new uint256[](3);
+        keys[0] = govKeys[0];
+        keys[1] = govKeys[1];
+        keys[2] = govKeys[2];
+        require(governanceSafe.execCall(to, data, keys), "gov exec failed");
     }
 }
