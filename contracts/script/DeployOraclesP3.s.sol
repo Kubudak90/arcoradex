@@ -18,7 +18,8 @@ import { CumulativeDeviationGuard } from "../src/oracle/CumulativeDeviationGuard
 ///
 /// Required env: DEPLOYER_PRIVATE_KEY (broadcasts), ARC_TESTNET_RPC.
 contract DeployOraclesP3 is Script {
-    address constant GOVERNANCE_SAFE = 0x715f669D79Cc72d6685F8724c0B86f7B53d7e624;
+    address constant GOVERNANCE_SAFE        = 0x715f669D79Cc72d6685F8724c0B86f7B53d7e624;
+    uint32  constant GUARD_WINDOW_SECONDS   = 86_400; // 24 h tumbling window (P3 spec Task C)
 
     struct TokenSpec {
         string  symbol;
@@ -36,7 +37,13 @@ contract DeployOraclesP3 is Script {
         uint256 deployerKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
         address deployer    = vm.addr(deployerKey);
 
+        require(deployer.balance >= 0.5 ether, "DeployOraclesP3: deployer balance < 0.5 ARC");
+
         TokenSpec[7] memory cfg;
+        // Per-tier caps -- divergenceBps / cumulativeBps:
+        //   USD-pegged (USDC/USDT/PYUSD/DAI): 50 / 200
+        //   EUR (EURC):                       100 / 300
+        //   soft-FX (TRYC/BRLC):              200 / 500
         cfg[0] = TokenSpec("USDC",  0x3BFa09fF6467639f0981948385bA1018Ac07d22C, 0x2E6B862E1Ac74328238494B22317262004534B39,  100_000_000, 8,  50, 200);
         cfg[1] = TokenSpec("USDT",  0x342B6e4fD6896f0BCc80f8e9799e2bce65b9844B, 0x741af784a1d4C69843A1764099433160088a1c70,  100_000_000, 8,  50, 200);
         cfg[2] = TokenSpec("PYUSD", 0xfdB2c86d010698401f0b969348DC58b6659B96a3, 0x2285FeDA1F9c07959db2b97bFC8F9cCBCDb51896,  100_000_000, 8,  50, 200);
@@ -73,7 +80,7 @@ contract DeployOraclesP3 is Script {
             );
 
             // setConfig is onlyOwner; deployer is still owner here (transfer happens after loop)
-            guard.setConfig(cfg[i].token, cfg[i].cumulativeBps, 86_400);
+            guard.setConfig(cfg[i].token, cfg[i].cumulativeBps, GUARD_WINDOW_SECONDS);
 
             console2.log(string.concat("  ", cfg[i].symbol, " secondary:"), address(secondary));
             console2.log(string.concat("  ", cfg[i].symbol, " aggregator:"), address(agg));
@@ -90,6 +97,7 @@ contract DeployOraclesP3 is Script {
 
         console2.log("");
         console2.log("Ownership of guard + 7 aggregators + 7 secondaries transferred (pending acceptance by Governance Safe).");
+        console2.log("NOTE: secondary feed writer remains the deployer EOA; the Governance Safe must call setWriter on each secondary feed if a separate keeper is expected to push secondary prices.");
 
         vm.stopBroadcast();
     }
