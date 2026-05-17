@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import { Test } from "forge-std/Test.sol";
+import { Test, Vm } from "forge-std/Test.sol";
 import { CumulativeDeviationGuard } from "../../src/oracle/CumulativeDeviationGuard.sol";
 
 contract P3CircuitBreakerTest is Test {
@@ -60,5 +60,53 @@ contract P3CircuitBreakerTest is Test {
         (uint32 cap, uint32 window) = guard.configs(TOKEN);
         assertEq(cap, 1000);
         assertEq(window, 3600);
+    }
+
+    /// @dev Verifies that a sub-cap move (4% < 5%) emits PriceObserved but does
+    /// NOT emit CircuitBreakerTripped. Uses vm.recordLogs to prove absence of
+    /// the trip event.
+    function test_guard_no_trip_when_within_cap() public {
+        // Anchor the window.
+        guard.record(TOKEN, 1e18);
+
+        // Move into the window by 1 hour (well within the 24h window).
+        vm.warp(block.timestamp + 1 hours);
+
+        // Capture all logs emitted by the next call.
+        vm.recordLogs();
+        guard.record(TOKEN, 1.04e18); // 4% up — below the 5% cap
+
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+
+        bytes32 observedTopic  = keccak256("PriceObserved(address,uint256,uint256)");
+        bytes32 trippedTopic   = keccak256("CircuitBreakerTripped(address,uint256,uint256)");
+
+        bool foundObserved = false;
+        bool foundTripped  = false;
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].topics[0] == observedTopic)  foundObserved = true;
+            if (logs[i].topics[0] == trippedTopic)   foundTripped  = true;
+        }
+
+        assertTrue(foundObserved,  "PriceObserved must be emitted");
+        assertFalse(foundTripped,  "CircuitBreakerTripped must NOT be emitted within cap");
+    }
+
+    /// @dev Verifies that a downward move exceeding the cap (7% drop > 5%) emits
+    /// both PriceObserved and CircuitBreakerTripped, exercising the
+    /// price < startPrice branch of the diff ternary.
+    function test_guard_trips_on_downward_deviation() public {
+        // Anchor the window at 1e18.
+        guard.record(TOKEN, 1e18);
+
+        // Move into the window by 1 hour.
+        vm.warp(block.timestamp + 1 hours);
+
+        // diff = 0.07e18; deviationBps = (0.07e18 * 10_000) / 1e18 = 700 > 500 cap.
+        vm.expectEmit(true, false, false, true);
+        emit CumulativeDeviationGuard.PriceObserved(TOKEN, 0.93e18, block.timestamp);
+        vm.expectEmit(true, false, false, true);
+        emit CumulativeDeviationGuard.CircuitBreakerTripped(TOKEN, 700, block.timestamp);
+        guard.record(TOKEN, 0.93e18);
     }
 }
