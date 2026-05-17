@@ -236,20 +236,23 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
             }
         }
 
+        // Hoist cached to function scope so the ternary below can reuse it
+        // instead of re-reading lastValidPrice from storage (one fewer SLOAD).
+        uint256 cached = lastValidPrice[token];
+
         // Inline the cache-deviation guard (same semantics as _readUsdPrice1e18View):
         // a fresh reading that diverges too far from the existing cache is demoted
         // to stale so the cached price is used as the canonical return value.
         if (isFresh) {
-            uint256 cached = lastValidPrice[token];
             if (cached != 0) {
-                uint256 d = rawPrice1e18 > cached ? rawPrice1e18 - cached : cached - rawPrice1e18;
-                if (d * BPS > cached * uint256(info.maxOracleDeviationBps)) {
+                uint256 diff = rawPrice1e18 > cached ? rawPrice1e18 - cached : cached - rawPrice1e18;
+                if (diff * BPS > cached * uint256(info.maxOracleDeviationBps)) {
                     isFresh = false;
                 }
             }
         }
 
-        price1e18 = isFresh ? rawPrice1e18 : lastValidPrice[token];
+        price1e18 = isFresh ? rawPrice1e18 : cached;
         if (price1e18 == 0) revert NoValidPrice(token);
 
         // Stale-branch: check the cache-guarded price against lastAcceptedPrice
