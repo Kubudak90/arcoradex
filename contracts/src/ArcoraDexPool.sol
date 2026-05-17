@@ -100,20 +100,29 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         if (!info.isActive) revert TokenNotActive(token);
         tokenDecimals = info.decimals;
 
-        (uint80 roundId, int256 answer, , uint256 updatedAt, uint80 answeredInRound) =
-            info.usdOracle.latestRoundData();
+        try info.usdOracle.latestRoundData() returns (
+            uint80 roundId, int256 answer, uint256, uint256 updatedAt, uint80 answeredInRound
+        ) {
+            bool roundOk     = (roundId != 0 && answeredInRound >= roundId);
+            bool timestampOk = (updatedAt != 0 && updatedAt <= block.timestamp);
+            bool ageOk       = timestampOk && (block.timestamp - updatedAt) <= info.maxStaleSeconds;
+            bool answerOk    = (answer > 0);
 
-        bool roundOk     = (roundId != 0 && answeredInRound >= roundId);
-        bool timestampOk = (updatedAt != 0 && updatedAt <= block.timestamp);
-        bool ageOk       = timestampOk && (block.timestamp - updatedAt) <= info.maxStaleSeconds;
-        bool answerOk    = (answer > 0);
-
-        isFresh = roundOk && timestampOk && ageOk && answerOk;
-        if (isFresh) {
-            uint8 oracleDec = info.usdOracle.decimals();
-            if (oracleDec == 18)      price1e18 = uint256(answer);
-            else if (oracleDec < 18)  price1e18 = uint256(answer) * (10 ** (18 - oracleDec));
-            else                      price1e18 = uint256(answer) / (10 ** (oracleDec - 18));
+            isFresh = roundOk && timestampOk && ageOk && answerOk;
+            if (isFresh) {
+                try info.usdOracle.decimals() returns (uint8 oracleDec) {
+                    if (oracleDec == 18)      price1e18 = uint256(answer);
+                    else if (oracleDec < 18)  price1e18 = uint256(answer) * (10 ** (18 - oracleDec));
+                    else                      price1e18 = uint256(answer) / (10 ** (oracleDec - 18));
+                } catch {
+                    // decimals() reverted — treat the full read as failed
+                    isFresh = false;
+                    price1e18 = 0;
+                }
+            }
+        } catch {
+            // latestRoundData() reverted — fall through to cache (callers handle via isFresh=false)
+            isFresh = false;
         }
     }
 

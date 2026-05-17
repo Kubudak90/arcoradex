@@ -10,6 +10,7 @@ import { IArcoraDexRegistry }  from "../src/interfaces/IArcoraDexRegistry.sol";
 import { IChainlinkAggregator } from "../src/interfaces/IChainlinkAggregator.sol";
 import { MintableERC20 }       from "../src/testnet/MintableERC20.sol";
 import { MockChainlinkFeed }   from "../src/testnet/MockChainlinkFeed.sol";
+import { RevertingMockFeed }   from "./oracle/RevertingMockFeed.sol";
 
 contract ArcoraDexPoolTest is Test {
     ArcoraDexPool     pool;
@@ -564,5 +565,31 @@ contract ArcoraDexPoolTest is Test {
         vm.prank(attacker);
         vm.expectRevert(abi.encodeWithSelector(IArcoraDexPool.NotAuthorized.selector));
         pool.pause();
+    }
+
+    // ── P3 Task 2: reverting oracle falls back to cache (A1) ──
+    function test_pool_handles_reverting_oracle() public {
+        // Setup: seed USDC cache via a successful deposit using the existing feed.
+        // MintableERC20.mint is onlyOwner, so prank as owner.
+        vm.prank(owner);
+        usdc.mint(address(this), 100_000_000);
+        usdc.approve(address(pool), type(uint256).max);
+        pool.deposit(address(usdc), 100_000_000, 0, block.timestamp + 60);
+        uint256 cachedPrice = pool.lastValidPrice(address(usdc));
+        assertGt(cachedPrice, 0, "cache should be seeded by deposit");
+
+        // Swap the USDC oracle for a reverting feed via the registry (owner-gated).
+        RevertingMockFeed bad = new RevertingMockFeed(8);
+        vm.prank(owner);
+        reg.setOracle(address(usdc), IChainlinkAggregator(address(bad)));
+
+        // totalReservesUSD() should now use the cached USDC price, not revert.
+        uint256 nav = pool.totalReservesUSD();
+        assertGt(nav, 0, "NAV must remain queryable via cache when oracle reverts");
+
+        // A subsequent deposit must also succeed by reading the cache.
+        vm.prank(owner);
+        usdc.mint(address(this), 50_000_000);
+        pool.deposit(address(usdc), 50_000_000, 0, block.timestamp + 60);
     }
 }
