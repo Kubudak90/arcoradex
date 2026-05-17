@@ -10,7 +10,7 @@ import { IArcoraDexRegistry }  from "../src/interfaces/IArcoraDexRegistry.sol";
 import { IChainlinkAggregator } from "../src/interfaces/IChainlinkAggregator.sol";
 import { MintableERC20 }       from "../src/testnet/MintableERC20.sol";
 import { MockChainlinkFeed }   from "../src/testnet/MockChainlinkFeed.sol";
-import { RevertingMockFeed }   from "./oracle/RevertingMockFeed.sol";
+import { RevertingMockFeed, RevertingDecimalsMockFeed } from "./oracle/RevertingMockFeed.sol";
 
 contract ArcoraDexPoolTest is Test {
     ArcoraDexPool     pool;
@@ -578,16 +578,55 @@ contract ArcoraDexPoolTest is Test {
         uint256 cachedPrice = pool.lastValidPrice(address(usdc));
         assertGt(cachedPrice, 0, "cache should be seeded by deposit");
 
+        // Capture NAV before swapping in the reverting feed. With only USDC deposited
+        // and all three feeds still live, this is the baseline we compare against.
+        uint256 navBeforeSwap = pool.totalReservesUSD();
+
         // Swap the USDC oracle for a reverting feed via the registry (owner-gated).
         RevertingMockFeed bad = new RevertingMockFeed(8);
         vm.prank(owner);
         reg.setOracle(address(usdc), IChainlinkAggregator(address(bad)));
 
         // totalReservesUSD() should now use the cached USDC price, not revert.
-        uint256 nav = pool.totalReservesUSD();
-        assertGt(nav, 0, "NAV must remain queryable via cache when oracle reverts");
+        // The NAV must be identical to the pre-swap value: same reserves, same cached
+        // price, no other oracle changed — proving the cache drove the result.
+        uint256 navAfterSwap = pool.totalReservesUSD();
+        assertEq(navAfterSwap, navBeforeSwap, "NAV must equal pre-swap value -- cache must have driven the result");
 
         // A subsequent deposit must also succeed by reading the cache.
+        vm.prank(owner);
+        usdc.mint(address(this), 50_000_000);
+        pool.deposit(address(usdc), 50_000_000, 0, block.timestamp + 60);
+    }
+
+    /// @notice Covers the inner try/catch around `oracle.decimals()` in `_readOracle`.
+    /// A feed with a working `latestRoundData()` (passes all freshness checks so
+    /// `isFresh` becomes true) but a reverting `decimals()` must cause the Pool to
+    /// invalidate the read and fall back to its cached price — not revert.
+    function test_pool_handles_reverting_decimals() public {
+        // Step 1: seed USDC cache via a normal deposit with the existing live feed.
+        vm.prank(owner);
+        usdc.mint(address(this), 100_000_000);
+        usdc.approve(address(pool), type(uint256).max);
+        pool.deposit(address(usdc), 100_000_000, 0, block.timestamp + 60);
+        uint256 cachedPrice = pool.lastValidPrice(address(usdc));
+        assertGt(cachedPrice, 0, "cache should be seeded before swapping oracle");
+
+        // Capture NAV with the live feed (baseline — only USDC has reserves here).
+        uint256 navBaseline = pool.totalReservesUSD();
+
+        // Step 2: swap in a feed whose latestRoundData() succeeds (fresh round) but
+        // whose decimals() reverts — exercising the inner catch path.
+        RevertingDecimalsMockFeed badDec = new RevertingDecimalsMockFeed();
+        vm.prank(owner);
+        reg.setOracle(address(usdc), IChainlinkAggregator(address(badDec)));
+
+        // totalReservesUSD() must not revert; cache fallback keeps NAV non-zero
+        // and equal to the baseline (same reserves, same cached price).
+        uint256 navAfter = pool.totalReservesUSD();
+        assertEq(navAfter, navBaseline, "cache fallback must preserve NAV when decimals() reverts");
+
+        // Step 3: a follow-up deposit must also succeed via cache.
         vm.prank(owner);
         usdc.mint(address(this), 50_000_000);
         pool.deposit(address(usdc), 50_000_000, 0, block.timestamp + 60);
