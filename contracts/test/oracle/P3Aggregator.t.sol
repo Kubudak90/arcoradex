@@ -295,8 +295,13 @@ contract P3AggregatorGovernanceTest is Test {
         _govExec(address(timelock), abi.encodeCall(TimelockController.schedule,
             (address(reg), 0, call, bytes32(0), bytes32(0), TIMELOCK_DELAY)));
 
-        // 2. Attempt execution before delay — must revert.
-        vm.expectRevert();
+        // 2. Attempt execution before delay — must revert with the Timelock not-ready error.
+        bytes32 opId = timelock.hashOperation(address(reg), 0, call, bytes32(0), bytes32(0));
+        vm.expectRevert(abi.encodeWithSelector(
+            TimelockController.TimelockUnexpectedOperationState.selector,
+            opId,
+            bytes32(1 << uint8(TimelockController.OperationState.Ready))
+        ));
         timelock.execute(address(reg), 0, call, bytes32(0), bytes32(0));
 
         // 3. Warp past the delay and execute.
