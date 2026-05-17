@@ -107,4 +107,80 @@ contract P3AggregatorTest is Test {
             OWNER
         );
     }
+
+    // M3-1: divergence exactly at the cap must NOT revert (strict > means AT cap passes)
+    // cap=200 bps, primary=100_000_000, secondary=102_000_000
+    // absDiff=2_000_000; minAns=100_000_000
+    // 2_000_000 * 10_000 = 20_000_000_000 == 100_000_000 * 200 => NOT strictly greater, passes
+    function test_aggregator_divergence_exactly_at_cap_passes() public {
+        OracleAggregator agg = new OracleAggregator(
+            IChainlinkAggregator(address(primary)),
+            IChainlinkAggregator(address(secondary)),
+            200, // 2% cap
+            OWNER
+        );
+        vm.prank(OWNER);
+        secondary.setAnswer(102_000_000); // exactly 200 bps above primary
+
+        (, int256 ans, , , ) = agg.latestRoundData();
+        assertEq(ans, int256(101_000_000), "avg of 1.00 and 1.02 = 1.01 at exact cap boundary");
+    }
+
+    // M3-2: _tryRead REJECT path (not revert): secondary returns answer=0, falls back to primary
+    function test_aggregator_falls_back_when_source_returns_zero_answer() public {
+        OracleAggregator agg = new OracleAggregator(
+            IChainlinkAggregator(address(primary)),
+            IChainlinkAggregator(address(secondary)),
+            200,
+            OWNER
+        );
+        vm.prank(OWNER);
+        secondary.setAnswer(0); // _tryRead will reject (a > 0 fails)
+
+        (, int256 ans, , , ) = agg.latestRoundData();
+        assertEq(ans, int256(100_000_000), "should fall back to primary when secondary returns zero answer");
+    }
+
+    // M3-3: both sources return answer=0 => AllSourcesUnavailable
+    function test_aggregator_reverts_when_both_sources_return_zero() public {
+        OracleAggregator agg = new OracleAggregator(
+            IChainlinkAggregator(address(primary)),
+            IChainlinkAggregator(address(secondary)),
+            200,
+            OWNER
+        );
+        vm.prank(OWNER);
+        primary.setAnswer(0);
+        vm.prank(OWNER);
+        secondary.setAnswer(0);
+
+        vm.expectRevert(abi.encodeWithSelector(OracleAggregator.AllSourcesUnavailable.selector));
+        agg.latestRoundData();
+    }
+
+    // I1: sourceHealth() reports degraded mode correctly
+    function test_sourceHealth_reports_degraded() public {
+        // One reverting secondary -> (true, false)
+        RevertingMockFeed bad = new RevertingMockFeed(8);
+        OracleAggregator agg = new OracleAggregator(
+            IChainlinkAggregator(address(primary)),
+            IChainlinkAggregator(address(bad)),
+            200,
+            OWNER
+        );
+        (bool pOk, bool sOk) = agg.sourceHealth();
+        assertTrue(pOk,  "primary should be healthy");
+        assertFalse(sOk, "secondary (reverting) should be unhealthy");
+
+        // Both healthy -> (true, true)
+        OracleAggregator agg2 = new OracleAggregator(
+            IChainlinkAggregator(address(primary)),
+            IChainlinkAggregator(address(secondary)),
+            200,
+            OWNER
+        );
+        (bool p2Ok, bool s2Ok) = agg2.sourceHealth();
+        assertTrue(p2Ok, "primary should be healthy");
+        assertTrue(s2Ok, "secondary should be healthy");
+    }
 }

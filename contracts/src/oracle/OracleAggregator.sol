@@ -9,10 +9,18 @@ import { IChainlinkAggregator } from "../interfaces/IChainlinkAggregator.sol";
 /// @notice 2-source `IChainlinkAggregator` wrapper. Returns the average of the
 /// two sources when they agree within `maxDivergenceBps`; reverts if they
 /// diverge beyond that; falls back to a single source when the other reverts.
+///
+/// @dev Security trade-off — degraded mode:
+/// When one source is down (reverts or returns bad data) the aggregator returns
+/// the surviving source's price without a divergence cross-check. This is the
+/// intended fallback, but it removes the second-opinion guard entirely.
+/// Operators MUST monitor `sourceHealth()` (and, in P3, the
+/// CumulativeDeviationGuard events) to detect when the aggregator has entered
+/// single-source mode and the divergence check is inactive.
 contract OracleAggregator is IChainlinkAggregator, Ownable2Step {
     IChainlinkAggregator public immutable PRIMARY;
     IChainlinkAggregator public immutable SECONDARY;
-    uint8                public immutable DECIMALS_;
+    uint8                public immutable DECIMALS;     // M4: removed trailing underscore
     uint16               public maxDivergenceBps;
 
     error SourcesDiverge(uint256 primary, uint256 secondary, uint16 capBps);
@@ -36,12 +44,12 @@ contract OracleAggregator is IChainlinkAggregator, Ownable2Step {
         if (pDec != sDec) revert DecimalsMismatch(pDec, sDec);
         PRIMARY = primary_;
         SECONDARY = secondary_;
-        DECIMALS_ = pDec;
+        DECIMALS = pDec;                                // M4: renamed from DECIMALS_
         maxDivergenceBps = initialMaxDivergenceBps;
     }
 
     function decimals() external view override returns (uint8) {
-        return DECIMALS_;
+        return DECIMALS;                                // M4: renamed from DECIMALS_
     }
 
     function latestRoundData()
@@ -65,9 +73,17 @@ contract OracleAggregator is IChainlinkAggregator, Ownable2Step {
             revert SourcesDiverge(uint256(pAns), uint256(sAns), maxDivergenceBps);
         }
 
-        int256  mid    = (pAns + sAns) / 2;
+        int256  mid    = (pAns + sAns) / 2; // sum of two positive feed answers cannot realistically overflow int256 (M5)
         uint256 latest = pAt > sAt ? pAt : sAt;
         return (1, mid, latest, latest, 1);
+    }
+
+    /// @notice Monitoring hook: reports per-source liveness so off-chain
+    /// keepers can detect when the aggregator is running in degraded
+    /// (single-source) mode — i.e. the divergence cross-check is inactive.
+    function sourceHealth() external view returns (bool primaryOk, bool secondaryOk) {
+        (primaryOk, , ) = _tryRead(PRIMARY);
+        (secondaryOk, , ) = _tryRead(SECONDARY);
     }
 
     function setMaxDivergenceBps(uint16 newBps) external onlyOwner {
@@ -77,14 +93,16 @@ contract OracleAggregator is IChainlinkAggregator, Ownable2Step {
     }
 
     /// @dev Returns (success, answer, updatedAt). Catches revert from source.
-    /// Treats answer <= 0 as failure (Chainlink convention).
+    /// Validates: positive answer, positive timestamp, AND round completeness
+    /// (roundId != 0 and answeredInRound >= roundId). A stale round where
+    /// answeredInRound < roundId is treated as a failed read.
     function _tryRead(IChainlinkAggregator src)
         private
         view
         returns (bool ok, int256 answer, uint256 updatedAt)
     {
-        try src.latestRoundData() returns (uint80, int256 a, uint256, uint256 u, uint80) {
-            if (a > 0 && u > 0) {
+        try src.latestRoundData() returns (uint80 roundId, int256 a, uint256, uint256 u, uint80 answeredInRound) {
+            if (a > 0 && u > 0 && roundId != 0 && answeredInRound >= roundId) {
                 return (true, a, u);
             }
             return (false, 0, 0);
