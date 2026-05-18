@@ -14,7 +14,7 @@ P2 closed the governance footgun. P3 closes the oracle footgun — audit finding
 
 1. **Source diversity** — each stable now has a primary `OracleAggregator` (on-chain weighted combination of the existing `MockChainlinkFeedV2` primary and a new independent secondary feed) with a hard divergence cap; a large primary/secondary spread reverts the read.
 2. **Tightened pool-side caps** — `Registry.maxOracleDeviationBps` for TRYC and BRLC is cut from the audit-residual 5000 bps to 200 bps, matching the `OracleAggregator` divergence cap and eliminating the drain window.
-3. **Rolling-deviation guard** — `CumulativeDeviationGuard` accumulates signed price drift per token over a 24 h window; when drift exceeds the per-token cumulative cap the guard records a trip (observable off-chain; auto-pause is deferred to P5).
+3. **Deviation guard** — `CumulativeDeviationGuard` measures the absolute deviation `|price − anchor|` against a per-window anchor over a tumbling 24 h window; when the absolute deviation exceeds the per-token cumulative cap the guard records a trip (observable off-chain; auto-pause is deferred to P5).
 
 P3 also resolves two P1/P2 oracle-layer residuals:
 - **Reverting-oracle availability gap** — a single oracle revert would propagate up and brick swaps; the Pool's `_readOracle` function (called by `_readUsdPrice1e18WithGuard`) is refactored to `try/catch` so a reverting aggregator returns the last-good price rather than halting.
@@ -62,21 +62,21 @@ Each `OracleAggregator` implements `IChainlinkAggregator` and is a drop-in repla
 
 Per-token parameters set at deploy time and in the pending Timelock batch:
 
-| Token | Aggregator divergenceBps | Guard maxCumulativeBps | Guard windowSeconds |
-|-------|--------------------------|------------------------|---------------------|
-| USDC  | 50  | 200 | 86400 |
-| USDT  | 50  | 200 | 86400 |
-| PYUSD | 50  | 200 | 86400 |
-| DAI   | 50  | 200 | 86400 |
-| EURC  | 100 | 300 | 86400 |
-| TRYC  | 200 | 500 | 86400 |
-| BRLC  | 200 | 500 | 86400 |
+| Token | Aggregator divergenceBps | Guard maxCumulativeBps | Guard windowSeconds | maxStaleSeconds |
+|-------|--------------------------|------------------------|---------------------|-----------------|
+| USDC  | 50  | 200 | 86400 | 3600  |
+| USDT  | 50  | 200 | 86400 | 3600  |
+| PYUSD | 50  | 200 | 86400 | 3600  |
+| DAI   | 50  | 200 | 86400 | 3600  |
+| EURC  | 100 | 300 | 86400 | 14400 |
+| TRYC  | 200 | 500 | 86400 | 86400 |
+| BRLC  | 200 | 500 | 86400 | 86400 |
 
 **Note on the three deviation caps — they measure distinct quantities and are not redundant:**
 
 - **`OracleAggregator.maxDivergenceBps`** — gates the _spread between primary and secondary_ source prices at read time. If the two sources diverge beyond this cap, `latestRoundData` reverts, preventing the aggregator from returning an implausible midpoint.
 - **`ArcoraDexRegistry.maxOracleDeviationBps`** — gates the _aggregator-output price versus the Pool's most-recently-accepted (cached) price_. A sudden jump in the aggregator's reported price — even if primary and secondary agree — is caught here.
-- **`CumulativeDeviationGuard.maxCumulativeBps`** — measures _rolling signed drift within a time window_. It is event-only (no on-chain auto-pause in P3); off-chain monitoring consumes `CircuitBreakerTripped` to detect slow drift that neither of the two above caps would catch within a single round.
+- **`CumulativeDeviationGuard.maxCumulativeBps`** — measures the _absolute deviation `|price − anchor|` from the per-window anchor price over a tumbling 24 h window_ (unsigned; the window resets at each boundary). It is event-only (no on-chain auto-pause in P3); off-chain monitoring consumes `CircuitBreakerTripped` to detect price moves that neither of the two above caps would catch within a single round.
 
 Registry `maxOracleDeviationBps` changes carried by the pending batch:
 
