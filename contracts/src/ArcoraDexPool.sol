@@ -100,20 +100,29 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         if (!info.isActive) revert TokenNotActive(token);
         tokenDecimals = info.decimals;
 
-        (uint80 roundId, int256 answer, , uint256 updatedAt, uint80 answeredInRound) =
-            info.usdOracle.latestRoundData();
+        try info.usdOracle.latestRoundData() returns (
+            uint80 roundId, int256 answer, uint256, uint256 updatedAt, uint80 answeredInRound
+        ) {
+            bool roundOk     = (roundId != 0 && answeredInRound >= roundId);
+            bool timestampOk = (updatedAt != 0 && updatedAt <= block.timestamp);
+            bool ageOk       = timestampOk && (block.timestamp - updatedAt) <= info.maxStaleSeconds;
+            bool answerOk    = (answer > 0);
 
-        bool roundOk     = (roundId != 0 && answeredInRound >= roundId);
-        bool timestampOk = (updatedAt != 0 && updatedAt <= block.timestamp);
-        bool ageOk       = timestampOk && (block.timestamp - updatedAt) <= info.maxStaleSeconds;
-        bool answerOk    = (answer > 0);
-
-        isFresh = roundOk && timestampOk && ageOk && answerOk;
-        if (isFresh) {
-            uint8 oracleDec = info.usdOracle.decimals();
-            if (oracleDec == 18)      price1e18 = uint256(answer);
-            else if (oracleDec < 18)  price1e18 = uint256(answer) * (10 ** (18 - oracleDec));
-            else                      price1e18 = uint256(answer) / (10 ** (oracleDec - 18));
+            isFresh = roundOk && timestampOk && ageOk && answerOk;
+            if (isFresh) {
+                try info.usdOracle.decimals() returns (uint8 oracleDec) {
+                    if (oracleDec == 18)      price1e18 = uint256(answer);
+                    else if (oracleDec < 18)  price1e18 = uint256(answer) * (10 ** (18 - oracleDec));
+                    else                      price1e18 = uint256(answer) / (10 ** (oracleDec - 18));
+                } catch {
+                    // decimals() reverted — treat the full read as failed
+                    isFresh = false;
+                    price1e18 = 0;
+                }
+            }
+        } catch {
+            // latestRoundData() reverted — fall through to cache (callers handle via isFresh=false)
+            isFresh = false;
         }
     }
 
@@ -201,20 +210,25 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
     /// - Stale oracle, cache drifted from lastAcceptedPrice: both revert.
     ///   (MATCH)
     ///
-    /// Implementation reads the raw oracle first (via `_readOracle`) to detect
-    /// fresh-but-cache-rejected jumps; then falls back to `_readUsdPrice1e18View`
-    /// for the canonical return value when no revert fires.
+    /// Single-read implementation: one `_readOracle` call per token. The fresh-
+    /// branch ratchet check runs on the raw oracle value before the cache-deviation
+    /// guard resolves the canonical return value; this preserves the STRICTER
+    /// over-revert property for fresh-but-cache-rejected oracle jumps.
     function _readUsdPrice1e18WithGuard(address token)
         internal view returns (uint256 price1e18, uint8 tokenDecimals)
     {
         IArcoraDexRegistry.TokenInfo memory info = REGISTRY.tokenInfo(token);
         uint256 prev = lastAcceptedPrice[token];
 
-        // Fetch raw oracle first to detect ratchet violations on fresh readings.
+        // Single oracle read.
         uint256 rawPrice1e18;
         bool isFresh;
         (rawPrice1e18, tokenDecimals, isFresh) = _readOracle(token);
 
+        // Fresh-branch: check raw oracle against lastAcceptedPrice FIRST. This
+        // is the STRICTER path — even if the cache-deviation guard below would
+        // later reject rawPrice1e18, a ratchet violation on the live price is
+        // surfaced immediately rather than silently falling back to cache.
         if (isFresh && prev != 0) {
             uint256 diff = rawPrice1e18 > prev ? rawPrice1e18 - prev : prev - rawPrice1e18;
             if (diff * BPS > prev * uint256(info.maxOracleDeviationBps)) {
@@ -222,11 +236,27 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
             }
         }
 
-        // Resolve the canonical (cache-guarded) price for the actual return value.
-        (price1e18, tokenDecimals) = _readUsdPrice1e18View(token);
+        // Hoist cached to function scope so the ternary below can reuse it
+        // instead of re-reading lastValidPrice from storage (one fewer SLOAD).
+        uint256 cached = lastValidPrice[token];
 
-        // Also check the cache-guarded price against lastAcceptedPrice in case the
-        // oracle is stale (isFresh=false) and the cache itself has drifted.
+        // Inline the cache-deviation guard (same semantics as _readUsdPrice1e18View):
+        // a fresh reading that diverges too far from the existing cache is demoted
+        // to stale so the cached price is used as the canonical return value.
+        if (isFresh) {
+            if (cached != 0) {
+                uint256 diff = rawPrice1e18 > cached ? rawPrice1e18 - cached : cached - rawPrice1e18;
+                if (diff * BPS > cached * uint256(info.maxOracleDeviationBps)) {
+                    isFresh = false;
+                }
+            }
+        }
+
+        price1e18 = isFresh ? rawPrice1e18 : cached;
+        if (price1e18 == 0) revert NoValidPrice(token);
+
+        // Stale-branch: check the cache-guarded price against lastAcceptedPrice
+        // in case the oracle is stale (isFresh=false) and the cache itself has drifted.
         if (!isFresh && prev != 0) {
             uint256 diff = price1e18 > prev ? price1e18 - prev : prev - price1e18;
             if (diff * BPS > prev * uint256(info.maxOracleDeviationBps)) {
