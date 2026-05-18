@@ -1,0 +1,12 @@
+[Unit]
+Description=ArcoraDEX guard-record — fire every 30 minutes
+
+[Timer]
+OnBootSec=7min
+OnUnitActiveSec=30min
+AccuracySec=30s
+Persistent=true
+Unit=arcoradex-guard-record.service
+
+[Install]
+WantedBy=timers.target
