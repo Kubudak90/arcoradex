@@ -39,8 +39,7 @@ contract PoolHandler is Test {
         vm.prank(actor);
         try pool.deposit(token, amount, 0, block.timestamp + 1) {
             depositCalls++;
-        }
-            catch {}
+        } catch {}
     }
 
     function withdraw(uint256 actorSeed, uint256 tokenSeed, uint256 lpSeed) external {
@@ -52,8 +51,7 @@ contract PoolHandler is Test {
         vm.prank(actor);
         try pool.withdraw(token, lpAmt, 0, block.timestamp + 1) {
             withdrawCalls++;
-        }
-            catch {}
+        } catch {}
     }
 
     function swap(uint256 actorSeed, uint256 inSeed, uint256 outSeed, uint256 amtSeed) external {
@@ -71,7 +69,6 @@ contract PoolHandler is Test {
         vm.prank(actor);
         try pool.swap(tIn, tOut, amount, 0, block.timestamp + 1, actor) {
             swapCalls++;
-        }
-            catch {}
+        } catch {}
     }
 }
