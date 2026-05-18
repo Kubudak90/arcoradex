@@ -14,7 +14,8 @@ import { SafeSigHelpers } from "../test/governance/SafeSigHelpers.sol";
 /// each call is a Safe transaction executed via SafeSigHelpers.
 ///
 /// Required env: DEPLOYER_PRIVATE_KEY (relays the Safe txs, pays gas),
-/// KEEPER_ADDRESS (the new writer), P3_SECONDARY_<SYM> x7.
+/// KEEPER_ADDRESS (the new writer), P3_SECONDARY_<SYM> x7 (sourced from
+/// the DeployOraclesP3.s.sol broadcast output — same vars used by P3 governance scripts).
 contract MigrateSecondaryWriters is Script {
     using SafeSigHelpers for Safe;
 
@@ -38,14 +39,10 @@ contract MigrateSecondaryWriters is Script {
             vm.envAddress("P3_SECONDARY_BRLC")
         ];
 
-        uint256[5] memory govKeys;
-        for (uint256 i = 0; i < 5; i++) {
-            govKeys[i] = vm.deriveKey(MNEMONIC, uint32(i));
-        }
         uint256[] memory keys3 = new uint256[](3);
-        keys3[0] = govKeys[0];
-        keys3[1] = govKeys[1];
-        keys3[2] = govKeys[2];
+        for (uint256 i = 0; i < 3; i++) {
+            keys3[i] = vm.deriveKey(MNEMONIC, uint32(i));
+        }
 
         vm.startBroadcast(deployerKey);
 
