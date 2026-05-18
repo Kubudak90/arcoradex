@@ -1,0 +1,26 @@
+[Unit]
+Description=ArcoraDEX — record aggregator prices into CumulativeDeviationGuard (Arc testnet)
+Documentation=https://github.com/Kubudak90/arcoradex
+After=network-online.target vault.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=arcora
+Group=arcora
+RuntimeDirectory=arcora
+RuntimeDirectoryMode=0700
+WorkingDirectory=/home/arcora/arcoradex-feeds
+Environment=KEEPER_TENANT=arcoradex
+ExecStartPre=/home/arcora/bin/fetch-keeper-secret.sh
+EnvironmentFile=-/run/arcora/keeper.env
+EnvironmentFile=/home/arcora/arcoradex-feeds/.env
+ExecStart=/usr/bin/node /home/arcora/arcoradex-feeds/guard-record.mjs
+ExecStopPost=/bin/rm -f /run/arcora/keeper.env
+Nice=10
+StandardOutput=journal
+StandardError=journal
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/run/arcora
+NoNewPrivileges=true
