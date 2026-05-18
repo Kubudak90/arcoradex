@@ -216,7 +216,7 @@ When the guard fires, the fresh reading is silently demoted to stale and the exi
 
 ### 4.4 `lastAcceptedPrice` per-operation ratchet
 
-`_readAndGuardPrice(address token)` (lines 310–328) is the function called by every mutating user operation (`deposit`, `withdraw`, `swap`). After obtaining the cache-guarded price from `_readUsdPrice1e18Mut`, it applies a second check against `lastAcceptedPrice[token]` — the price at which the previous user operation on this token executed:
+`_readAndGuardPrice(address token)` (lines 311–328) is the function called by every mutating user operation (`deposit`, `withdraw`, `swap`). After obtaining the cache-guarded price from `_readUsdPrice1e18Mut`, it applies a second check against `lastAcceptedPrice[token]` — the price at which the previous user operation on this token executed:
 
 ```
 diff = |price1e18 - prev|
@@ -548,7 +548,7 @@ The audit review covers all P1–P4 merged fixes. All Critical and High findings
 
 **P5 — Mainnet Deployment & Operations** is the next phase, conditional on P4 sign-off (all Critical/High Spearbit findings remediated and the final report received). P5 deliverables include: a step-by-step mainnet deployment runbook (Registry → Pool → token listings → oracle wiring → governance ownership transfer → liquidity bootstrap → unpause); an off-chain monitoring stack (feed freshness watcher, reserves-imbalance alert, multisig-pending-tx Slack webhook, deviation-breach alert, NAV daily snapshot); an incident-response playbook with a live drill across all Pause Guardian signers; and an Immunefi bug-bounty launch in the first week post-mainnet covering Pool, Registry, `OracleAggregator`, and governance contracts.
 
-Deferred work tracked in `docs/audit/p5-tracking.md`:
+Selected items from the 22-item P5 deferred-work register (`docs/audit/p5-tracking.md`) — IDs are non-contiguous because this table presents only the subset relevant to oracle and monitoring hardening:
 
 | Register ID | Item | Why deferred |
 |-------------|------|--------------|

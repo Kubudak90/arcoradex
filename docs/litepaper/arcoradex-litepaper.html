@@ -241,7 +241,7 @@ if diff * BPS &gt; cached * maxOracleDeviationBps  →  isFresh = false
 </code></pre>
 <p>When the guard fires, the fresh reading is silently demoted to stale and the existing cache value is returned. This prevents a single compromised oracle push from poisoning the cache in one block, even if it passes all the per-round checks in <code>_readOracle</code>. The same guard logic is applied identically in <code>_readUsdPrice1e18View</code> (the view-only NAV reader) and inlined in <code>_readUsdPrice1e18WithGuard</code> (the quote path reader).</p>
 <h3>4.4 <code>lastAcceptedPrice</code> per-operation ratchet</h3>
-<p><code>_readAndGuardPrice(address token)</code> (lines 310–328) is the function called by every mutating user operation (<code>deposit</code>, <code>withdraw</code>, <code>swap</code>). After obtaining the cache-guarded price from <code>_readUsdPrice1e18Mut</code>, it applies a second check against <code>lastAcceptedPrice[token]</code> — the price at which the previous user operation on this token executed:</p>
+<p><code>_readAndGuardPrice(address token)</code> (lines 311–328) is the function called by every mutating user operation (<code>deposit</code>, <code>withdraw</code>, <code>swap</code>). After obtaining the cache-guarded price from <code>_readUsdPrice1e18Mut</code>, it applies a second check against <code>lastAcceptedPrice[token]</code> — the price at which the previous user operation on this token executed:</p>
 <pre><code>diff = |price1e18 - prev|
 if diff * BPS &gt; prev * maxOracleDeviationBps  →  revert PriceDeviation(token, price1e18, prev, maxDevBps)
 </code></pre>
@@ -715,7 +715,7 @@ if diff * BPS &gt; prev * maxOracleDeviationBps  →  revert PriceDeviation(toke
 <p>The audit review covers all P1–P4 merged fixes. All Critical and High findings from the internal review were addressed before the <code>audit/spearbit-p4</code> freeze. The Spearbit report is private pending the protocol team&#39;s decision on publication.</p>
 <h3>8.3 Forward Look: P5 Mainnet Deployment and Deferred Work</h3>
 <p><strong>P5 — Mainnet Deployment &amp; Operations</strong> is the next phase, conditional on P4 sign-off (all Critical/High Spearbit findings remediated and the final report received). P5 deliverables include: a step-by-step mainnet deployment runbook (Registry → Pool → token listings → oracle wiring → governance ownership transfer → liquidity bootstrap → unpause); an off-chain monitoring stack (feed freshness watcher, reserves-imbalance alert, multisig-pending-tx Slack webhook, deviation-breach alert, NAV daily snapshot); an incident-response playbook with a live drill across all Pause Guardian signers; and an Immunefi bug-bounty launch in the first week post-mainnet covering Pool, Registry, <code>OracleAggregator</code>, and governance contracts.</p>
-<p>Deferred work tracked in <code>docs/audit/p5-tracking.md</code>:</p>
+<p>Selected items from the 22-item P5 deferred-work register (<code>docs/audit/p5-tracking.md</code>) — IDs are non-contiguous because this table presents only the subset relevant to oracle and monitoring hardening:</p>
 <table>
 <thead>
 <tr>
