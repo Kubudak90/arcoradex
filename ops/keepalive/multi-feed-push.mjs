@@ -38,13 +38,13 @@ const arcTestnet = defineChain({
 // market drifts faster than one tick: the keeper takes multiple ticks
 // to walk the on-chain answer toward the true price.
 const FEEDS = [
-    { symbol: "USDC",  feed: process.env.FEED_USDC,  hardcodedAnswer1e8: 100_000_000n, band: { min: 1.00, max: 1.00 }, maxDevBps: 50 },
-    { symbol: "USDT",  feed: process.env.FEED_USDT,  coingeckoId: "tether",          band: { min: 0.95, max: 1.05 }, maxDevBps: 50 },
-    { symbol: "PYUSD", feed: process.env.FEED_PYUSD, coingeckoId: "paypal-usd",      band: { min: 0.95, max: 1.05 }, maxDevBps: 50 },
-    { symbol: "DAI",   feed: process.env.FEED_DAI,   coingeckoId: "dai",             band: { min: 0.95, max: 1.05 }, maxDevBps: 50 },
-    { symbol: "EURC",  feed: process.env.FEED_EURC,  coingeckoVsCurrency: "eur",     band: { min: 1.00, max: 1.30 }, maxDevBps: 150 },
-    { symbol: "TRYC",  feed: process.env.FEED_TRYC,  coingeckoVsCurrency: "try",     band: { min: 0.01, max: 0.10 }, maxDevBps: 150 },
-    { symbol: "BRLC",  feed: process.env.FEED_BRLC,  coingeckoVsCurrency: "brl",     band: { min: 0.10, max: 0.30 }, maxDevBps: 150 },
+    { symbol: "USDC",  feed: process.env.FEED_USDC,  secondary: process.env.P3_SECONDARY_USDC,  hardcodedAnswer1e8: 100_000_000n, band: { min: 1.00, max: 1.00 }, maxDevBps: 50 },
+    { symbol: "USDT",  feed: process.env.FEED_USDT,  secondary: process.env.P3_SECONDARY_USDT,  coingeckoId: "tether",          band: { min: 0.95, max: 1.05 }, maxDevBps: 50 },
+    { symbol: "PYUSD", feed: process.env.FEED_PYUSD, secondary: process.env.P3_SECONDARY_PYUSD, coingeckoId: "paypal-usd",      band: { min: 0.95, max: 1.05 }, maxDevBps: 50 },
+    { symbol: "DAI",   feed: process.env.FEED_DAI,   secondary: process.env.P3_SECONDARY_DAI,   coingeckoId: "dai",             band: { min: 0.95, max: 1.05 }, maxDevBps: 50 },
+    { symbol: "EURC",  feed: process.env.FEED_EURC,  secondary: process.env.P3_SECONDARY_EURC,  coingeckoVsCurrency: "eur",     band: { min: 1.00, max: 1.30 }, maxDevBps: 150 },
+    { symbol: "TRYC",  feed: process.env.FEED_TRYC,  secondary: process.env.P3_SECONDARY_TRYC,  coingeckoVsCurrency: "try",     band: { min: 0.01, max: 0.10 }, maxDevBps: 150 },
+    { symbol: "BRLC",  feed: process.env.FEED_BRLC,  secondary: process.env.P3_SECONDARY_BRLC,  coingeckoVsCurrency: "brl",     band: { min: 0.10, max: 0.30 }, maxDevBps: 150 },
 ];
 
 const FEED_ABI = parseAbi([
@@ -116,6 +116,55 @@ async function fetchAllPrices(feeds, apiKey) {
     return out;
 }
 
+/// Pushes one band-checked USD price to a single feed address. Encapsulates
+/// the per-address logic (deviation cap vs that feed's own on-chain `prev`,
+/// staleness-refresh, skip-when-current). Returns "updated" | "skipped" | "errored".
+async function pushFeedAddress(publicClient, walletClient, label, feedAddr, usd, maxDevBps) {
+    try {
+        const targetAnswer = priceTo1e8(usd);
+        const [prev, lastUpdated] = await Promise.all([
+            publicClient.readContract({ address: feedAddr, abi: FEED_ABI, functionName: "latestAnswer" }),
+            publicClient.readContract({ address: feedAddr, abi: FEED_ABI, functionName: "latestUpdatedAt" }),
+        ]);
+        const ageSeconds = Math.floor(Date.now() / 1000) - Number(lastUpdated);
+
+        // Cap each push so the swap-time PriceGuard never reverts. The
+        // pool compares against lastAcceptedPrice (set on the prior swap),
+        // not the prior oracle answer, so capping vs `prev` is a strict
+        // upper bound on the deviation any swap can observe.
+        let newAnswer = targetAnswer;
+        let capped = false;
+        if (prev > 0n) {
+            const maxDeltaAbs = (prev * BigInt(maxDevBps)) / 10_000n;
+            const delta = targetAnswer > prev ? targetAnswer - prev : prev - targetAnswer;
+            if (delta > maxDeltaAbs) {
+                newAnswer = targetAnswer > prev ? prev + maxDeltaAbs : prev - maxDeltaAbs;
+                capped = true;
+            }
+        }
+
+        if (prev === newAnswer && ageSeconds < REFRESH_THRESHOLD_SECONDS) {
+            log(`${label}: unchanged at ${prev}, fresh (${ageSeconds}s)`);
+            return "skipped";
+        }
+        const hash = await walletClient.writeContract({
+            address: feedAddr,
+            abi: FEED_ABI,
+            functionName: "setAnswer",
+            args: [newAnswer],
+        });
+        await publicClient.waitForTransactionReceipt({ hash });
+        const reason = capped
+            ? `capped@${maxDevBps}bps (target=${targetAnswer})`
+            : prev === newAnswer ? "refresh" : "value";
+        log(`${label}: ${prev} -> ${newAnswer} (usd=${usd}, ${reason}, age=${ageSeconds}s) tx=${hash}`);
+        return "updated";
+    } catch (err) {
+        log(`${label}: ERROR ${err?.message || err}`);
+        return "errored";
+    }
+}
+
 async function main() {
     const pk = process.env.KEEPER_PRIVATE_KEY;
     if (!pk) {
@@ -135,63 +184,27 @@ async function main() {
     const prices = await fetchAllPrices(FEEDS, apiKey);
 
     for (const f of FEEDS) {
-        if (!f.feed) {
-            log(`${f.symbol}: feed address env missing — skip`);
-            errored++;
+        const usd = prices.get(f.symbol);
+        if (typeof usd !== "number") {
+            log(`${f.symbol}: price source returned no value (likely 429 or upstream gap) — skip both feeds`);
+            errored += 2;
             continue;
         }
-        try {
-            const usd = prices.get(f.symbol);
-            if (typeof usd !== "number") {
-                throw new Error("price source returned no value (likely 429 or upstream gap)");
-            }
-            if (usd < f.band.min || usd > f.band.max) {
-                log(`${f.symbol}: price ${usd} outside band [${f.band.min}, ${f.band.max}] — skip`);
-                skipped++;
+        if (usd < f.band.min || usd > f.band.max) {
+            log(`${f.symbol}: price ${usd} outside band [${f.band.min}, ${f.band.max}] — skip both feeds`);
+            skipped += 2;
+            continue;
+        }
+        for (const [label, addr] of [[`${f.symbol} primary`, f.feed], [`${f.symbol} secondary`, f.secondary]]) {
+            if (!addr) {
+                log(`${label}: feed address env missing — skip`);
+                errored++;
                 continue;
             }
-            const targetAnswer = priceTo1e8(usd);
-            const [prev, lastUpdated] = await Promise.all([
-                publicClient.readContract({ address: f.feed, abi: FEED_ABI, functionName: "latestAnswer" }),
-                publicClient.readContract({ address: f.feed, abi: FEED_ABI, functionName: "latestUpdatedAt" }),
-            ]);
-            const ageSeconds = Math.floor(Date.now() / 1000) - Number(lastUpdated);
-
-            // Cap each push so the swap-time PriceGuard never reverts. The
-            // pool compares against lastAcceptedPrice (set on the prior swap),
-            // not the prior oracle answer, so capping vs `prev` is a strict
-            // upper bound on the deviation any swap can observe.
-            let newAnswer = targetAnswer;
-            let capped = false;
-            if (prev > 0n) {
-                const maxDeltaAbs = (prev * BigInt(f.maxDevBps)) / 10_000n;
-                const delta = targetAnswer > prev ? targetAnswer - prev : prev - targetAnswer;
-                if (delta > maxDeltaAbs) {
-                    newAnswer = targetAnswer > prev ? prev + maxDeltaAbs : prev - maxDeltaAbs;
-                    capped = true;
-                }
-            }
-
-            if (prev === newAnswer && ageSeconds < REFRESH_THRESHOLD_SECONDS) {
-                log(`${f.symbol}: unchanged at ${prev}, fresh (${ageSeconds}s)`);
-                skipped++;
-                continue;
-            }
-            const hash = await walletClient.writeContract({
-                address: f.feed,
-                abi: FEED_ABI,
-                functionName: "setAnswer",
-                args: [newAnswer],
-            });
-            await publicClient.waitForTransactionReceipt({ hash });
-            const reason = capped
-                ? `capped@${f.maxDevBps}bps (target=${targetAnswer})`
-                : prev === newAnswer ? "refresh" : "value";
-            log(`${f.symbol}: ${prev} -> ${newAnswer} (usd=${usd}, ${reason}, age=${ageSeconds}s) tx=${hash}`);
-            updated++;
-        } catch (err) {
-            log(`${f.symbol}: ERROR ${err?.message || err}`);
-            errored++;
+            const outcome = await pushFeedAddress(publicClient, walletClient, label, addr, usd, f.maxDevBps);
+            if (outcome === "updated") updated++;
+            else if (outcome === "skipped") skipped++;
+            else errored++;
         }
     }
 
