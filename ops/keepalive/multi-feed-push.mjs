@@ -3,8 +3,8 @@
 // Pulls 6 USD prices from CoinGecko (USDC stays hardcoded at peg = $1.0000)
 // and pushes each price to both the primary and the P3 secondary
 // MockChainlinkFeedV2 feed on Arc testnet. Skips pushes when the on-chain
-// answer is already current and
-// rejects fetched prices that fall outside per-feed sanity bands.
+// answer is already current, and rejects fetched prices that fall outside
+// per-feed sanity bands.
 //
 // Designed to run from a systemd timer on the VPS (Type=oneshot every 30 min).
 
