@@ -1,0 +1,1016 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ArcoraDEX — Technical Litepaper</title>
+<style>
+  :root { color-scheme: light; }
+  body {
+    font-family: Georgia, "Times New Roman", serif;
+    line-height: 1.6; color: #1a1a1a; background: #ffffff;
+    max-width: 820px; margin: 0 auto; padding: 56px 32px;
+  }
+  h1, h2, h3 { font-family: -apple-system, Segoe UI, Roboto, sans-serif; line-height: 1.25; }
+  h1 { font-size: 2rem; border-bottom: 2px solid #1a1a1a; padding-bottom: .3em; }
+  h2 { font-size: 1.4rem; margin-top: 2.4em; border-bottom: 1px solid #ccc; padding-bottom: .2em; }
+  h3 { font-size: 1.12rem; margin-top: 1.6em; }
+  code { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: .88em;
+    background: #f3f3f3; padding: .1em .35em; border-radius: 3px; }
+  pre { background: #f6f8fa; padding: 14px 16px; border-radius: 6px; overflow-x: auto; }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 1.2em 0; font-size: .92rem;
+    font-family: -apple-system, Segoe UI, Roboto, sans-serif; }
+  th, td { border: 1px solid #d0d0d0; padding: 7px 10px; text-align: left; }
+  th { background: #f3f3f3; }
+  blockquote { border-left: 3px solid #bbb; margin: 1em 0; padding: .2em 1em; color: #444; }
+  a { color: #0b5fa5; }
+  hr { border: none; border-top: 1px solid #ddd; margin: 2em 0; }
+  @media print {
+    body { max-width: none; padding: 0; font-size: 11pt; }
+    h1, h2 { page-break-after: avoid; }
+    h3 { page-break-after: avoid; }
+    pre, table, blockquote { page-break-inside: avoid; }
+    a { color: #1a1a1a; text-decoration: none; }
+  }
+</style>
+</head>
+<body>
+<h1>ArcoraDEX — Technical Litepaper</h1>
+<p><strong>Version:</strong> draft — Phase 4 (pre-audit)
+<strong>Date:</strong> 2026-05-18
+<strong>Status:</strong> ArcoraDEX is deployed on the Arc testnet (chainId 5042002) and is undergoing a Spearbit private security review ahead of mainnet. This document describes the protocol as of the <code>audit/spearbit-p4</code> baseline.</p>
+<hr>
+<h2>1. Abstract</h2>
+<p>ArcoraDEX is an oracle-priced, multi-stablecoin vault AMM deployed on the Arc testnet. It presents a single shared liquidity pool that simultaneously serves every trading pair across seven listed stablecoins (USDC, USDT, PYUSD, DAI, EURC, TRYC, and BRLC). Liquidity providers deposit any listed token and receive a single fungible receipt token, <code>ADEX-LP</code>, whose price tracks the net asset value (NAV) of the entire pool.</p>
+<p>The core problem ArcoraDEX addresses is the fragmentation and slippage inherent in constant-product AMMs when applied to pegged assets. A typical x·y=k design requires a separate pair contract per token combination, splitting liquidity across many pools and imposing price impact proportional to the depth of each individual pair. For stablecoins — whose fair-value exchange rate is always close to the oracle price — this slippage is a structural cost with no compensating benefit. ArcoraDEX instead prices every swap from external oracle feeds: the output amount is calculated from the ratio of the two tokens&#39; oracle prices, not from an invariant curve. All reserves are pooled into a single vault, so liquidity deposited once is available to every pair simultaneously.</p>
+<p>The LP token represents a proportional claim on the pool&#39;s NAV. Fees collected from swaps and withdrawals accrue directly inside the reserves, increasing NAV and therefore increasing the value of all outstanding LP shares. There is no separate fee-distribution mechanism and no protocol-native token.</p>
+<p>ArcoraDEX is pre-mainnet software. It is currently deployed on the Arc testnet (chainId 5042002) and is undergoing a private security review by Spearbit ahead of any mainnet deployment. This document reflects the protocol at the <code>audit/spearbit-p4</code> codebase baseline and is intended for developers, auditors, and sophisticated liquidity providers evaluating the protocol.</p>
+<h2>2. Protocol Overview</h2>
+<h3>Vault model</h3>
+<p>ArcoraDEX operates as a multi-asset vault rather than a collection of pair pools. A single <code>ArcoraDexPool</code> contract holds all token reserves and is the sole entry point for deposits, withdrawals, and swaps. The pool references an <code>ArcoraDexRegistry</code> for per-token configuration, and deploys a single <code>ArcoraDexLP</code> (ERC20 ticker: <code>ADEX-LP</code>) in its constructor as the LP receipt token. All three contracts are immutably bound at deployment.</p>
+<h3>Listed stablecoins</h3>
+<p>The pool lists seven stablecoins, each with its own oracle and configuration registered in <code>ArcoraDexRegistry</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Symbol</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>USDC</td>
+<td>USD Coin</td>
+</tr>
+<tr>
+<td>USDT</td>
+<td>Tether USD</td>
+</tr>
+<tr>
+<td>PYUSD</td>
+<td>PayPal USD</td>
+</tr>
+<tr>
+<td>DAI</td>
+<td>Dai Stablecoin</td>
+</tr>
+<tr>
+<td>EURC</td>
+<td>Circle Euro Coin</td>
+</tr>
+<tr>
+<td>TRYC</td>
+<td>Circle Turkish Lira Coin</td>
+</tr>
+<tr>
+<td>BRLC</td>
+<td>Circle Brazilian Real Coin</td>
+</tr>
+</tbody></table>
+<p>EURC, TRYC, and BRLC are non-USD pegs; their oracle prices are expressed in USD, so the pool treats them identically to USD-pegged assets at the contract level while their oracle prices naturally reflect the prevailing exchange rate.</p>
+<h3>Shared LP token (<code>ADEX-LP</code>)</h3>
+<p>All liquidity providers receive shares of the same <code>ArcoraDexLP</code> ERC20 token regardless of which stablecoin they deposit. There is no per-pair LP token. A single <code>ADEX-LP</code> balance represents a proportional claim on the pool&#39;s entire NAV.</p>
+<p><code>ArcoraDexLP</code> is a minimal ERC20 whose <code>mint()</code> and <code>burn()</code> functions are restricted to the immutable <code>MINTER</code> address — the pool itself. The LP contract has no owner or admin. The <code>_update()</code> override propagates the pool&#39;s minimum-hold lock through secondary transfers (see §5 for the JIT-sandwich defence).</p>
+<h3>NAV accounting</h3>
+<p>The pool&#39;s net asset value (<code>totalReservesUSD</code>) is the USD sum of its reserves across all active tokens:</p>
+<pre><code>NAV = Σ ( reserves[token] × price1e18[token] / 10^decimals[token] )
+</code></pre>
+<p><code>reserves[token]</code> is an explicit storage mapping in <code>ArcoraDexPool</code> — it is updated on every <code>deposit</code>, <code>withdraw</code>, and <code>swap</code> call. The pool does <strong>not</strong> read <code>token.balanceOf(address(this))</code> for accounting. This architectural choice makes the pool immune to donation-inflation attacks: tokens sent to the pool address outside of a <code>deposit</code> call land in the contract&#39;s token balance but do not affect <code>reserves[]</code>, so NAV is unchanged and no attacker can inflate it by donating tokens.</p>
+<p>LP share minting and redemption use virtual offsets (<code>VIRTUAL_SHARES = 1e6</code>, <code>VIRTUAL_ASSETS = 1</code> — both declared <code>internal constant</code> in <code>ArcoraDexPool</code>, fixed at compile time and not exposed in the ABI) in an ERC4626-style formula. These offsets guarantee that any non-zero deposit mints at least one LP share (preventing round-down-to-zero on small follow-up deposits) and provide belt-and-suspenders defence against inflation attacks on the LP math, independently of the <code>reserves[]</code> structural protection above.</p>
+<h3>Registry configuration</h3>
+<p><code>ArcoraDexRegistry</code> stores a <code>TokenInfo</code> struct for each listed token containing:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>decimals</code></td>
+<td>Token decimal count (verified against <code>IERC20Metadata.decimals()</code> at <code>listToken</code> time)</td>
+</tr>
+<tr>
+<td><code>isActive</code></td>
+<td>Whether the token is eligible for operations</td>
+</tr>
+<tr>
+<td><code>usdOracle</code></td>
+<td>Address of the <code>IChainlinkAggregator</code>-compatible oracle for this token</td>
+</tr>
+<tr>
+<td><code>maxOracleDeviationBps</code></td>
+<td>Per-operation price-change cap (in basis points); enforced by the pool&#39;s deviation ratchet</td>
+</tr>
+<tr>
+<td><code>maxStaleSeconds</code></td>
+<td>Maximum age of an accepted oracle round (enforced in <code>_readOracle</code>)</td>
+</tr>
+</tbody></table>
+<p>All registry mutators (<code>listToken</code>, <code>setOracle</code>, <code>setDeviation</code>, <code>setMaxStaleSeconds</code>, <code>deactivateToken</code>, <code>reactivateToken</code>) are <code>onlyOwner</code>, with the owner set to the 48-hour governance Timelock (see §6).</p>
+<h2>3. Mechanism Design</h2>
+<h3>3.1 Oracle pricing vs. constant-product</h3>
+<p>A constant-product AMM (x·y=k) prices assets by the ratio of reserves. When two assets are near-perfectly pegged to the same value, the fair exchange rate is always approximately 1:1 (or at a known oracle-derived ratio for cross-currency stablecoins). A bonding curve forces a trader to move the pool&#39;s internal price across a range to complete a swap, incurring slippage even when the on-chain reserve ratio happens to diverge from the true market price.</p>
+<p>ArcoraDEX bypasses this by pricing directly from oracle feeds. The output of a swap is determined by the ratio of the two tokens&#39; oracle-reported USD prices — not by the shape of any curve. For $1 USD-equivalent in, the pool returns $1 USD-equivalent out (minus fees), regardless of the current reserve composition. This eliminates curve-induced slippage for trades within the oracle&#39;s price precision.</p>
+<p>The trade-off is oracle dependence: if an oracle is compromised or goes stale, the pool cannot price correctly. ArcoraDEX addresses this with a multi-layer oracle defence — a two-source aggregation layer, a per-block price ratchet (<code>lastAcceptedPrice</code>), and a price cache with a deviation guard — described in §4.</p>
+<h3>3.2 Deposits and LP shares</h3>
+<p>Function: <code>deposit(address token, uint256 amount, uint256 minLpOut, uint256 deadline)</code></p>
+<p>A depositor transfers <code>amount</code> of <code>token</code> to the pool. The pool prices the deposit in USD using <code>_readAndGuardPrice(token)</code> (the guarded oracle price: a live oracle reading resolved through a cache-fallback / deviation guard and then a per-operation ratchet against <code>lastAcceptedPrice</code> — the full mechanism is described in §4). The USD value is:</p>
+<pre><code>usdIn = amount × price1e18[token] / 10^decimals[token]
+</code></pre>
+<p>LP shares minted are proportional to the NAV increase the deposit represents. The formula uses virtual offsets to prevent round-down-to-zero for small deposits and to provide inflation-attack defence:</p>
+<pre><code>-- follow-on deposit (supply &gt; 0) --
+lpMinted = usdIn × (totalSupply + VIRTUAL_SHARES) / (NAV + VIRTUAL_ASSETS)
+</code></pre>
+<p>where <code>VIRTUAL_SHARES = 1e6</code> and <code>VIRTUAL_ASSETS = 1</code> (both <code>internal constant</code> in <code>ArcoraDexPool</code> — compile-time fixed, not ABI-exposed).</p>
+<p><strong>First deposit.</strong> When <code>LP.totalSupply() == 0</code>, the formula simplifies to <code>usdIn × VIRTUAL_SHARES / VIRTUAL_ASSETS</code>. The first deposit must exceed <code>MINIMUM_LIQUIDITY</code> (1000 USD-units); on success, <code>MINIMUM_LIQUIDITY</code> LP shares are permanently burned to <code>DEAD_ADDRESS</code> (<code>0x000…dead</code>) to prevent the pool from returning to a zero-supply state (see §5 for the inflation-attack defence rationale).</p>
+<p>After minting, <code>reserves[token]</code> is incremented and <code>lastMintAt[msg.sender]</code> is set to <code>block.timestamp</code>, initiating the minimum hold period (§5).</p>
+<h3>3.3 Swaps</h3>
+<p>Function: <code>swap(address tokenIn, address tokenOut, uint256 amountIn, uint256 minOut, uint256 deadline, address recipient)</code></p>
+<p>Both <code>tokenIn</code> and <code>tokenOut</code> are independently oracle-priced via <code>_readAndGuardPrice</code>. The gross output is computed by USD-normalised cross-token pricing:</p>
+<pre><code>usdValue = amountIn × pIn / 10^dIn
+gross     = usdValue × 10^dOut / pOut
+</code></pre>
+<p>The swap fee is deducted from <code>gross</code>:</p>
+<pre><code>fee       = gross × swapFeeBps / BPS
+amountOut = gross - fee
+protFee   = fee × protocolFeeShareBps / BPS
+</code></pre>
+<p>The pool checks that <code>reserves[tokenOut] &gt;= amountOut + protFee</code> before executing any token transfer (liquidity guard). The output is then transferred to <code>recipient</code>. The protocol&#39;s share of the fee (<code>protFee</code>) is credited to <code>protocolFeesAccrued[tokenOut]</code> and excluded from <code>reserves[tokenOut]</code>; the LP-retained portion of the fee (fee − protFee) implicitly increases NAV because the reserves net of <code>amountOut</code> are larger relative to outstanding LP supply.</p>
+<p>The pool enforces a slippage parameter: if <code>amountOut &lt; minOut</code>, the call reverts <code>InsufficientOutput</code>. A <code>deadline</code> parameter causes reversion after the specified timestamp.</p>
+<h3>3.4 Withdrawals</h3>
+<p>Function: <code>withdraw(address tokenOut, uint256 lpAmount, uint256 minTokenOut, uint256 deadline)</code></p>
+<p>LP shares are burned for a proportional share of reserves, denominated in a single chosen output token. The redemption value in USD is:</p>
+<pre><code>usdRedeemed = lpAmount × (NAV + VIRTUAL_ASSETS) / (totalSupply + VIRTUAL_SHARES)
+</code></pre>
+<p>A withdrawal fee is applied using the same <code>swapFeeBps</code> and <code>protocolFeeShareBps</code> parameters as swaps. The fee is taken from <code>usdRedeemed</code>; the remaining USD value is converted to <code>tokenOut</code> at the oracle price:</p>
+<pre><code>usdNet    = usdRedeemed × (BPS - swapFeeBps) / BPS
+amountOut = usdNet × 10^dOut / priceOut
+</code></pre>
+<p>The LP-retained fee share again stays in reserves, growing NAV for remaining holders. The protocol&#39;s fee share is moved to <code>protocolFeesAccrued[tokenOut]</code>.</p>
+<p><strong>Minimum hold.</strong> Withdrawals are gated by a <code>MIN_HOLD_SECONDS</code> (<code>1 hours</code>) lock. The pool reverts <code>EarlyWithdraw</code> if <code>block.timestamp &lt; lastMintAt[msg.sender] + MIN_HOLD_SECONDS</code>. This lock is propagated through LP transfers via <code>ArcoraDexLP._update()</code> → <code>ArcoraDexPool.notifyLPTransfer()</code>, so secondary recipients inherit the stricter of the two senders&#39; unexpired holds (see §5).</p>
+<h3>3.5 Fee model</h3>
+<p>ArcoraDEX applies a single swap fee rate (<code>swapFeeBps</code>) expressed in basis points. The fee is split into two shares:</p>
+<table>
+<thead>
+<tr>
+<th>Share</th>
+<th>Variable</th>
+<th>Destination</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Protocol share</td>
+<td><code>protocolFeeShareBps</code></td>
+<td>Credited to <code>protocolFeesAccrued[tokenOut]</code>; withdrawn by governance via <code>withdrawProtocolFees</code></td>
+</tr>
+<tr>
+<td>LP share</td>
+<td><code>swapFeeBps - protocol portion</code></td>
+<td>Remains in <code>reserves[]</code>; accrues to all LP holders as NAV growth</td>
+</tr>
+</tbody></table>
+<p>Fee caps enforced in the contract prevent governance from setting rates above safe bounds:</p>
+<table>
+<thead>
+<tr>
+<th>Constant</th>
+<th>Value</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>MAX_SWAP_FEE_BPS</code></td>
+<td><code>100</code></td>
+<td>Maximum swap fee: 1% of the gross output</td>
+</tr>
+<tr>
+<td><code>MAX_PROTOCOL_FEE_SHARE_BPS</code></td>
+<td><code>2500</code></td>
+<td>Maximum protocol cut of the collected swap fee: 25%</td>
+</tr>
+</tbody></table>
+<p>Both caps are hard-coded <code>uint16 public constant</code> values in <code>ArcoraDexPool</code>. Fee changes require an <code>onlyOwner</code> call (<code>setSwapFeeBps</code> / <code>setProtocolFeeShareBps</code>) routed through the 48-hour governance Timelock, providing advance notice before any rate change takes effect.</p>
+<p>The only LP yield is the retained share of swap fees and withdrawal fees accruing as NAV growth. There is no additional token reward, no emission schedule, and no liquidity-mining programme.</p>
+<h2>4. Oracle Architecture</h2>
+<p>Oracle pricing is the core architectural bet in ArcoraDEX — and the largest attack surface. The oracle layer is a stack of four independent controls, each targeting a distinct failure mode: aggregator-level source divergence, pool-level cache poisoning, per-operation price movement, and rolling-window observability. This section describes each layer in precise contract terms.</p>
+<h3>4.1 Per-token <code>OracleAggregator</code></h3>
+<p>Each of the seven listed tokens has its own <code>OracleAggregator</code> contract (<code>contracts/src/oracle/OracleAggregator.sol</code>) deployed and registered as the token&#39;s <code>usdOracle</code> in <code>ArcoraDexRegistry</code>. The aggregator wraps an immutable <code>PRIMARY</code> and an immutable <code>SECONDARY</code> feed, both <code>IChainlinkAggregator</code>-compatible, with a matching <code>DECIMALS</code> verified at construction (<code>DecimalsMismatch</code> reverts if they differ). The pool interacts with <code>OracleAggregator</code> identically to a direct Chainlink feed — it calls <code>latestRoundData()</code> and <code>decimals()</code> on the <code>usdOracle</code> address obtained from the registry.</p>
+<p><strong>Normal mode (both sources live).</strong> <code>latestRoundData()</code> calls <code>_tryRead(PRIMARY)</code> and <code>_tryRead(SECONDARY)</code>. Each <code>_tryRead</code> wraps the underlying feed in a <code>try</code>/<code>catch</code> and validates the returned tuple: positive <code>answer</code>, non-zero <code>updatedAt</code>, non-zero <code>roundId</code>, and <code>answeredInRound &gt;= roundId</code> (round-completeness check). A revert or any validation failure returns <code>(false, 0, 0)</code>. When both sources return a valid reading, the aggregator checks divergence:</p>
+<pre><code>absDiff * 10_000 &gt; minAns * maxDivergenceBps  →  revert SourcesDiverge(primary, secondary, capBps)
+</code></pre>
+<p>If the check passes, the aggregator returns the integer midpoint <code>(pAns + sAns) / 2</code> and the more-recent of the two <code>updatedAt</code> timestamps. The <code>mid</code> computation (sum of two positive <code>int256</code> values) cannot overflow in practice.</p>
+<p><strong>Single-source degraded mode.</strong> If exactly one source passes <code>_tryRead</code>, the aggregator returns that source&#39;s answer directly. No divergence cross-check is possible in this state — the second-opinion guard is inactive. The off-chain monitoring hook <code>sourceHealth()</code> returns <code>(primaryOk, secondaryOk)</code> so keepers can detect and alert on degraded-mode operation.</p>
+<p><strong>Full failure.</strong> If both sources fail <code>_tryRead</code>, the aggregator reverts <code>AllSourcesUnavailable</code>. This revert propagates upward until it is caught by the pool&#39;s <code>_readOracle</code> try/catch (see §4.2).</p>
+<p><strong>Staleness enforcement.</strong> The aggregator itself does not enforce a maximum answer age — it only validates round completeness and non-negativity. Per-token staleness bounds (<code>maxStaleSeconds</code>) are enforced downstream by the pool&#39;s <code>_readOracle</code>, using the value stored in <code>ArcoraDexRegistry.TokenInfo</code>.</p>
+<h3>4.2 Pool oracle read path: <code>_readOracle</code> and <code>lastValidPrice</code> cache</h3>
+<p><code>_readOracle(address token)</code> (<code>ArcoraDexPool.sol</code> lines 98–135) is an <code>internal view</code> function — it reads state but never writes it. Its responsibilities are:</p>
+<ol>
+<li>Fetch <code>TokenInfo</code> from <code>REGISTRY.tokenInfo(token)</code> to obtain <code>usdOracle</code>, <code>decimals</code>, <code>isActive</code>, and <code>maxStaleSeconds</code>. Revert <code>TokenNotActive</code> if <code>!info.isActive</code>.</li>
+<li>Wrap <code>info.usdOracle.latestRoundData()</code> in a <code>try</code>/<code>catch</code>. A revert from any cause — <code>AllSourcesUnavailable</code>, <code>SourcesDiverge</code>, ABI mismatch, or a deactivated Chainlink feed — is caught and produces <code>isFresh = false</code>.</li>
+<li>When the call succeeds, apply additional validation: <code>roundId != 0</code>, <code>answeredInRound &gt;= roundId</code>, <code>updatedAt != 0</code>, <code>updatedAt &lt;= block.timestamp</code>, <code>(block.timestamp - updatedAt) &lt;= maxStaleSeconds</code>, and <code>answer &gt; 0</code>. Any failure sets <code>isFresh = false</code>.</li>
+<li>When all validations pass, wrap <code>info.usdOracle.decimals()</code> in a <code>try</code>/<code>catch</code> and normalise to a 1e18-scaled USD price. A revert from <code>decimals()</code> also sets <code>isFresh = false</code>.</li>
+<li>Return <code>(price1e18, tokenDecimals, isFresh)</code> — no storage writes.</li>
+</ol>
+<p>The <code>lastValidPrice[token]</code> cache is written by <code>_readUsdPrice1e18Mut(token)</code> (lines 142–179), the stateful wrapper used in every deposit, withdrawal, and swap execution. The cache is updated when <code>isFresh = true</code> and the cache-deviation guard (see §4.3) accepts the reading. When the oracle is stale, reverts, or the reading is rejected by the cache-deviation guard, <code>_readUsdPrice1e18Mut</code> returns the existing cache value rather than reverting. A <code>NoValidPrice(token)</code> revert fires only if the cache has never been seeded for that token (i.e., <code>lastValidPrice[token] == 0</code>, which can only occur before the first successful price read for a token). This architecture ensures that a reverting or stale oracle cannot brick the pool for an already-active token (see also INV-6 in <code>docs/audit/invariants.md</code>).</p>
+<p>The companion <code>lastValidPriceAt[token]</code> timestamp records when the cache was last written; it is stored for off-chain diagnostics and is not used in any on-chain control path.</p>
+<h3>4.3 Cache-deviation guard</h3>
+<p>A fresh oracle reading is accepted by the cache only if it does not diverge from the existing cache by more than <code>maxOracleDeviationBps</code>. The check (inside <code>_readUsdPrice1e18Mut</code>, lines 150–164) is:</p>
+<pre><code>diff = |price1e18 - cached|
+if diff * BPS &gt; cached * maxOracleDeviationBps  →  isFresh = false
+</code></pre>
+<p>When the guard fires, the fresh reading is silently demoted to stale and the existing cache value is returned. This prevents a single compromised oracle push from poisoning the cache in one block, even if it passes all the per-round checks in <code>_readOracle</code>. The same guard logic is applied identically in <code>_readUsdPrice1e18View</code> (the view-only NAV reader) and inlined in <code>_readUsdPrice1e18WithGuard</code> (the quote path reader).</p>
+<h3>4.4 <code>lastAcceptedPrice</code> per-operation ratchet</h3>
+<p><code>_readAndGuardPrice(address token)</code> (lines 311–328) is the function called by every mutating user operation (<code>deposit</code>, <code>withdraw</code>, <code>swap</code>). After obtaining the cache-guarded price from <code>_readUsdPrice1e18Mut</code>, it applies a second check against <code>lastAcceptedPrice[token]</code> — the price at which the previous user operation on this token executed:</p>
+<pre><code>diff = |price1e18 - prev|
+if diff * BPS &gt; prev * maxOracleDeviationBps  →  revert PriceDeviation(token, price1e18, prev, maxDevBps)
+</code></pre>
+<p>On success, <code>lastAcceptedPrice[token]</code> is overwritten with the accepted price (line 327), advancing the ratchet forward. This ratchet limits how far the executing price can move per user operation, regardless of how far the oracle has moved in the interim. An attacker attempting a slow-walk price-manipulation drain must therefore execute at least <code>100% / maxOracleDeviationBps</code> separate transactions to walk <code>lastAcceptedPrice</code> 100% from its initial value — providing off-chain monitoring time to detect and respond.</p>
+<p>The ratchet can be bypassed by the owner via <code>syncAcceptedPrice(address token)</code> (<code>onlyOwner</code>, Timelock-gated, 48 h delay). This escape hatch is necessary for legitimate large market moves (e.g., TRYC or BRLC after a central-bank repricing) but requires a 48-hour governance proposal to execute.</p>
+<h3>4.5 <code>CumulativeDeviationGuard</code> — event-only rolling observability</h3>
+<p><code>CumulativeDeviationGuard</code> (<code>contracts/src/oracle/CumulativeDeviationGuard.sol</code>) is a separate, standalone contract. It is <strong>not</strong> wired into any pool call path. Its purpose is to provide off-chain monitoring with a deterministic, on-chain record of cumulative price deviation.</p>
+<p>Anyone — an off-chain keeper, a monitoring script, or an EOA — calls <code>record(address token, uint256 price1e18)</code> after an oracle update. The contract maintains a per-token tumbling-window state <code>(startPrice1e18, startTimestamp)</code>:</p>
+<ul>
+<li>If the window has expired (configurable via <code>setConfig</code>, <code>onlyOwner</code>; default 86 400 s / 24 h) or has not been initialised, the window is reset to the current observation.</li>
+<li>Within an active window, the deviation from the window anchor is computed as <code>|price1e18 - startPrice1e18| * 10_000 / startPrice1e18</code>. If this exceeds <code>maxCumulativeBps</code>, <code>CircuitBreakerTripped(token, deviationBps, timestamp)</code> is emitted. <code>PriceObserved(token, price1e18, timestamp)</code> is emitted on every call.</li>
+</ul>
+<p><strong>There is no on-chain auto-pause in the current phase (P3).</strong> An emitted <code>CircuitBreakerTripped</code> event is a signal to an off-chain monitor, which then decides whether to submit a transaction through the Pause Guardian Safe to call <code>pool.pause()</code>. The monitoring layer — not the contract — is the decision maker.</p>
+<p><code>record</code> is permissionless: any caller can invoke it with any price. This is intentional for P3 because the contract has no on-chain effect beyond emitting events. However, it means <code>CircuitBreakerTripped</code> events must be treated as untrusted hints by the off-chain monitor, which must re-validate the price against its own trusted feed before paging the Pause Guardian (per the NatSpec at <code>CumulativeDeviationGuard.sol</code> lines 26–30). If a future phase wires on-chain auto-pause to this contract, <code>record</code> must first be made keeper-only (tracked in <code>docs/audit/p5-tracking.md</code>).</p>
+<p>The tumbling-window design is an explicit P3 MVP trade-off: it is cheaper to operate than a true rolling window but does not detect slow drift that stays just under the cap within each window and accumulates across window boundaries. A rolling multi-window detector is deferred to P5.</p>
+<h3>4.6 The three distinct deviation controls</h3>
+<p>Three separate parameters govern oracle deviation in ArcoraDEX. They are not redundant — each measures a different quantity at a different layer:</p>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Location</th>
+<th>What it measures</th>
+<th>When it fires</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>OracleAggregator.maxDivergenceBps</code></td>
+<td><code>OracleAggregator.sol</code></td>
+<td>Spread between <strong>primary and secondary source prices</strong> at the moment of the aggregator read</td>
+<td><code>revert SourcesDiverge</code> during <code>latestRoundData()</code> — before any price reaches the pool</td>
+</tr>
+<tr>
+<td><code>ArcoraDexRegistry.maxOracleDeviationBps</code> (per token)</td>
+<td><code>IArcoraDexRegistry.TokenInfo</code></td>
+<td>Jump from the <strong>aggregator&#39;s output vs. the pool&#39;s <code>lastValidPrice</code> cache</strong> (cache-deviation guard) and vs. <strong><code>lastAcceptedPrice</code></strong> (ratchet guard) per user operation</td>
+<td>Cache-deviation guard: demotes the fresh price to stale (silent fallback to cache). Ratchet guard: <code>revert PriceDeviation</code> in <code>_readAndGuardPrice</code> and in <code>_readUsdPrice1e18WithGuard</code></td>
+</tr>
+<tr>
+<td><code>CumulativeDeviationGuard.maxCumulativeBps</code> (per token)</td>
+<td><code>CumulativeDeviationGuard.sol Config</code></td>
+<td>Absolute deviation from the <strong>tumbling-window anchor</strong> over the configured window period</td>
+<td>Event-only: <code>emit CircuitBreakerTripped</code> — no on-chain revert or pause</td>
+</tr>
+</tbody></table>
+<p><code>maxDivergenceBps</code> is a feed-spread control: it answers &quot;are both of my oracle sources telling the same story right now?&quot; <code>maxOracleDeviationBps</code> is a pool-state control: it answers &quot;is the current oracle output too far from the price the pool last accepted?&quot; <code>maxCumulativeBps</code> is a monitoring control: it answers &quot;has cumulative drift over the window exceeded the threshold an operator cares about?&quot;</p>
+<p><strong>Deployed configuration</strong> (post-P3 Timelock batch):</p>
+<table>
+<thead>
+<tr>
+<th>Token</th>
+<th>Aggregator <code>maxDivergenceBps</code></th>
+<th>Registry <code>maxOracleDeviationBps</code></th>
+<th>Guard <code>maxCumulativeBps</code></th>
+<th>Guard window</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>USDC</td>
+<td>50</td>
+<td>50</td>
+<td>200</td>
+<td>86 400 s (24 h)</td>
+</tr>
+<tr>
+<td>USDT</td>
+<td>50</td>
+<td>50</td>
+<td>200</td>
+<td>86 400 s (24 h)</td>
+</tr>
+<tr>
+<td>PYUSD</td>
+<td>50</td>
+<td>50</td>
+<td>200</td>
+<td>86 400 s (24 h)</td>
+</tr>
+<tr>
+<td>DAI</td>
+<td>50</td>
+<td>50</td>
+<td>200</td>
+<td>86 400 s (24 h)</td>
+</tr>
+<tr>
+<td>EURC</td>
+<td>100</td>
+<td>150</td>
+<td>300</td>
+<td>86 400 s (24 h)</td>
+</tr>
+<tr>
+<td>TRYC</td>
+<td>200</td>
+<td>200</td>
+<td>500</td>
+<td>86 400 s (24 h)</td>
+</tr>
+<tr>
+<td>BRLC</td>
+<td>200</td>
+<td>200</td>
+<td>500</td>
+<td>86 400 s (24 h)</td>
+</tr>
+</tbody></table>
+<p>TRYC and BRLC carry wider divergence caps (200 bps vs. 50 bps for USD stables) to accommodate the higher natural volatility of their reference currencies. Their Registry <code>maxOracleDeviationBps</code> was reduced from 5 000 bps to 200 bps by the P3 Timelock batch (operations 8–9 of that batch) to close finding #1.</p>
+<h2>5. Security Model</h2>
+<p>The P1–P3 hardening programme addressed eleven findings (eight from an external audit plus three economic-attack vectors identified in a follow-up internal pass). This section describes the specific mitigations deployed against the two highest-impact attack classes: economic attacks on LP accounting and oracle-manipulation attacks on pricing. Residual risks that persist after these mitigations are documented separately in §7.</p>
+<h3>5.1 Economic-attack defences</h3>
+<h4>First-depositor inflation attack (finding #A, CRITICAL → Fixed, P1)</h4>
+<p><strong>The attack.</strong> Classic ERC4626-style inflation: the first depositor receives a minimal number of LP shares, then donates a large token balance directly to the pool contract, inflating the NAV without minting LP. Any subsequent depositor&#39;s calculated LP share rounds to zero due to the low <code>totalSupply / NAV</code> ratio, causing their tokens to be permanently locked in the pool with no corresponding LP receipt.</p>
+<p><strong>Why it does not apply to ArcoraDEX.</strong></p>
+<p>Two independent defences are active simultaneously:</p>
+<ol>
+<li><p><strong>Structural donation immunity via <code>reserves[]</code>.</strong> The pool does not read <code>token.balanceOf(address(this))</code> anywhere in its accounting. NAV is computed solely from the explicit <code>reserves[token]</code> mapping, which is incremented only by <code>deposit</code> and <code>swap</code> calls. Tokens transferred directly to the pool address — a &quot;donation&quot; — update the ERC20 balance of the pool contract but do not update <code>reserves[token]</code>, so NAV is unchanged and no LP inflation is possible from this vector (see INV-5 in <code>docs/audit/invariants.md</code>).</p>
+</li>
+<li><p><strong>Virtual-shares offset.</strong> The LP mint formula uses <code>VIRTUAL_SHARES = 1e6</code> and <code>VIRTUAL_ASSETS = 1</code> (<code>internal constant</code> in <code>ArcoraDexPool</code>, compile-time fixed):</p>
+<pre><code>lpMinted = usdIn × (totalSupply + VIRTUAL_SHARES) / (NAV + VIRTUAL_ASSETS)
+</code></pre>
+<p>The <code>VIRTUAL_SHARES</code> term (10⁶) dominates the numerator when <code>totalSupply</code> is small, preventing round-down-to-zero for any positive <code>usdIn</code> regardless of the <code>totalSupply / NAV</code> ratio. The symmetric formula is applied in <code>withdraw</code>. This ERC4626-style offset is an independent defence against LP-math inflation attacks, operating correctly even if the <code>reserves[]</code> architecture is somehow bypassed.</p>
+</li>
+</ol>
+<p>As additional defense-in-depth, <strong><code>MINIMUM_LIQUIDITY</code> permanent burn</strong> is applied on the first deposit: <code>MINIMUM_LIQUIDITY = 1000</code> LP shares are minted to <code>DEAD_ADDRESS</code> (<code>address(0xdead)</code>) and can never be burned (the pool&#39;s <code>withdraw</code> burns only from <code>msg.sender</code>, never from <code>0xdead</code>). This creates a permanent non-zero LP floor that, combined with the virtual-shares offset, makes the first-deposit branch economically self-defeating for an attacker: the attacker must sacrifice at least 1 000 USD-wei of LP to initiate any inflation attempt, and the virtual-shares formula removes the incentive regardless.</p>
+<h4>JIT/MEV sandwich attack (finding #B, HIGH → Fixed, P1)</h4>
+<p><strong>The attack.</strong> A block builder or searcher can observe a pending keeper oracle update, deposit just before it, and withdraw immediately after, capturing the NAV delta (the difference between the pre-update and post-update pool valuation) with effectively zero capital at risk. Because <code>totalReservesUSD()</code> always reads the current oracle, a deposit and an immediate withdrawal in adjacent transactions within a single MEV bundle would perfectly straddle the oracle price move.</p>
+<p><strong>Fix — two layers:</strong></p>
+<ol>
+<li><p><strong>1-hour minimum hold (<code>MIN_HOLD_SECONDS = 1 hours</code>).</strong> <code>deposit</code> writes <code>lastMintAt[msg.sender] = block.timestamp</code> at line 405 of <code>ArcoraDexPool.sol</code>. <code>withdraw</code> enforces <code>block.timestamp &gt;= lastMintAt[msg.sender] + MIN_HOLD_SECONDS</code>, reverting <code>EarlyWithdraw(unlockAt, block.timestamp)</code> on violation. One hour covers at least two keeper cycles (the oracle keeper fires every ~30 minutes), making an atomic same-block deposit-withdraw impossible and multi-bundle sandwiching economically unattractive.</p>
+</li>
+<li><p><strong>LP transfer hook — closing the bypass.</strong> Without additional protection, an attacker could deposit to wallet A (starting the hold clock on A), transfer the LP tokens to wallet B (which has <code>lastMintAt[B] == 0</code>), and withdraw immediately from B — bypassing A&#39;s hold. This bypass is closed by <code>ArcoraDexLP._update</code>, which calls <code>IArcoraDexPool(MINTER).notifyLPTransfer(from, to)</code> on every non-mint, non-burn transfer. <code>notifyLPTransfer</code> (lines 636–644 of <code>ArcoraDexPool.sol</code>) propagates the sender&#39;s lock to the recipient:</p>
+<pre><code>if (lastMintAt[from] &gt; lastMintAt[to]) {
+    lastMintAt[to] = lastMintAt[from];
+}
+</code></pre>
+<p>The recipient inherits the stricter (later) of the two timestamps. A fresh wallet receiving LP from a recent depositor cannot withdraw until the original depositor&#39;s 1-hour window has elapsed. The hold clock is reset forward on a new deposit: if the receiving wallet subsequently makes its own deposit, <code>lastMintAt[to]</code> is overwritten with the new <code>block.timestamp</code>, starting a fresh 1-hour window from that point.</p>
+</li>
+</ol>
+<h3>5.2 Oracle-attack defences</h3>
+<p>The oracle layer&#39;s four-control architecture (described in detail in §4) provides the following specific defences against oracle manipulation:</p>
+<p><strong>Staleness bounds (<code>maxStaleSeconds</code> per token).</strong> <code>_readOracle</code> validates <code>(block.timestamp - updatedAt) &lt;= info.maxStaleSeconds</code> as part of its per-round validation. A feed that has not been updated within the staleness window produces <code>isFresh = false</code> and the pool falls back to <code>lastValidPrice[token]</code>. Default staleness limits: 3 600 s for USDC/USDT/PYUSD/DAI, 14 400 s for EURC, 86 400 s for TRYC/BRLC — calibrated to the expected heartbeat of each feed.</p>
+<p><strong>Source diversity and divergence cap.</strong> Each token&#39;s oracle is an <code>OracleAggregator</code> backed by two independent feeds. <code>maxDivergenceBps</code> (50 bps for USD stables, up to 200 bps for TRYC/BRLC) constrains how far the primary and secondary sources can disagree before the aggregator reverts <code>SourcesDiverge</code> rather than returning an average. A single compromised oracle key can control only one source; the divergence check catches a unilateral price push and prevents it from reaching the pool.</p>
+<p><strong>Revert tolerance (finding #P3-R, Fixed, P3).</strong> Both <code>info.usdOracle.latestRoundData()</code> and <code>info.usdOracle.decimals()</code> are wrapped in <code>try</code>/<code>catch</code> inside <code>_readOracle</code>. Any revert — from <code>AllSourcesUnavailable</code>, <code>SourcesDiverge</code>, ABI mismatch, or a deactivated feed — collapses to <code>isFresh = false</code> and the pool falls back to the last cached price. A reverting oracle cannot brick the pool for an already-active token.</p>
+<p><strong>Cache-deviation guard.</strong> Even when a fresh oracle reading passes all per-round checks, a single-block price spike from a compromised aggregator is blocked by the cache-deviation guard in <code>_readUsdPrice1e18Mut</code>: a fresh reading that deviates more than <code>maxOracleDeviationBps</code> from <code>lastValidPrice[token]</code> is demoted to stale. The cache cannot be poisoned in a single block, regardless of what the aggregator returns.</p>
+<p><strong>Per-operation ratchet (<code>lastAcceptedPrice</code>).</strong> <code>_readAndGuardPrice</code> enforces that each user operation executes at a price within <code>maxOracleDeviationBps</code> of the previous accepted price — 50 bps for USD-pegged stables, 150 bps for EURC, and 200 bps for TRYC/BRLC (post-P3). An attacker attempting to walk the accepted price toward a manipulated target must submit many sequential transactions, each within the cap, giving off-chain monitoring time to detect abnormal behaviour and invoke the Pause Guardian Safe.</p>
+<p><strong>Cumulative monitoring (<code>CumulativeDeviationGuard</code>).</strong> The off-chain keeper calls <code>record</code> after each oracle update. Exceeding <code>maxCumulativeBps</code> cumulative deviation within the 24-hour tumbling window emits <code>CircuitBreakerTripped</code>, which the monitoring layer treats as a signal to evaluate a pause. This is human-in-the-loop for P3; on-chain auto-pause is deferred to P5 (and will require making <code>record</code> keeper-only before wiring).</p>
+<p>These mitigations are designed to reduce the attack surface of oracle manipulation to a class of multi-transaction, colluding-source attacks that require sustained cooperation between at least two compromised oracle keys and provide meaningful detection windows. They do not eliminate oracle risk entirely; §7 carries the residual risk disclosures.</p>
+<h2>6. Governance &amp; Operations</h2>
+<h3>6.1 Ownership model</h3>
+<p><code>ArcoraDexPool</code> and <code>ArcoraDexRegistry</code> both inherit OpenZeppelin&#39;s <code>Ownable2Step</code>. Their owner is the <code>TimelockController</code> (<code>0x36444f653E7746d69aD5d91dA920f5Cd2F9C6E83</code>, <code>getMinDelay() = 172800 s = 48 hours</code>), which is in turn administered by the Governance Safe (<code>0x715f669D79Cc72d6685F8724c0B86f7B53d7e624</code>, 3/5 multisig).</p>
+<p>This means every <code>onlyOwner</code> function on the Pool and the Registry — fee mutations, oracle changes, token listing, <code>unpause</code>, and fee withdrawal — requires a Governance Safe proposal to be scheduled through the Timelock and then survive the 48-hour delay before any address can execute it. The executor role on the Timelock is open: once the delay has elapsed, any EOA may call <code>execute</code>.</p>
+<p>The Governance Safe may also cancel a scheduled proposal at any time before execution, via <code>TimelockController.cancel()</code>.</p>
+<h3>6.2 Pause Guardian</h3>
+<p>A second multisig, the Pause Guardian Safe (<code>0x39500e45935f36CfcEb826590aaE97226Ac6640D</code>, 2/3 threshold), holds the <code>pauseGuardian</code> address in <code>ArcoraDexPool.pauseGuardian</code>. It operates on a separate, smaller key set from the Governance Safe.</p>
+<p>The Pool defines the modifier used by <code>pause()</code> at lines 83–86 of <code>ArcoraDexPool.sol</code>:</p>
+<pre><code class="language-solidity">modifier onlyOwnerOrGuardian() {
+    if (msg.sender != owner() &amp;&amp; msg.sender != pauseGuardian) revert NotAuthorized();
+    _;
+}
+</code></pre>
+<p><code>pause()</code> (<code>ArcoraDexPool.sol</code> line 616) is gated by <code>onlyOwnerOrGuardian</code>, meaning either the Timelock (via a Governance Safe proposal) or the Pause Guardian Safe can freeze the pool. Because the Pause Guardian Safe bypasses the Timelock, an emergency pause takes effect within a single block — no 48-hour delay.</p>
+<p><code>unpause()</code> (<code>ArcoraDexPool.sol</code> line 626) is gated by <code>onlyOwner</code> only, as noted in the NatSpec:</p>
+<blockquote>
+<p>Intentionally owner-only (the governance Timelock). The Pause Guardian Safe keeps its fail-safe pause() capability, but a compromised guardian must not be able to un-protect a pool the owner deliberately paused during an incident. Only the governance Timelock — after deliberate proposal + delay — may restart.</p>
+</blockquote>
+<p>The <strong>pause/unpause asymmetry</strong> is a deliberate security property: a compromised Pause Guardian Safe (2 of 3 keys) can halt deposits and withdrawals instantly but cannot restart the pool. Restarting requires a full 48-hour Governance Timelock cycle, which gives the community and remaining governance keyholders a full response window.</p>
+<p>Changing the <code>pauseGuardian</code> address (<code>setPauseGuardian</code>) is <code>onlyOwner</code> and therefore also Timelock-gated.</p>
+<h3>6.3 Oracle feed and aggregator ownership</h3>
+<p>The seven primary <code>MockChainlinkFeedV2</code> instances, the seven <code>OracleAggregator</code> contracts, the seven secondary feeds, and the <code>CumulativeDeviationGuard</code> are all owned directly by the Governance Safe — <strong>without</strong> an intermediate Timelock.</p>
+<p>This deliberate exception enables a compromised oracle keeper EOA to be rotated out in a single Safe multisig transaction, without the 48-hour delay that governs all Pool and Registry actions. The accepted trade-off is described in R4 (§7): a compromised 3/5 Governance Safe can rotate feed writers instantly. The compensating bound is that <code>Registry.setOracle</code> — which governs whether the Pool actually uses any given oracle address — remains Timelock-gated with a 48-hour delay.</p>
+<blockquote>
+<p><strong>Current testnet deployment note.</strong> On the Arc testnet deployment as of this writing, the secondary-feed <code>writer</code> migration is a pending downstream operational task (see <code>docs/rollouts/2026-05-14-phase3-oracle.md</code>, &quot;Downstream tasks&quot;). The seven secondary feeds were deployed with the deployer EOA as their initial writer; the Governance Safe has not yet called <code>setWriter(keeperEOA)</code> on each feed. Until those calls are made, the secondary feeds hold their deploy-time prices and are not being driven by the keeper. As a result, the <code>OracleAggregator</code> instances on the current testnet are not yet operating on two independently-updated sources — the two-source divergence cross-check is architecturally present but not yet exercised on live keeper data. This is a known pending operational step, not an architectural change; the design is two-source and the migration will complete before any mainnet deployment.</p>
+</blockquote>
+<h3>6.4 Parameter-change process</h3>
+<p>A standard governance action follows this path:</p>
+<ol>
+<li>Three of the five Governance Safe signers sign a Safe transaction calling <code>TimelockController.schedule(target, value, calldata, predecessor, salt, minDelay)</code>.</li>
+<li>The proposal is publicly visible on-chain for at least 48 hours.</li>
+<li>After the delay, any address calls <code>TimelockController.execute(target, value, calldata, predecessor, salt)</code>.</li>
+</ol>
+<p>The Governance Safe may cancel the scheduled operation at any time before execution.</p>
+<p>For oracle rotation (<code>setOracle</code>), token listing (<code>listToken</code>), or deviation-cap changes (<code>setDeviation</code>), the same flow applies with a 48-hour delay. The off-chain operations plan recommends a seven-day public announcement period before scheduling <code>setOracle</code> or <code>listToken</code> on mainnet, on top of the 48-hour on-chain delay.</p>
+<h3>6.5 Emergency-pause path</h3>
+<p>When the off-chain monitor detects a <code>CircuitBreakerTripped</code> event or observes abnormal price behaviour, the Pause Guardian Safe signs <code>pool.pause()</code> — bypassing the Timelock — and the pool is frozen within one block. All deposits, withdrawals, and swaps revert with <code>PoolPaused</code> while frozen; oracle state and reserves remain intact.</p>
+<p>After the incident is diagnosed, the Governance Safe proposes <code>pool.unpause()</code> through the Timelock. The pool can resume operation once the 48-hour delay elapses and the proposal is executed. This gives the team a minimum 48-hour window to investigate before re-opening the pool.</p>
+<h3>6.6 Role and permission table</h3>
+<table>
+<thead>
+<tr>
+<th>Action</th>
+<th>Callable by</th>
+<th>Path</th>
+<th>Effective delay</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>setSwapFeeBps</code></td>
+<td>Owner (Timelock)</td>
+<td>Governance Safe → Timelock</td>
+<td>48 h</td>
+</tr>
+<tr>
+<td><code>setProtocolFeeShareBps</code></td>
+<td>Owner (Timelock)</td>
+<td>Governance Safe → Timelock</td>
+<td>48 h</td>
+</tr>
+<tr>
+<td><code>withdrawProtocolFees</code></td>
+<td>Owner (Timelock)</td>
+<td>Governance Safe → Timelock</td>
+<td>48 h</td>
+</tr>
+<tr>
+<td><code>setPauseGuardian</code></td>
+<td>Owner (Timelock)</td>
+<td>Governance Safe → Timelock</td>
+<td>48 h</td>
+</tr>
+<tr>
+<td><code>syncAcceptedPrice</code></td>
+<td>Owner (Timelock)</td>
+<td>Governance Safe → Timelock</td>
+<td>48 h</td>
+</tr>
+<tr>
+<td><code>listToken</code></td>
+<td>Owner (Timelock)</td>
+<td>Governance Safe → Timelock</td>
+<td>48 h</td>
+</tr>
+<tr>
+<td><code>setOracle</code></td>
+<td>Owner (Timelock)</td>
+<td>Governance Safe → Timelock</td>
+<td>48 h</td>
+</tr>
+<tr>
+<td><code>setDeviation</code></td>
+<td>Owner (Timelock)</td>
+<td>Governance Safe → Timelock</td>
+<td>48 h</td>
+</tr>
+<tr>
+<td><code>setMaxStaleSeconds</code></td>
+<td>Owner (Timelock)</td>
+<td>Governance Safe → Timelock</td>
+<td>48 h</td>
+</tr>
+<tr>
+<td><code>deactivateToken</code> / <code>reactivateToken</code></td>
+<td>Owner (Timelock)</td>
+<td>Governance Safe → Timelock</td>
+<td>48 h</td>
+</tr>
+<tr>
+<td><code>transferOwnership</code> / <code>acceptOwnership</code></td>
+<td>Owner (Timelock)</td>
+<td>Governance Safe → Timelock</td>
+<td>48 h</td>
+</tr>
+<tr>
+<td><code>pause()</code> — via Timelock</td>
+<td>Owner (Timelock)</td>
+<td>Governance Safe → Timelock</td>
+<td>48 h</td>
+</tr>
+<tr>
+<td><code>pause()</code> — emergency</td>
+<td>Pause Guardian Safe</td>
+<td>Direct Safe tx</td>
+<td>Instant (&lt; 1 block)</td>
+</tr>
+<tr>
+<td><code>unpause()</code></td>
+<td>Owner (Timelock) only</td>
+<td>Governance Safe → Timelock</td>
+<td>48 h</td>
+</tr>
+<tr>
+<td><code>setWriter</code> (feeds)</td>
+<td>Governance Safe direct</td>
+<td>Direct Safe tx</td>
+<td>Instant</td>
+</tr>
+<tr>
+<td><code>setMaxDivergenceBps</code> (aggregators)</td>
+<td>Governance Safe direct</td>
+<td>Direct Safe tx</td>
+<td>Instant</td>
+</tr>
+<tr>
+<td><code>setConfig</code> (guard)</td>
+<td>Governance Safe direct</td>
+<td>Direct Safe tx</td>
+<td>Instant</td>
+</tr>
+</tbody></table>
+<h3>6.7 Deployed addresses</h3>
+<table>
+<thead>
+<tr>
+<th>Contract</th>
+<th>Address</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>ArcoraDexPool V3</td>
+<td><code>0x1ce1ef94e7ebe70727bd69003d61a3f0c9a331bc</code></td>
+</tr>
+<tr>
+<td>ArcoraDexRegistry V3</td>
+<td><code>0x9914436e5245bf3c0d4d4338e0a8b8f5ab5505ab</code></td>
+</tr>
+<tr>
+<td>ArcoraDexLP V3</td>
+<td><code>0x17B47173C457069E53B3B75Ef42773041B79523e</code></td>
+</tr>
+<tr>
+<td>TimelockController</td>
+<td><code>0x36444f653E7746d69aD5d91dA920f5Cd2F9C6E83</code></td>
+</tr>
+<tr>
+<td>Governance Safe (3/5)</td>
+<td><code>0x715f669D79Cc72d6685F8724c0B86f7B53d7e624</code></td>
+</tr>
+<tr>
+<td>Pause Guardian Safe (2/3)</td>
+<td><code>0x39500e45935f36CfcEb826590aaE97226Ac6640D</code></td>
+</tr>
+</tbody></table>
+<p>All addresses verified on Arc testnet (chainId 5042002). Mainnet addresses are not yet assigned.</p>
+<h2>7. Risk Disclosures</h2>
+<p>This section discloses the risks that the ArcoraDEX team has reviewed and consciously accepts for the v1 mainnet launch. The authoritative source is <code>docs/audit/known-acceptable-risks.md</code>. For each risk the disclosure states: what the risk is, why it is accepted for v1, and the compensating control that bounds its impact.</p>
+<p>Developers, auditors, and liquidity providers should treat this section as the accurate picture of where the protocol depends on trusted parties, off-chain processes, or design trade-offs, rather than purely on code.</p>
+<h3>R1 — Oracle dependence (protocol correctness rests on the feeds)</h3>
+<p><strong>Risk.</strong> ArcoraDEX prices every swap from external oracle feeds rather than from an on-chain reserve ratio. If a feed delivers incorrect prices — whether through compromise, staleness, or a diverging primary/secondary pair — the pool will execute swaps at wrong rates, potentially draining reserves toward the token with the inflated price. This is not a marginal concern: oracle accuracy is the foundational assumption on which the entire pricing model rests.</p>
+<p><strong>Why accepted for v1.</strong> There is no oracle-free design that delivers the pool&#39;s stated goal — eliminating curve-induced slippage for pegged assets. The choice of an oracle-priced model is a deliberate trade-off: it eliminates slippage at the cost of introducing oracle-dependence. Accepting oracle risk is the product design.</p>
+<p><strong>Compensating controls.</strong> Four independent controls are deployed (described in detail in §4): dual-source <code>OracleAggregator</code> with a divergence check (<code>SourcesDiverge</code> revert at <code>maxDivergenceBps</code>); a <code>lastValidPrice</code> cache with a per-block deviation guard that prevents cache poisoning in a single block; a <code>lastAcceptedPrice</code> per-operation ratchet that limits how far the executed price can advance per transaction (per-tier <code>maxOracleDeviationBps</code>: 50 bps for USD-pegged stables, 150 bps for EURC, 200 bps for TRYC/BRLC, post-P3); and the <code>CumulativeDeviationGuard</code> event stream, which gives off-chain monitors an on-chain record of cumulative drift. Together these controls reduce the worst-case oracle manipulation from a single-transaction drain to a slow multi-transaction walk requiring sustained cooperation between at least two compromised oracle keys, providing meaningful detection windows.</p>
+<p><strong>Residual exposure.</strong> In the current testnet configuration, the same keeper EOA pushes both the primary and secondary feed for each token. A single compromised key therefore bypasses the two-source divergence check. On mainnet, primary and secondary are intended to be independent (Chainlink primary, Pyth/DEX TWAP secondary with a different key), but that independence is deferred to P5. Until then, the oracle layer provides defence-in-depth but not two-party compromise resistance.</p>
+<hr>
+<h3>R2 — Liquidity-thin behaviour at very low TVL</h3>
+<p><strong>Risk.</strong> When the pool has very low total NAV, the LP minting formula can round small deposits to zero shares. If <code>usdIn</code> is small relative to the current NAV-to-supply ratio, <code>lpMinted</code> truncates to zero in integer arithmetic, and the depositor&#39;s tokens are accepted but zero LP is issued, locking a trivially small token amount. A near-empty pool is a poor experience for small follow-on depositors.</p>
+<p><strong>Why accepted for v1.</strong> The virtual-offset pattern (<code>VIRTUAL_SHARES = 1e6</code>, <code>VIRTUAL_ASSETS = 1</code>) deployed in P1 to fix the first-depositor inflation attack also addresses rounding as a side-effect. The residual risk is confined to deposits where <code>usdIn</code> is below a few wei of USD value — economically negligible for any real depositor. Fully eliminating rounding in fixed-point math would require a different accounting model.</p>
+<p><strong>Compensating controls.</strong> With <code>VIRTUAL_SHARES = 1e6</code>, any deposit where <code>usdIn &gt;= 1</code> is guaranteed to mint at least one LP unit. The <code>FirstDepositTooSmall</code> revert enforces a minimum bootstrap deposit of <code>MINIMUM_LIQUIDITY</code> USD-units. Combined with the <code>MINIMUM_LIQUIDITY</code> permanent burn to <code>DEAD_ADDRESS</code> on the first deposit, the pool cannot return to a zero-supply state that would make follow-on deposits susceptible to zero-share rounding.</p>
+<hr>
+<h3>R3 — Centralized initial liquidity</h3>
+<p><strong>Risk.</strong> At mainnet launch the founding LP(s) will hold most or all of the <code>ADEX-LP</code> supply. A single large LP exiting rapidly could drain the pool, leaving smaller LPs with a thin market and materially higher slippage on withdrawal. This is a centralization risk at the liquidity layer, not a smart-contract vulnerability.</p>
+<p><strong>Why accepted for v1.</strong> A trust-minimized bootstrapping mechanism — such as a bonding curve or a vesting lock on founding LP tokens — would add non-trivial audit surface before the initial deployment. The standard industry approach is to start with committed founding LPs under off-chain commercial terms and migrate toward a more decentralized LP incentive model as TVL grows.</p>
+<p><strong>Compensating controls.</strong> Founding LPs are subject to the same <code>MIN_HOLD_SECONDS = 1 hours</code> lock as all other depositors — a mass exit cannot be atomic. The LP transfer hook (<code>ArcoraDexLP._update</code> → <code>ArcoraDexPool.notifyLPTransfer</code>) propagates the lock to any LP token recipient, preventing a rapid exit via an intermediary fresh wallet. The P5 mainnet-operations plan calls for founding LP commitments, a TVL-floor agreement, and a decentralized LP incentive program to dilute initial concentration over time.</p>
+<hr>
+<h3>R4 — Governance-trust assumptions (3/5 Safe compromise, bounded by 48-hour Timelock)</h3>
+<p><strong>Risk.</strong> The Governance Safe is a 3/5 Safe multisig. An attacker who compromises three of the five signing keys can schedule any <code>onlyOwner</code> action on <code>ArcoraDexPool</code> and <code>ArcoraDexRegistry</code>: rotating oracles to attacker-controlled feeds, changing deviation caps, withdrawing protocol fees, or transferring ownership. Additionally, the Governance Safe holds direct (non-Timelock) ownership of the seven oracle feeds and seven <code>OracleAggregator</code> contracts, so a compromised Governance Safe can rotate feed writers instantly.</p>
+<p><strong>Why accepted for v1.</strong> The 3/5 threshold is a deliberate trade-off between operational liveness and security. A higher threshold (4/5 or 5/5) would make coordinated governance impractical for frequent, low-stakes operations. Timelock-fronted multisig governance is the standard approach at this scale. Key procurement requirements (hardware wallets per signer) are specified in the P2 governance spec.</p>
+<p><strong>Compensating controls.</strong> Every <code>onlyOwner</code> function on the Pool and Registry passes through the <code>TimelockController</code> with <code>getMinDelay() = 48 hours</code>. A malicious proposal is publicly visible on-chain for 48 hours before it can execute; any watcher can alert the community and the remaining keyholders can cancel via <code>TimelockController.cancel()</code>. The Pause Guardian Safe (2/3, separate key set) can freeze the pool instantly while the community organises a response. On mainnet, the off-chain governance commitment includes off-chain announcement periods for high-impact actions such as <code>setOracle</code> and <code>listToken</code>.</p>
+<hr>
+<h3>R5 — Permissionless <code>CumulativeDeviationGuard.record</code></h3>
+<p><strong>Risk.</strong> <code>CumulativeDeviationGuard.record(address token, uint256 price1e18)</code> is unauthenticated — any caller may invoke it with any price value. An adversary can therefore: anchor the tumbling window at a favourable or unfavourable price; spam calls to force window resets; or emit spurious <code>CircuitBreakerTripped</code> events to cause alert fatigue in the off-chain monitor. If the off-chain monitor were wired to auto-pause on trip events, a griever could pause the pool at will.</p>
+<p><strong>Why accepted for v1.</strong> <code>record</code> has no on-chain state effect beyond updating the per-token window state and emitting events. Nothing on-chain — no pause, no price change, no reserve mutation — is gated on the guard&#39;s output. Adding a keeper allowlist now would introduce a new failure mode (a stuck allowlist that prevents legitimate keepers from recording) with no functional benefit in the current implementation. Making <code>record</code> keeper-only is a P5 task, conditional on on-chain auto-pause being wired to the guard at that time.</p>
+<p><strong>Compensating controls.</strong> The contract NatSpec explicitly documents the trust boundary: the off-chain monitor must treat <code>PriceObserved</code> and <code>CircuitBreakerTripped</code> as untrusted hints and re-validate the price against its own trusted feed before paging the Pause Guardian. No on-chain action can be triggered by <code>record</code> alone. When on-chain auto-pause is wired in P5, <code>record</code> must be made keeper-only at that time (tracked in <code>docs/audit/p5-tracking.md</code>).</p>
+<hr>
+<h3>R6 — Tumbling (not rolling) deviation window</h3>
+<p><strong>Risk.</strong> <code>CumulativeDeviationGuard</code> measures deviation against the first observation of each 24-hour tumbling window. A slow, sustained price drift that stays just below <code>maxCumulativeBps</code> within each window is not detected across window boundaries. A compromised keeper could push <code>maxCumulativeBps − 1</code> bps of drift per window, indefinitely, without ever tripping the circuit breaker.</p>
+<p><strong>Why accepted for v1.</strong> The tumbling-window approach was deliberately chosen as a P3 MVP: it catches acute intra-window spikes — the dominant attack vector — while keeping the implementation simple and cheap. A true rolling-window detector requires either a circular buffer (expensive storage) or a two-pass checkpoint scheme (more complex and more audit surface). A rolling or multi-window detector is a P5 enhancement.</p>
+<p><strong>Compensating controls.</strong> The per-tier <code>maxOracleDeviationBps</code> cap on <code>lastAcceptedPrice</code> limits how far the accepted price can drift in a single oracle update, regardless of the tumbling window: 50 bps for USD-pegged stables (USDC, USDT, PYUSD, DAI), 150 bps for EURC, and 200 bps for TRYC and BRLC (the latter two tightened from 5 000 bps by operations 8–9 of the P3 Timelock batch). A cross-window drift is also a cross-transaction drift, giving the off-chain monitor many opportunities to observe and alert. The <code>OracleAggregator</code>&#39;s two-source divergence check (<code>maxDivergenceBps = 200 bps</code> for TRYC/BRLC) means a single compromised keeper cannot push the primary source more than 200 bps without the honest secondary source triggering <code>SourcesDiverge</code>.</p>
+<hr>
+<h3>R7 — Fee-collector role not separated from governance ownership</h3>
+<p><strong>Risk.</strong> <code>withdrawProtocolFees(address token, uint256 amount, address to)</code> in <code>ArcoraDexPool</code> is <code>onlyOwner</code>, and the owner is the <code>TimelockController</code>. The protocol-fee recipient role is not separated from governance ownership. A malicious governance majority could pass a proposal to redirect accrued protocol fees to an attacker-controlled address.</p>
+<p><strong>Why accepted for v1.</strong> Separating the fee-collector into a distinct multisig was explicitly called out as out-of-scope for P2 in the governance design spec and the mainnet-readiness roadmap. The separation would require a dedicated fee-withdrawal module and adds governance surface before the Spearbit review. This is a tracked P5 item.</p>
+<p><strong>Compensating controls.</strong> <code>withdrawProtocolFees</code> is <code>onlyOwner</code>; the owner is the Timelock with <code>getMinDelay() = 48 hours</code>. Any proposal to withdraw fees to an attacker-controlled address is publicly visible on-chain for 48 hours before it executes, and any <code>TimelockController.cancel()</code> call from the Governance Safe can stop it. The affected funds are accrued protocol revenue only (bounded by <code>protocolFeeShareBps ≤ 2500 bps</code> of the <code>swapFeeBps ≤ 100 bps</code> fee); they do not represent LP principal or user deposits.</p>
+<hr>
+<h3>R8 — Pre-bug-bounty exposure window</h3>
+<p><strong>Risk.</strong> ArcoraDEX v1 will not have an active Immunefi bug-bounty program at the time of mainnet launch. Researchers who discover post-audit vulnerabilities before the bounty program launches have no formal, incentivized channel for responsible disclosure. This creates a window between mainnet deployment and Immunefi program launch during which a researcher might choose exploit-over-disclose.</p>
+<p><strong>Why accepted for v1.</strong> Setting up an Immunefi program requires a finalized mainnet deployment (contract addresses, TVL commitments, reward-tier funding). The program cannot be meaningfully launched before the Spearbit audit is complete and the code is frozen for mainnet. The unavoidable sequence is: Spearbit audit → mainnet deploy → Immunefi launch. Deploying unaudited code or launching a bounty against an undeployed codebase are both worse outcomes.</p>
+<p><strong>Compensating controls.</strong> The Spearbit audit precedes mainnet deployment; unaudited code does not go live. An informal responsible-disclosure contact is published in the repository and the frontend at mainnet launch. TVL during the pre-bounty window is expected to be low (founding LP bootstrap only), limiting the incentive for exploit-over-disclose. Immunefi program launch is a first-week P5 deliverable, covering Pool, Registry, OracleAggregator, and the governance contracts.</p>
+<hr>
+<p><strong>Summary table</strong></p>
+<table>
+<thead>
+<tr>
+<th>ID</th>
+<th>Risk category</th>
+<th>Compensating control</th>
+<th>P5 resolution</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>R1</td>
+<td>Oracle dependence</td>
+<td>4-layer oracle defence; per-tier per-op ratchet (50/150/200 bps)</td>
+<td>Independent primary/secondary sources on mainnet</td>
+</tr>
+<tr>
+<td>R2</td>
+<td>Liquidity-thin rounding</td>
+<td><code>VIRTUAL_SHARES = 1e6</code>; min-liquidity bootstrap</td>
+<td>No change needed</td>
+</tr>
+<tr>
+<td>R3</td>
+<td>Centralized initial liquidity</td>
+<td>1 h min-hold lock; LP transfer hook; founding LP commitments</td>
+<td>Decentralized LP incentive program</td>
+</tr>
+<tr>
+<td>R4</td>
+<td>Governance multisig compromise</td>
+<td>48 h Timelock; Pause Guardian instant freeze</td>
+<td>Hardware wallets; mainnet signer onboarding</td>
+</tr>
+<tr>
+<td>R5</td>
+<td>Permissionless <code>record</code></td>
+<td>Events-only; monitor re-validates before paging</td>
+<td>Keeper allowlist when auto-pause is wired</td>
+</tr>
+<tr>
+<td>R6</td>
+<td>Tumbling window blind spot</td>
+<td>Per-tier per-op cap (50/150/200 bps); two-source divergence check</td>
+<td>Rolling-window or multi-window detector</td>
+</tr>
+<tr>
+<td>R7</td>
+<td>Fee-collector not separated</td>
+<td>48 h Timelock on <code>withdrawProtocolFees</code>; cancel path</td>
+<td>Dedicated fee-collector multisig module</td>
+</tr>
+<tr>
+<td>R8</td>
+<td>Pre-bounty exposure window</td>
+<td>Audit precedes launch; informal disclosure channel</td>
+<td>Immunefi launch first week post-mainnet</td>
+</tr>
+</tbody></table>
+<h2>8. Audit &amp; Roadmap</h2>
+<h3>8.1 P1–P4 Mainnet-Readiness Programme</h3>
+<p>ArcoraDEX completed a four-phase mainnet-readiness programme before submitting for independent audit. Each phase targeted a distinct subsystem; all four are prerequisites for the Spearbit review.</p>
+<table>
+<thead>
+<tr>
+<th>Phase</th>
+<th>Scope</th>
+<th>Key deliverables</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>P1 — Contract fixes</strong></td>
+<td>Protocol math and economics</td>
+<td>Virtual-shares inflation-attack defence (<code>VIRTUAL_SHARES = 1e6</code>, <code>MINIMUM_LIQUIDITY</code> permanent burn); <code>MIN_HOLD_SECONDS</code> JIT sandwich defence; <code>lastAcceptedPrice</code> ratchet and <code>quote()</code> alignment; per-token <code>maxStaleSeconds</code> with last-valid-price cache fallback</td>
+</tr>
+<tr>
+<td><strong>P2 — Governance migration</strong></td>
+<td>Ownership model</td>
+<td>Safe 3/5 <code>TimelockController</code> with 48-hour delay on all <code>onlyOwner</code> calls; separate Pause Guardian Safe (2/3) for instant <code>pause()</code>; deployer EOA retired from all control paths; testnet dry-run of the full governance lifecycle</td>
+</tr>
+<tr>
+<td><strong>P3 — Oracle hardening</strong></td>
+<td>Oracle architecture</td>
+<td><code>OracleAggregator</code> (two-source with <code>maxDivergenceBps</code> divergence guard) deployed for all seven tokens; <code>CumulativeDeviationGuard</code> for 24-hour tumbling-window observability; TRYC/BRLC <code>maxOracleDeviationBps</code> tightened from 5 000 bps to 200 bps; <code>_readOracle</code> rewritten with <code>try/catch</code> revert tolerance; redundant double-read refactored to a single <code>latestRoundData</code> call</td>
+</tr>
+<tr>
+<td><strong>P4 — Audit readiness</strong></td>
+<td>Pre-audit hygiene</td>
+<td><code>unpause()</code> modifier tightened to <code>onlyOwner</code> (pause/unpause asymmetry); Slither warning remediation (inline suppression with rationale where refactor was not safe); <code>forge fmt</code> baseline pass; audit documentation pack (<code>audit-scope.md</code>, <code>invariants.md</code>, <code>threat-model.md</code>, <code>known-acceptable-risks.md</code>, <code>architecture.md</code>, <code>p5-tracking.md</code>)</td>
+</tr>
+</tbody></table>
+<h3>8.2 Spearbit Private Security Review</h3>
+<p>A Spearbit private security review is underway against the <code>audit/spearbit-p4</code> baseline commit (tag created at merge of <code>phase4/audit-rollout</code> into <code>main</code>). The in-scope surface is 1 024 lines across five contracts (<code>ArcoraDexPool</code>, <code>ArcoraDexLP</code>, <code>ArcoraDexRegistry</code>, <code>OracleAggregator</code>, and <code>CumulativeDeviationGuard</code>) plus 206 lines of interface definitions, totalling 1 230 lines (per <code>docs/audit/audit-scope.md</code>). The review scope, toolchain settings, and test-coverage summary are documented in <code>docs/audit/audit-scope.md</code>.</p>
+<p>The audit review covers all P1–P4 merged fixes. All Critical and High findings from the internal review were addressed before the <code>audit/spearbit-p4</code> freeze. The Spearbit report is private pending the protocol team&#39;s decision on publication.</p>
+<h3>8.3 Forward Look: P5 Mainnet Deployment and Deferred Work</h3>
+<p><strong>P5 — Mainnet Deployment &amp; Operations</strong> is the next phase, conditional on P4 sign-off (all Critical/High Spearbit findings remediated and the final report received). P5 deliverables include: a step-by-step mainnet deployment runbook (Registry → Pool → token listings → oracle wiring → governance ownership transfer → liquidity bootstrap → unpause); an off-chain monitoring stack (feed freshness watcher, reserves-imbalance alert, multisig-pending-tx Slack webhook, deviation-breach alert, NAV daily snapshot); an incident-response playbook with a live drill across all Pause Guardian signers; and an Immunefi bug-bounty launch in the first week post-mainnet covering Pool, Registry, <code>OracleAggregator</code>, and governance contracts.</p>
+<p>Selected items from the 22-item P5 deferred-work register (<code>docs/audit/p5-tracking.md</code>) — IDs are non-contiguous because this table presents only the subset relevant to oracle and monitoring hardening:</p>
+<table>
+<thead>
+<tr>
+<th>Register ID</th>
+<th>Item</th>
+<th>Why deferred</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>D1</td>
+<td>On-chain auto-pause wired to <code>CumulativeDeviationGuard</code></td>
+<td>No operational experience with false-positive trip rate; requires D2 first to avoid griefing</td>
+</tr>
+<tr>
+<td>D2</td>
+<td>Keeper-only access control on <code>CumulativeDeviationGuard.record</code></td>
+<td>No functional benefit while <code>record</code> has no on-chain action; must precede D1</td>
+</tr>
+<tr>
+<td>D3</td>
+<td>Rolling (vs tumbling) deviation window in <code>CumulativeDeviationGuard</code></td>
+<td>Tumbling window is the deliberate P3 MVP; rolling window requires circular buffer or two-checkpoint scheme (audit surface, higher gas)</td>
+</tr>
+<tr>
+<td>D6</td>
+<td>Fee-collector multisig separated from governance ownership</td>
+<td>Dedicated withdrawal module adds governance audit surface pre-Spearbit review</td>
+</tr>
+<tr>
+<td>D9</td>
+<td>Pyth / independent secondary mainnet source for TRYC, BRLC</td>
+<td>No Chainlink or Pyth mainnet coverage for TRY/BRL confirmed at P3 time; real independence deferred to P5 once availability is confirmed</td>
+</tr>
+<tr>
+<td>D10, D11, D12</td>
+<td>Off-chain monitoring script; secondary-feed writer migration; full alerting stack</td>
+<td>Operational tooling delivered in parallel with the mainnet deployment runbook</td>
+</tr>
+</tbody></table>
+<p>The complete register (22 items, each with traceability to its source document) is in <code>docs/audit/p5-tracking.md</code>.</p>
+<h2>9. Parameters &amp; Addresses</h2>
+<h3>9.1 Key Parameters</h3>
+<p>All values are hard-coded <code>constant</code> or enforced at deployment and verified on-chain. Sources: <code>contracts/src/ArcoraDexPool.sol</code> (pool constants); <code>docs/rollouts/2026-05-14-phase3-oracle.md</code> (per-token oracle configuration).</p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Value</th>
+<th>Source</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>VIRTUAL_SHARES</code></td>
+<td><code>1_000_000</code> (1e6)</td>
+<td><code>ArcoraDexPool.sol</code> line 37 (<code>internal constant</code>)</td>
+<td>Virtual-share offset in LP mint/redeem formula; prevents round-down-to-zero on small follow-on deposits and inflation-attack LP manipulation</td>
+</tr>
+<tr>
+<td><code>VIRTUAL_ASSETS</code></td>
+<td><code>1</code></td>
+<td><code>ArcoraDexPool.sol</code> line 38 (<code>internal constant</code>)</td>
+<td>Virtual-asset offset (symmetric with <code>VIRTUAL_SHARES</code>); denominator floor in LP math</td>
+</tr>
+<tr>
+<td><code>MINIMUM_LIQUIDITY</code></td>
+<td><code>1000</code> (USD-units, 18 dec)</td>
+<td><code>ArcoraDexPool.sol</code> line 24 (<code>public constant</code>)</td>
+<td>Minimum first-deposit size; also the number of LP shares permanently burned to <code>DEAD_ADDRESS</code> on the first deposit to set a non-zero LP floor</td>
+</tr>
+<tr>
+<td><code>MIN_HOLD_SECONDS</code></td>
+<td><code>3600</code> (1 hour)</td>
+<td><code>ArcoraDexPool.sol</code> line 43 (<code>public constant</code>; <code>1 hours</code>)</td>
+<td>Minimum time between a deposit mint and a withdrawal by the same address; enforced via <code>lastMintAt[msg.sender]</code>; propagated to LP token recipients via <code>notifyLPTransfer</code></td>
+</tr>
+<tr>
+<td><code>MAX_SWAP_FEE_BPS</code></td>
+<td><code>100</code> (1%)</td>
+<td><code>ArcoraDexPool.sol</code> line 22 (<code>uint16 public constant</code>)</td>
+<td>Hard cap on <code>swapFeeBps</code>; enforced in <code>setSwapFeeBps</code></td>
+</tr>
+<tr>
+<td><code>MAX_PROTOCOL_FEE_SHARE_BPS</code></td>
+<td><code>2500</code> (25%)</td>
+<td><code>ArcoraDexPool.sol</code> line 23 (<code>uint16 public constant</code>)</td>
+<td>Hard cap on <code>protocolFeeShareBps</code>; enforced in <code>setProtocolFeeShareBps</code></td>
+</tr>
+<tr>
+<td>Timelock <code>minDelay</code></td>
+<td><code>172800 s</code> (48 hours)</td>
+<td><code>TimelockController</code> constructor; verified via <code>getMinDelay()</code> on-chain</td>
+<td>Mandatory delay between governance proposal scheduling and execution for all <code>onlyOwner</code> pool and registry calls</td>
+</tr>
+</tbody></table>
+<p><strong>Per-token oracle deviation and divergence caps</strong> (post-P3 Timelock batch; source: <code>docs/rollouts/2026-05-14-phase3-oracle.md</code>):</p>
+<table>
+<thead>
+<tr>
+<th>Token</th>
+<th>Tier</th>
+<th><code>OracleAggregator</code> <code>maxDivergenceBps</code></th>
+<th>Registry <code>maxOracleDeviationBps</code></th>
+<th>Guard <code>maxCumulativeBps</code></th>
+<th>Guard <code>windowSeconds</code></th>
+</tr>
+</thead>
+<tbody><tr>
+<td>USDC</td>
+<td>USD-pegged</td>
+<td>50</td>
+<td>50</td>
+<td>200</td>
+<td>86 400</td>
+</tr>
+<tr>
+<td>USDT</td>
+<td>USD-pegged</td>
+<td>50</td>
+<td>50</td>
+<td>200</td>
+<td>86 400</td>
+</tr>
+<tr>
+<td>PYUSD</td>
+<td>USD-pegged</td>
+<td>50</td>
+<td>50</td>
+<td>200</td>
+<td>86 400</td>
+</tr>
+<tr>
+<td>DAI</td>
+<td>USD-pegged</td>
+<td>50</td>
+<td>50</td>
+<td>200</td>
+<td>86 400</td>
+</tr>
+<tr>
+<td>EURC</td>
+<td>EUR (soft-FX)</td>
+<td>100</td>
+<td>150</td>
+<td>300</td>
+<td>86 400</td>
+</tr>
+<tr>
+<td>TRYC</td>
+<td>Soft-FX (TRY)</td>
+<td>200</td>
+<td>200</td>
+<td>500</td>
+<td>86 400</td>
+</tr>
+<tr>
+<td>BRLC</td>
+<td>Soft-FX (BRL)</td>
+<td>200</td>
+<td>200</td>
+<td>500</td>
+<td>86 400</td>
+</tr>
+</tbody></table>
+<p>USD-pegged stables carry the tightest divergence caps (50 bps) reflecting the low expected spread between two independent USD price feeds. EURC carries a 100 bps divergence cap and a 300 bps cumulative guard cap. TRYC and BRLC carry a 200 bps divergence cap and a 500 bps cumulative guard cap to accommodate higher natural FX volatility. Registry <code>maxOracleDeviationBps</code> is per-tier: 50 bps for USD-pegged stables, 150 bps for EURC, and 200 bps for TRYC and BRLC; the latter two were reduced from 5 000 bps to 200 bps by operations 8–9 of the P3 Timelock batch.</p>
+<h3>9.2 Arc Testnet Deployment Addresses</h3>
+<blockquote>
+<p><strong>Note:</strong> All addresses below are deployments on the <strong>Arc testnet (chainId 5042002)</strong>. They are not mainnet addresses. Mainnet addresses are not yet assigned and will be published at the P5 mainnet deployment.</p>
+</blockquote>
+<p><strong>Core protocol contracts</strong> (P2 redeploy, 2026-05-14):</p>
+<table>
+<thead>
+<tr>
+<th>Contract</th>
+<th>Address</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>ArcoraDexPool</code> V3</td>
+<td><code>0x1ce1ef94e7ebe70727bd69003d61a3f0c9a331bc</code></td>
+</tr>
+<tr>
+<td><code>ArcoraDexRegistry</code> V3</td>
+<td><code>0x9914436e5245bf3c0d4d4338e0a8b8f5ab5505ab</code></td>
+</tr>
+<tr>
+<td><code>ArcoraDexLP</code> V3</td>
+<td><code>0x17B47173C457069E53B3B75Ef42773041B79523e</code></td>
+</tr>
+</tbody></table>
+<p><strong>Governance contracts</strong> (P2, 2026-05-14):</p>
+<table>
+<thead>
+<tr>
+<th>Contract</th>
+<th>Address</th>
+<th>Config</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>TimelockController</code></td>
+<td><code>0x36444f653E7746d69aD5d91dA920f5Cd2F9C6E83</code></td>
+<td><code>minDelay = 172800 s</code></td>
+</tr>
+<tr>
+<td>Governance Safe (3/5)</td>
+<td><code>0x715f669D79Cc72d6685F8724c0B86f7B53d7e624</code></td>
+<td>Owns Pool + Registry (via Timelock); directly owns 7 feeds + 7 aggregators + guard</td>
+</tr>
+<tr>
+<td>Pause Guardian Safe (2/3)</td>
+<td><code>0x39500e45935f36CfcEb826590aaE97226Ac6640D</code></td>
+<td>Holds <code>pool.pauseGuardian</code>; can call <code>pause()</code> without Timelock delay</td>
+</tr>
+</tbody></table>
+<p><strong><code>OracleAggregator</code> contracts</strong> (P3, deployed 2026-05-17):</p>
+<table>
+<thead>
+<tr>
+<th>Token</th>
+<th><code>OracleAggregator</code> Address</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>USDC</td>
+<td><code>0x6c6519cB0C66c2269505833382f23D4e8f915480</code></td>
+</tr>
+<tr>
+<td>USDT</td>
+<td><code>0x3e58dd7fD2729A27961Ffb11d37BFf42874cAa34</code></td>
+</tr>
+<tr>
+<td>PYUSD</td>
+<td><code>0x78cB5F03b420F0CD2E8adcb141069F31a38E07E8</code></td>
+</tr>
+<tr>
+<td>DAI</td>
+<td><code>0x3e542b4d2EdBFC965028eB85140BcFEa6868A37E</code></td>
+</tr>
+<tr>
+<td>EURC</td>
+<td><code>0x1357cf421A8c3b732A882e4812AFba6209EBEBbc</code></td>
+</tr>
+<tr>
+<td>TRYC</td>
+<td><code>0xFE3FE7F2b2693D676E4831283dd1B81665AC9faA</code></td>
+</tr>
+<tr>
+<td>BRLC</td>
+<td><code>0xF5021349E0D6e2ACB00bEb105D7793202ac3Aa46</code></td>
+</tr>
+</tbody></table>
+<p><strong><code>CumulativeDeviationGuard</code></strong> (P3, deployed 2026-05-17):</p>
+<table>
+<thead>
+<tr>
+<th>Contract</th>
+<th>Address</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>CumulativeDeviationGuard</code></td>
+<td><code>0x035447f8d97A23fFfC32aa8bFb8ffDbC7B94E608</code></td>
+</tr>
+</tbody></table>
+<p>The P3 Timelock batch (<code>batchId 0x31218725d7f61c128825c982ecd962183136a0b755381d128052a09c84c23587</code>) — which points the Registry at the seven <code>OracleAggregator</code> addresses and tightens the TRYC/BRLC deviation caps — is pending execution at approximately 2026-05-20 after the 48-hour delay.</p>
+<h2>10. References</h2>
+<h3>Internal — Repository Documents</h3>
+<p><strong>Mainnet-readiness programme:</strong></p>
+<ul>
+<li><code>docs/superpowers/specs/2026-05-13-mainnet-readiness-roadmap.md</code> — P1–P5 phase structure, approval gates, and out-of-scope boundaries</li>
+</ul>
+<p><strong>Audit documentation pack (<code>docs/audit/</code>):</strong></p>
+<ul>
+<li><code>docs/audit/audit-scope.md</code> — in-scope contracts, LoC, toolchain, baseline commit tag (<code>audit/spearbit-p4</code>), test-coverage summary</li>
+<li><code>docs/audit/invariants.md</code> — formal invariants the protocol guarantees (NAV monotonicity, LP supply floor, reserves integrity, <code>protocolFeesAccrued ≤ reserves</code>)</li>
+<li><code>docs/audit/threat-model.md</code> — consolidated finding register (P1–P4 internal review findings plus three economic-attack vectors)</li>
+<li><code>docs/audit/known-acceptable-risks.md</code> — R1–R8 residual risks accepted for v1 with compensating controls and P5 resolution paths</li>
+<li><code>docs/audit/architecture.md</code> — high-level architecture reference for auditors</li>
+<li><code>docs/audit/p5-tracking.md</code> — deferred-work register (22 items, all traceable to source documents)</li>
+</ul>
+<p><strong>Rollout records:</strong></p>
+<ul>
+<li><code>docs/rollouts/2026-05-14-phase2-governance.md</code> — P2 governance migration: V3 contract addresses, governance addresses, ownership matrix, testnet dry-run results</li>
+<li><code>docs/rollouts/2026-05-14-phase3-oracle.md</code> — P3 oracle hardening: <code>OracleAggregator</code> and secondary-feed addresses, per-token configuration, Timelock batch details</li>
+</ul>
+<h3>External Standards and Upstream Dependencies</h3>
+<ul>
+<li><strong>Chainlink <code>AggregatorV3Interface</code></strong> — <code>OracleAggregator</code> and <code>ArcoraDexRegistry</code> consume the <code>latestRoundData()</code> / <code>decimals()</code> interface from this standard (mirrored in <code>contracts/src/interfaces/IChainlinkAggregator.sol</code>). Reference: <a href="https://docs.chain.link/data-feeds/api-reference">Chainlink Data Feeds — latestRoundData</a></li>
+<li><strong>OpenZeppelin <code>Ownable2Step</code></strong> — base class for <code>ArcoraDexPool</code> and <code>ArcoraDexRegistry</code>; two-step ownership transfer prevents accidental ownership loss. Reference: <a href="https://docs.openzeppelin.com/contracts/5.x/api/access#Ownable2Step">OpenZeppelin Contracts v5 — <code>Ownable2Step</code></a></li>
+<li><strong>OpenZeppelin <code>TimelockController</code></strong> — governs all <code>onlyOwner</code> calls on Pool and Registry with a 48-hour delay; upstream-audited, consumed unmodified. Reference: <a href="https://docs.openzeppelin.com/contracts/5.x/api/governance#TimelockController">OpenZeppelin Contracts v5 — <code>TimelockController</code></a></li>
+<li><strong>OpenZeppelin <code>ERC20</code></strong> — base class for <code>ArcoraDexLP</code>; <code>_update</code> override is the only modification (min-hold lock propagation). Reference: <a href="https://docs.openzeppelin.com/contracts/5.x/api/token/erc20">OpenZeppelin Contracts v5 — <code>ERC20</code></a></li>
+<li><strong>OpenZeppelin <code>ReentrancyGuard</code></strong> — applied to all mutating entry points on <code>ArcoraDexPool</code>; upstream-audited, consumed unmodified. Reference: <a href="https://docs.openzeppelin.com/contracts/5.x/api/utils#ReentrancyGuard">OpenZeppelin Contracts v5 — <code>ReentrancyGuard</code></a></li>
+<li><strong>Safe v1.4.1</strong> — governance infrastructure for the Governance Safe (3/5) and Pause Guardian Safe (2/3); upstream-audited, consumed as a library dependency (<code>contracts/lib/safe-contracts/</code>). Reference: <a href="https://github.com/safe-global/safe-smart-account/releases/tag/v1.4.1">Safe Smart Account v1.4.1</a></li>
+</ul>
+
+</body>
+</html>
