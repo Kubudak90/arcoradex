@@ -292,7 +292,7 @@ Two independent defences are active simultaneously:
 
    The `VIRTUAL_SHARES` term (10⁶) dominates the numerator when `totalSupply` is small, preventing round-down-to-zero for any positive `usdIn` regardless of the `totalSupply / NAV` ratio. The symmetric formula is applied in `withdraw`. This ERC4626-style offset is an independent defence against LP-math inflation attacks, operating correctly even if the `reserves[]` architecture is somehow bypassed.
 
-3. **`MINIMUM_LIQUIDITY` permanent burn.** On the first deposit, `MINIMUM_LIQUIDITY = 1000` LP shares are minted to `DEAD_ADDRESS` (`address(0xdead)`) and can never be burned (the pool's `withdraw` burns only from `msg.sender`, never from `0xdead`). This creates a permanent non-zero LP floor that, combined with the virtual-shares offset, makes the first-deposit branch economically self-defeating for an attacker: the attacker must sacrifice at least 1 000 USD-wei of LP to initiate any inflation attempt, and the virtual-shares formula removes the incentive regardless.
+As additional defense-in-depth, **`MINIMUM_LIQUIDITY` permanent burn** is applied on the first deposit: `MINIMUM_LIQUIDITY = 1000` LP shares are minted to `DEAD_ADDRESS` (`address(0xdead)`) and can never be burned (the pool's `withdraw` burns only from `msg.sender`, never from `0xdead`). This creates a permanent non-zero LP floor that, combined with the virtual-shares offset, makes the first-deposit branch economically self-defeating for an attacker: the attacker must sacrifice at least 1 000 USD-wei of LP to initiate any inflation attempt, and the virtual-shares formula removes the incentive regardless.
 
 #### JIT/MEV sandwich attack (finding #B, HIGH → Fixed, P1)
 
