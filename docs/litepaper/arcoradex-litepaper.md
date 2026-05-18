@@ -169,11 +169,166 @@ The only LP yield is the retained share of swap fees and withdrawal fees accruin
 
 ## 4. Oracle Architecture
 
-<!-- section 4 content — Task 3 -->
+Oracle pricing is the core architectural bet in ArcoraDEX — and the largest attack surface. The oracle layer is a stack of four independent controls, each targeting a distinct failure mode: aggregator-level source divergence, pool-level cache poisoning, per-operation price movement, and rolling-window observability. This section describes each layer in precise contract terms.
+
+### 4.1 Per-token `OracleAggregator`
+
+Each of the seven listed tokens has its own `OracleAggregator` contract (`contracts/src/oracle/OracleAggregator.sol`) deployed and registered as the token's `usdOracle` in `ArcoraDexRegistry`. The aggregator wraps an immutable `PRIMARY` and an immutable `SECONDARY` feed, both `IChainlinkAggregator`-compatible, with a matching `DECIMALS` verified at construction (`DecimalsMismatch` reverts if they differ). The pool interacts with `OracleAggregator` identically to a direct Chainlink feed — it calls `latestRoundData()` and `decimals()` on the `usdOracle` address obtained from the registry.
+
+**Normal mode (both sources live).** `latestRoundData()` calls `_tryRead(PRIMARY)` and `_tryRead(SECONDARY)`. Each `_tryRead` wraps the underlying feed in a `try`/`catch` and validates the returned tuple: positive `answer`, non-zero `updatedAt`, non-zero `roundId`, and `answeredInRound >= roundId` (round-completeness check). A revert or any validation failure returns `(false, 0, 0)`. When both sources return a valid reading, the aggregator checks divergence:
+
+```
+absDiff * 10_000 > minAns * maxDivergenceBps  →  revert SourcesDiverge(primary, secondary, capBps)
+```
+
+If the check passes, the aggregator returns the integer midpoint `(pAns + sAns) / 2` and the more-recent of the two `updatedAt` timestamps. The `mid` computation (sum of two positive `int256` values) cannot overflow in practice.
+
+**Single-source degraded mode.** If exactly one source passes `_tryRead`, the aggregator returns that source's answer directly. No divergence cross-check is possible in this state — the second-opinion guard is inactive. The off-chain monitoring hook `sourceHealth()` returns `(primaryOk, secondaryOk)` so keepers can detect and alert on degraded-mode operation.
+
+**Full failure.** If both sources fail `_tryRead`, the aggregator reverts `AllSourcesUnavailable`. This revert propagates upward until it is caught by the pool's `_readOracle` try/catch (see §4.2).
+
+**Staleness enforcement.** The aggregator itself does not enforce a maximum answer age — it only validates round completeness and non-negativity. Per-token staleness bounds (`maxStaleSeconds`) are enforced downstream by the pool's `_readOracle`, using the value stored in `ArcoraDexRegistry.TokenInfo`.
+
+### 4.2 Pool oracle read path: `_readOracle` and `lastValidPrice` cache
+
+`_readOracle(address token)` (`ArcoraDexPool.sol` lines 98–135) is an `internal view` function — it reads state but never writes it. Its responsibilities are:
+
+1. Fetch `TokenInfo` from `REGISTRY.tokenInfo(token)` to obtain `usdOracle`, `decimals`, `isActive`, and `maxStaleSeconds`. Revert `TokenNotActive` if `!info.isActive`.
+2. Wrap `info.usdOracle.latestRoundData()` in a `try`/`catch`. A revert from any cause — `AllSourcesUnavailable`, `SourcesDiverge`, ABI mismatch, or a deactivated Chainlink feed — is caught and produces `isFresh = false`.
+3. When the call succeeds, apply additional validation: `roundId != 0`, `answeredInRound >= roundId`, `updatedAt != 0`, `updatedAt <= block.timestamp`, `(block.timestamp - updatedAt) <= maxStaleSeconds`, and `answer > 0`. Any failure sets `isFresh = false`.
+4. When all validations pass, wrap `info.usdOracle.decimals()` in a `try`/`catch` and normalise to a 1e18-scaled USD price. A revert from `decimals()` also sets `isFresh = false`.
+5. Return `(price1e18, tokenDecimals, isFresh)` — no storage writes.
+
+The `lastValidPrice[token]` cache is written by `_readUsdPrice1e18Mut(token)` (lines 142–179), the stateful wrapper used in every deposit, withdrawal, and swap execution. The cache is updated when `isFresh = true` and the cache-deviation guard (see §4.3) accepts the reading. When the oracle is stale, reverts, or the reading is rejected by the cache-deviation guard, `_readUsdPrice1e18Mut` returns the existing cache value rather than reverting. A `NoValidPrice(token)` revert fires only if the cache has never been seeded for that token (i.e., `lastValidPrice[token] == 0`, which can only occur before the first successful price read for a token). This architecture ensures that a reverting or stale oracle cannot brick the pool for an already-active token (see also INV-6 in `docs/audit/invariants.md`).
+
+The companion `lastValidPriceAt[token]` timestamp records when the cache was last written; it is stored for off-chain diagnostics and is not used in any on-chain control path.
+
+### 4.3 Cache-deviation guard
+
+A fresh oracle reading is accepted by the cache only if it does not diverge from the existing cache by more than `maxOracleDeviationBps`. The check (inside `_readUsdPrice1e18Mut`, lines 150–164) is:
+
+```
+diff = |price1e18 - cached|
+if diff * BPS > cached * maxOracleDeviationBps  →  isFresh = false
+```
+
+When the guard fires, the fresh reading is silently demoted to stale and the existing cache value is returned. This prevents a single compromised oracle push from poisoning the cache in one block, even if it passes all the per-round checks in `_readOracle`. The same guard logic is applied identically in `_readUsdPrice1e18View` (the view-only NAV reader) and inlined in `_readUsdPrice1e18WithGuard` (the quote path reader).
+
+### 4.4 `lastAcceptedPrice` per-operation ratchet
+
+`_readAndGuardPrice(address token)` (lines 310–328) is the function called by every mutating user operation (`deposit`, `withdraw`, `swap`). After obtaining the cache-guarded price from `_readUsdPrice1e18Mut`, it applies a second check against `lastAcceptedPrice[token]` — the price at which the previous user operation on this token executed:
+
+```
+diff = |price1e18 - prev|
+if diff * BPS > prev * maxOracleDeviationBps  →  revert PriceDeviation(token, price1e18, prev, maxDevBps)
+```
+
+On success, `lastAcceptedPrice[token]` is overwritten with the accepted price (line 327), advancing the ratchet forward. This ratchet limits how far the executing price can move per user operation, regardless of how far the oracle has moved in the interim. An attacker attempting a slow-walk price-manipulation drain must therefore execute at least `100% / maxOracleDeviationBps` separate transactions to walk `lastAcceptedPrice` 100% from its initial value — providing off-chain monitoring time to detect and respond.
+
+The ratchet can be bypassed by the owner via `syncAcceptedPrice(address token)` (`onlyOwner`, Timelock-gated, 48 h delay). This escape hatch is necessary for legitimate large market moves (e.g., TRYC or BRLC after a central-bank repricing) but requires a 48-hour governance proposal to execute.
+
+### 4.5 `CumulativeDeviationGuard` — event-only rolling observability
+
+`CumulativeDeviationGuard` (`contracts/src/oracle/CumulativeDeviationGuard.sol`) is a separate, standalone contract. It is **not** wired into any pool call path. Its purpose is to provide off-chain monitoring with a deterministic, on-chain record of cumulative price deviation.
+
+Anyone — an off-chain keeper, a monitoring script, or an EOA — calls `record(address token, uint256 price1e18)` after an oracle update. The contract maintains a per-token tumbling-window state `(startPrice1e18, startTimestamp)`:
+
+- If the window has expired (configurable via `setConfig`, `onlyOwner`; default 86 400 s / 24 h) or has not been initialised, the window is reset to the current observation.
+- Within an active window, the deviation from the window anchor is computed as `|price1e18 - startPrice1e18| * 10_000 / startPrice1e18`. If this exceeds `maxCumulativeBps`, `CircuitBreakerTripped(token, deviationBps, timestamp)` is emitted. `PriceObserved(token, price1e18, timestamp)` is emitted on every call.
+
+**There is no on-chain auto-pause in the current phase (P3).** An emitted `CircuitBreakerTripped` event is a signal to an off-chain monitor, which then decides whether to submit a transaction through the Pause Guardian Safe to call `pool.pause()`. The monitoring layer — not the contract — is the decision maker.
+
+`record` is permissionless: any caller can invoke it with any price. This is intentional for P3 because the contract has no on-chain effect beyond emitting events. However, it means `CircuitBreakerTripped` events must be treated as untrusted hints by the off-chain monitor, which must re-validate the price against its own trusted feed before paging the Pause Guardian (per the NatSpec at `CumulativeDeviationGuard.sol` lines 26–30). If a future phase wires on-chain auto-pause to this contract, `record` must first be made keeper-only (tracked in `docs/audit/p5-tracking.md`).
+
+The tumbling-window design is an explicit P3 MVP trade-off: it is cheaper to operate than a true rolling window but does not detect slow drift that stays just under the cap within each window and accumulates across window boundaries. A rolling multi-window detector is deferred to P5.
+
+### 4.6 The three distinct deviation controls
+
+Three separate parameters govern oracle deviation in ArcoraDEX. They are not redundant — each measures a different quantity at a different layer:
+
+| Parameter | Location | What it measures | When it fires |
+|-----------|----------|------------------|---------------|
+| `OracleAggregator.maxDivergenceBps` | `OracleAggregator.sol` | Spread between **primary and secondary source prices** at the moment of the aggregator read | `revert SourcesDiverge` during `latestRoundData()` — before any price reaches the pool |
+| `ArcoraDexRegistry.maxOracleDeviationBps` (per token) | `IArcoraDexRegistry.TokenInfo` | Jump from the **aggregator's output vs. the pool's `lastValidPrice` cache** (cache-deviation guard) and vs. **`lastAcceptedPrice`** (ratchet guard) per user operation | Cache-deviation guard: demotes the fresh price to stale (silent fallback to cache). Ratchet guard: `revert PriceDeviation` in `_readAndGuardPrice` and in `_readUsdPrice1e18WithGuard` |
+| `CumulativeDeviationGuard.maxCumulativeBps` (per token) | `CumulativeDeviationGuard.sol Config` | Absolute deviation from the **tumbling-window anchor** over the configured window period | Event-only: `emit CircuitBreakerTripped` — no on-chain revert or pause |
+
+`maxDivergenceBps` is a feed-spread control: it answers "are both of my oracle sources telling the same story right now?" `maxOracleDeviationBps` is a pool-state control: it answers "is the current oracle output too far from the price the pool last accepted?" `maxCumulativeBps` is a monitoring control: it answers "has cumulative drift over the window exceeded the threshold an operator cares about?"
+
+**Deployed configuration** (post-P3 Timelock batch):
+
+| Token | Aggregator `maxDivergenceBps` | Registry `maxOracleDeviationBps` | Guard `maxCumulativeBps` | Guard window |
+|-------|-------------------------------|----------------------------------|--------------------------|--------------|
+| USDC  | 50  | 200  | 200 | 86 400 s (24 h) |
+| USDT  | 50  | 200  | 200 | 86 400 s (24 h) |
+| PYUSD | 50  | 200  | 200 | 86 400 s (24 h) |
+| DAI   | 50  | 200  | 200 | 86 400 s (24 h) |
+| EURC  | 100 | 200  | 300 | 86 400 s (24 h) |
+| TRYC  | 200 | 200  | 500 | 86 400 s (24 h) |
+| BRLC  | 200 | 200  | 500 | 86 400 s (24 h) |
+
+TRYC and BRLC carry wider divergence caps (200 bps vs. 50 bps for USD stables) to accommodate the higher natural volatility of their reference currencies. Their Registry `maxOracleDeviationBps` was reduced from 5 000 bps to 200 bps by the P3 Timelock batch (operations 8–9 of that batch) to close finding #1.
 
 ## 5. Security Model
 
-<!-- section 5 content — Task 3 -->
+The P1–P3 hardening programme addressed eleven findings (eight from an external audit plus three economic-attack vectors identified in a follow-up internal pass). This section describes the specific mitigations deployed against the two highest-impact attack classes: economic attacks on LP accounting and oracle-manipulation attacks on pricing. Residual risks that persist after these mitigations are documented separately in §7.
+
+### 5.1 Economic-attack defences
+
+#### First-depositor inflation attack (finding #A, CRITICAL → Fixed, P1)
+
+**The attack.** Classic ERC4626-style inflation: the first depositor receives a minimal number of LP shares, then donates a large token balance directly to the pool contract, inflating the NAV without minting LP. Any subsequent depositor's calculated LP share rounds to zero due to the low `totalSupply / NAV` ratio, causing their tokens to be permanently locked in the pool with no corresponding LP receipt.
+
+**Why it does not apply to ArcoraDEX.**
+
+Two independent defences are active simultaneously:
+
+1. **Structural donation immunity via `reserves[]`.** The pool does not read `token.balanceOf(address(this))` anywhere in its accounting. NAV is computed solely from the explicit `reserves[token]` mapping, which is incremented only by `deposit` and `swap` calls. Tokens transferred directly to the pool address — a "donation" — update the ERC20 balance of the pool contract but do not update `reserves[token]`, so NAV is unchanged and no LP inflation is possible from this vector (see INV-5 in `docs/audit/invariants.md`).
+
+2. **Virtual-shares offset.** The LP mint formula uses `VIRTUAL_SHARES = 1e6` and `VIRTUAL_ASSETS = 1` (`internal constant` in `ArcoraDexPool`, compile-time fixed):
+
+   ```
+   lpMinted = usdIn × (totalSupply + VIRTUAL_SHARES) / (NAV + VIRTUAL_ASSETS)
+   ```
+
+   The `VIRTUAL_SHARES` term (10⁶) dominates the numerator when `totalSupply` is small, preventing round-down-to-zero for any positive `usdIn` regardless of the `totalSupply / NAV` ratio. The symmetric formula is applied in `withdraw`. This ERC4626-style offset is an independent defence against LP-math inflation attacks, operating correctly even if the `reserves[]` architecture is somehow bypassed.
+
+3. **`MINIMUM_LIQUIDITY` permanent burn.** On the first deposit, `MINIMUM_LIQUIDITY = 1000` LP shares are minted to `DEAD_ADDRESS` (`address(0xdead)`) and can never be burned (the pool's `withdraw` burns only from `msg.sender`, never from `0xdead`). This creates a permanent non-zero LP floor that, combined with the virtual-shares offset, makes the first-deposit branch economically self-defeating for an attacker: the attacker must sacrifice at least 1 000 USD-wei of LP to initiate any inflation attempt, and the virtual-shares formula removes the incentive regardless.
+
+#### JIT/MEV sandwich attack (finding #B, HIGH → Fixed, P1)
+
+**The attack.** A block builder or searcher can observe a pending keeper oracle update, deposit just before it, and withdraw immediately after, capturing the NAV delta (the difference between the pre-update and post-update pool valuation) with effectively zero capital at risk. Because `totalReservesUSD()` always reads the current oracle, a deposit and an immediate withdrawal in adjacent transactions within a single MEV bundle would perfectly straddle the oracle price move.
+
+**Fix — two layers:**
+
+1. **1-hour minimum hold (`MIN_HOLD_SECONDS = 1 hours`).** `deposit` writes `lastMintAt[msg.sender] = block.timestamp` at line 405 of `ArcoraDexPool.sol`. `withdraw` enforces `block.timestamp >= lastMintAt[msg.sender] + MIN_HOLD_SECONDS`, reverting `EarlyWithdraw(unlockAt, block.timestamp)` on violation. One hour covers at least two keeper cycles (the oracle keeper fires every ~30 minutes), making an atomic same-block deposit-withdraw impossible and multi-bundle sandwiching economically unattractive.
+
+2. **LP transfer hook — closing the bypass.** Without additional protection, an attacker could deposit to wallet A (starting the hold clock on A), transfer the LP tokens to wallet B (which has `lastMintAt[B] == 0`), and withdraw immediately from B — bypassing A's hold. This bypass is closed by `ArcoraDexLP._update`, which calls `IArcoraDexPool(MINTER).notifyLPTransfer(from, to)` on every non-mint, non-burn transfer. `notifyLPTransfer` (lines 636–644 of `ArcoraDexPool.sol`) propagates the sender's lock to the recipient:
+
+   ```
+   if (lastMintAt[from] > lastMintAt[to]) {
+       lastMintAt[to] = lastMintAt[from];
+   }
+   ```
+
+   The recipient inherits the stricter (later) of the two timestamps. A fresh wallet receiving LP from a recent depositor cannot withdraw until the original depositor's 1-hour window has elapsed. The hold clock is reset forward on a new deposit: if the receiving wallet subsequently makes its own deposit, `lastMintAt[to]` is overwritten with the new `block.timestamp`, starting a fresh 1-hour window from that point.
+
+### 5.2 Oracle-attack defences
+
+The oracle layer's four-control architecture (described in detail in §4) provides the following specific defences against oracle manipulation:
+
+**Staleness bounds (`maxStaleSeconds` per token).** `_readOracle` validates `(block.timestamp - updatedAt) <= info.maxStaleSeconds` as part of its per-round validation. A feed that has not been updated within the staleness window produces `isFresh = false` and the pool falls back to `lastValidPrice[token]`. Default staleness limits: 3 600 s for USDC/USDT/PYUSD/DAI, 14 400 s for EURC, 86 400 s for TRYC/BRLC — calibrated to the expected heartbeat of each feed.
+
+**Source diversity and divergence cap.** Each token's oracle is an `OracleAggregator` backed by two independent feeds. `maxDivergenceBps` (50 bps for USD stables, up to 200 bps for TRYC/BRLC) constrains how far the primary and secondary sources can disagree before the aggregator reverts `SourcesDiverge` rather than returning an average. A single compromised oracle key can control only one source; the divergence check catches a unilateral price push and prevents it from reaching the pool.
+
+**Revert tolerance (finding #P3-R, Fixed, P3).** Both `info.usdOracle.latestRoundData()` and `info.usdOracle.decimals()` are wrapped in `try`/`catch` inside `_readOracle`. Any revert — from `AllSourcesUnavailable`, `SourcesDiverge`, ABI mismatch, or a deactivated feed — collapses to `isFresh = false` and the pool falls back to the last cached price. A reverting oracle cannot brick the pool for an already-active token.
+
+**Cache-deviation guard.** Even when a fresh oracle reading passes all per-round checks, a single-block price spike from a compromised aggregator is blocked by the cache-deviation guard in `_readUsdPrice1e18Mut`: a fresh reading that deviates more than `maxOracleDeviationBps` from `lastValidPrice[token]` is demoted to stale. The cache cannot be poisoned in a single block, regardless of what the aggregator returns.
+
+**Per-operation ratchet (`lastAcceptedPrice`).** `_readAndGuardPrice` enforces that each user operation executes at a price within `maxOracleDeviationBps` (200 bps for all tokens post-P3) of the previous accepted price. An attacker attempting to walk the accepted price toward a manipulated target must submit many sequential transactions, each within the cap, giving off-chain monitoring time to detect abnormal behaviour and invoke the Pause Guardian Safe.
+
+**Cumulative monitoring (`CumulativeDeviationGuard`).** The off-chain keeper calls `record` after each oracle update. Exceeding `maxCumulativeBps` cumulative deviation within the 24-hour tumbling window emits `CircuitBreakerTripped`, which the monitoring layer treats as a signal to evaluate a pause. This is human-in-the-loop for P3; on-chain auto-pause is deferred to P5 (and will require making `record` keeper-only before wiring).
+
+These mitigations are designed to reduce the attack surface of oracle manipulation to a class of multi-transaction, colluding-source attacks that require sustained cooperation between at least two compromised oracle keys and provide meaningful detection windows. They do not eliminate oracle risk entirely; §7 carries the residual risk disclosures.
 
 ## 6. Governance & Operations
 
