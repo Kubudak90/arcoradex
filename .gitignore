@@ -45,3 +45,4 @@ packages/*/coverage/
 
 # Vercel build output (root + workspace)
 .vercel/
+.vercel
