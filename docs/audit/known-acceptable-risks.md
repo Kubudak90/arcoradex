@@ -150,9 +150,10 @@ enhancement (`docs/audit/p5-tracking.md`).
   cross-window drift would also be cross-transaction, giving the off-chain monitor
   many opportunities to observe and alert.
 - The `OracleAggregator`'s two-source divergence check (`maxDivergenceBps = 200`
-  for TRYC/BRLC, `OracleAggregator.sol` line 61 `SourcesDiverge` revert) means
-  a single compromised keeper cannot push the primary source more than 200 bps
-  without the honest secondary source triggering `SourcesDiverge`.
+  for TRYC/BRLC, `OracleAggregator.sol` `latestRoundData` — `SourcesDiverge`
+  revert at line 74) means a single compromised keeper cannot push the primary
+  source more than 200 bps without the honest secondary source triggering
+  `SourcesDiverge`.
 - The P5 roadmap includes a rolling-window or multi-window detector as an explicit
   improvement (roadmap §10 and the P5 deferred-work register).
 
@@ -190,7 +191,10 @@ part of the P2 governance spec.
   withdrawals, limiting damage to whatever an attacker could execute before the
   48-hour proposal fires. After the P4/A1 fix, `unpause()` is `onlyOwner`
   (`ArcoraDexPool.sol` line 626), so a compromised 2/3 Pause Guardian cannot
-  restart a pool that the owner deliberately paused.
+  restart a pool that the owner deliberately paused. (Note: the P2 governance
+  design spec predates the P4/A1 tightening and still shows `unpause()` as a
+  guardian-instant action. The current code — `onlyOwner` unpause — is
+  authoritative; the P2 spec's action-routing table is superseded on this point.)
 - The fee-collector role is not separated from the Governance Safe in v1 (deferred
   per roadmap §4 out-of-scope note). A compromised governance Safe could therefore
   extract accrued protocol fees in addition to the above. This is a known accepted
@@ -240,32 +244,43 @@ testnet deployment is scaffolding.
 
 ---
 
-## R7 — Fee-collector multisig not separated from governance
+## R7 — Fee-collector role not separated from governance ownership
 
-**Risk.** The Governance Safe is both the owner/proposer for governance actions and
-the direct recipient of collected protocol fees (via `collectProtocolFees` in
-`ArcoraDexPool`). There is no separate fee-collector role. A compromised Governance
-Safe, or a malicious governance majority, can immediately extract all accrued
-protocol fees without the 48-hour Timelock delay (fee collection is not a
-Timelock-gated action).
+**Risk.** The protocol-fee recipient role is not separated from governance
+ownership. `withdrawProtocolFees(address token, uint256 amount, address to)` in
+`ArcoraDexPool` is `onlyOwner`, and the owner is the `TimelockController` (set by
+`DeployGovernanceP2.s.sol`). Consequently, a malicious governance majority could
+pass a proposal to redirect accrued protocol fees to an attacker-controlled
+address — but that proposal is subject to the same **48-hour Timelock delay** that
+applies to every other `onlyOwner` action. Fee withdrawal is **not** an
+instant-drain path; it is fully Timelock-gated like `setSwapFeeBps`,
+`setProtocolFeeShareBps`, and every other Pool owner action. The accepted risk is
+the absence of a dedicated fee-collector multisig, not a bypass of the Timelock.
 
 **Why accepted for v1.** Separating the fee-collector into a distinct multisig was
 explicitly called out as out-of-scope for P2 in the governance design spec
-(`docs/superpowers/specs/2026-05-14-phase2-governance-design.md` §4 and the
-roadmap §4 out-of-scope note): "Fee-collector multisig separation (deferred —
-current governance multisig collects fees)". The separation would require a
-dedicated fee-withdrawal module and adds governance surface before the Spearbit
-review.
+(`docs/superpowers/specs/2026-05-14-phase2-governance-design.md` §4 "Out of
+scope") and the mainnet-readiness roadmap §4 out-of-scope note: "Fee-collector
+multisig separation (deferred — current governance multisig collects fees via
+Timelock)". The separation would require a dedicated fee-withdrawal module and
+adds governance surface before the Spearbit review. The deferred work is tracked
+as a P5 item.
 
 **Compensating controls.**
 
-- The 48-hour `TimelockController` delay on all other owner actions limits the
-  blast radius of a governance compromise to fee extraction plus any mischief
-  executable before a malicious proposal fires.
-- Protocol fees are bounded by `protocolFeeShareBps` and the actual swap volume;
-  they do not represent user principal.
-- Fee-collector separation is a tracked P5 item in the deferred-work register
-  (`docs/audit/p5-tracking.md`).
+- `withdrawProtocolFees` is `onlyOwner`; the owner is the `TimelockController`
+  with `getMinDelay() = 48 hours`. Any proposal to withdraw protocol fees to an
+  attacker-controlled address is publicly visible on-chain for 48 hours before it
+  can execute, giving watchers and remaining keyholders time to observe and cancel
+  via `TimelockController.cancel()`.
+- The affected funds are accrued protocol revenue (bounded by
+  `protocolFeeShareBps` and actual swap volume); they do not represent LP
+  principal or user deposits.
+- The 48-hour delay makes any malicious fee-extraction proposal observable and
+  cancellable — the risk is governance-trust bounded by the Timelock, not an
+  instant or unobservable drain.
+- Full fee-collector/governance separation is a tracked P5 item in the
+  deferred-work register (`docs/audit/p5-tracking.md`).
 
 ---
 
