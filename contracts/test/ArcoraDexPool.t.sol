@@ -11,6 +11,7 @@ import { IChainlinkAggregator } from "../src/interfaces/IChainlinkAggregator.sol
 import { MintableERC20 }       from "../src/testnet/MintableERC20.sol";
 import { MockChainlinkFeed }   from "../src/testnet/MockChainlinkFeed.sol";
 import { RevertingMockFeed, RevertingDecimalsMockFeed } from "./oracle/RevertingMockFeed.sol";
+import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 
 contract ArcoraDexPoolTest is Test {
     ArcoraDexPool     pool;
@@ -545,7 +546,7 @@ contract ArcoraDexPoolTest is Test {
         pool.setPauseGuardian(address(0xC0DE));
     }
 
-    function test_pause_byGuardian_succeeds_byThirdParty_reverts() public {
+    function test_pauseUnpause_guardianCanPause_cannotUnpause() public {
         address guardian = address(0xC0DE);
         address attacker = address(0xBAD);
         vm.prank(owner);
@@ -558,7 +559,7 @@ contract ArcoraDexPoolTest is Test {
 
         // Guardian cannot unpause — only the owner (Timelock) may restart (A1 asymmetry)
         vm.prank(guardian);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, guardian));
         pool.unpause();
         assertEq(pool.paused(), true); // still paused
 
