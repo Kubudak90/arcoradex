@@ -258,11 +258,11 @@ Three separate parameters govern oracle deviation in ArcoraDEX. They are not red
 
 | Token | Aggregator `maxDivergenceBps` | Registry `maxOracleDeviationBps` | Guard `maxCumulativeBps` | Guard window |
 |-------|-------------------------------|----------------------------------|--------------------------|--------------|
-| USDC  | 50  | 200  | 200 | 86 400 s (24 h) |
-| USDT  | 50  | 200  | 200 | 86 400 s (24 h) |
-| PYUSD | 50  | 200  | 200 | 86 400 s (24 h) |
-| DAI   | 50  | 200  | 200 | 86 400 s (24 h) |
-| EURC  | 100 | 200  | 300 | 86 400 s (24 h) |
+| USDC  | 50  | 50   | 200 | 86 400 s (24 h) |
+| USDT  | 50  | 50   | 200 | 86 400 s (24 h) |
+| PYUSD | 50  | 50   | 200 | 86 400 s (24 h) |
+| DAI   | 50  | 50   | 200 | 86 400 s (24 h) |
+| EURC  | 100 | 150  | 300 | 86 400 s (24 h) |
 | TRYC  | 200 | 200  | 500 | 86 400 s (24 h) |
 | BRLC  | 200 | 200  | 500 | 86 400 s (24 h) |
 
@@ -324,7 +324,7 @@ The oracle layer's four-control architecture (described in detail in §4) provid
 
 **Cache-deviation guard.** Even when a fresh oracle reading passes all per-round checks, a single-block price spike from a compromised aggregator is blocked by the cache-deviation guard in `_readUsdPrice1e18Mut`: a fresh reading that deviates more than `maxOracleDeviationBps` from `lastValidPrice[token]` is demoted to stale. The cache cannot be poisoned in a single block, regardless of what the aggregator returns.
 
-**Per-operation ratchet (`lastAcceptedPrice`).** `_readAndGuardPrice` enforces that each user operation executes at a price within `maxOracleDeviationBps` (200 bps for all tokens post-P3) of the previous accepted price. An attacker attempting to walk the accepted price toward a manipulated target must submit many sequential transactions, each within the cap, giving off-chain monitoring time to detect abnormal behaviour and invoke the Pause Guardian Safe.
+**Per-operation ratchet (`lastAcceptedPrice`).** `_readAndGuardPrice` enforces that each user operation executes at a price within `maxOracleDeviationBps` of the previous accepted price — 50 bps for USD-pegged stables, 150 bps for EURC, and 200 bps for TRYC/BRLC (post-P3). An attacker attempting to walk the accepted price toward a manipulated target must submit many sequential transactions, each within the cap, giving off-chain monitoring time to detect abnormal behaviour and invoke the Pause Guardian Safe.
 
 **Cumulative monitoring (`CumulativeDeviationGuard`).** The off-chain keeper calls `record` after each oracle update. Exceeding `maxCumulativeBps` cumulative deviation within the 24-hour tumbling window emits `CircuitBreakerTripped`, which the monitoring layer treats as a signal to evaluate a pause. This is human-in-the-loop for P3; on-chain auto-pause is deferred to P5 (and will require making `record` keeper-only before wiring).
 
@@ -436,7 +436,7 @@ Developers, auditors, and liquidity providers should treat this section as the a
 
 **Why accepted for v1.** There is no oracle-free design that delivers the pool's stated goal — eliminating curve-induced slippage for pegged assets. The choice of an oracle-priced model is a deliberate trade-off: it eliminates slippage at the cost of introducing oracle-dependence. Accepting oracle risk is the product design.
 
-**Compensating controls.** Four independent controls are deployed (described in detail in §4): dual-source `OracleAggregator` with a divergence check (`SourcesDiverge` revert at `maxDivergenceBps`); a `lastValidPrice` cache with a per-block deviation guard that prevents cache poisoning in a single block; a `lastAcceptedPrice` per-operation ratchet that limits how far the executed price can advance per transaction (`maxOracleDeviationBps = 200 bps` for all tokens post-P3); and the `CumulativeDeviationGuard` event stream, which gives off-chain monitors an on-chain record of cumulative drift. Together these controls reduce the worst-case oracle manipulation from a single-transaction drain to a slow multi-transaction walk requiring sustained cooperation between at least two compromised oracle keys, providing meaningful detection windows.
+**Compensating controls.** Four independent controls are deployed (described in detail in §4): dual-source `OracleAggregator` with a divergence check (`SourcesDiverge` revert at `maxDivergenceBps`); a `lastValidPrice` cache with a per-block deviation guard that prevents cache poisoning in a single block; a `lastAcceptedPrice` per-operation ratchet that limits how far the executed price can advance per transaction (per-tier `maxOracleDeviationBps`: 50 bps for USD-pegged stables, 150 bps for EURC, 200 bps for TRYC/BRLC, post-P3); and the `CumulativeDeviationGuard` event stream, which gives off-chain monitors an on-chain record of cumulative drift. Together these controls reduce the worst-case oracle manipulation from a single-transaction drain to a slow multi-transaction walk requiring sustained cooperation between at least two compromised oracle keys, providing meaningful detection windows.
 
 **Residual exposure.** In the current testnet configuration, the same keeper EOA pushes both the primary and secondary feed for each token. A single compromised key therefore bypasses the two-source divergence check. On mainnet, primary and secondary are intended to be independent (Chainlink primary, Pyth/DEX TWAP secondary with a different key), but that independence is deferred to P5. Until then, the oracle layer provides defence-in-depth but not two-party compromise resistance.
 
@@ -488,7 +488,7 @@ Developers, auditors, and liquidity providers should treat this section as the a
 
 **Why accepted for v1.** The tumbling-window approach was deliberately chosen as a P3 MVP: it catches acute intra-window spikes — the dominant attack vector — while keeping the implementation simple and cheap. A true rolling-window detector requires either a circular buffer (expensive storage) or a two-pass checkpoint scheme (more complex and more audit surface). A rolling or multi-window detector is a P5 enhancement.
 
-**Compensating controls.** The `maxOracleDeviationBps = 200 bps` per-transaction cap on `lastAcceptedPrice` limits how far the accepted price can drift in a single oracle update, regardless of the tumbling window. A cross-window drift is also a cross-transaction drift, giving the off-chain monitor many opportunities to observe and alert. The `OracleAggregator`'s two-source divergence check (`maxDivergenceBps = 200 bps` for TRYC/BRLC) means a single compromised keeper cannot push the primary source more than 200 bps without the honest secondary source triggering `SourcesDiverge`.
+**Compensating controls.** The per-tier `maxOracleDeviationBps` cap on `lastAcceptedPrice` limits how far the accepted price can drift in a single oracle update, regardless of the tumbling window: 50 bps for USD-pegged stables (USDC, USDT, PYUSD, DAI), 150 bps for EURC, and 200 bps for TRYC and BRLC (the latter two tightened from 5 000 bps by operations 8–9 of the P3 Timelock batch). A cross-window drift is also a cross-transaction drift, giving the off-chain monitor many opportunities to observe and alert. The `OracleAggregator`'s two-source divergence check (`maxDivergenceBps = 200 bps` for TRYC/BRLC) means a single compromised keeper cannot push the primary source more than 200 bps without the honest secondary source triggering `SourcesDiverge`.
 
 ---
 
@@ -516,12 +516,12 @@ Developers, auditors, and liquidity providers should treat this section as the a
 
 | ID | Risk category | Compensating control | P5 resolution |
 |----|---------------|---------------------|---------------|
-| R1 | Oracle dependence | 4-layer oracle defence; 200 bps per-op ratchet | Independent primary/secondary sources on mainnet |
+| R1 | Oracle dependence | 4-layer oracle defence; per-tier per-op ratchet (50/150/200 bps) | Independent primary/secondary sources on mainnet |
 | R2 | Liquidity-thin rounding | `VIRTUAL_SHARES = 1e6`; min-liquidity bootstrap | No change needed |
 | R3 | Centralized initial liquidity | 1 h min-hold lock; LP transfer hook; founding LP commitments | Decentralized LP incentive program |
 | R4 | Governance multisig compromise | 48 h Timelock; Pause Guardian instant freeze | Hardware wallets; mainnet signer onboarding |
 | R5 | Permissionless `record` | Events-only; monitor re-validates before paging | Keeper allowlist when auto-pause is wired |
-| R6 | Tumbling window blind spot | 200 bps per-op cap; two-source divergence check | Rolling-window or multi-window detector |
+| R6 | Tumbling window blind spot | Per-tier per-op cap (50/150/200 bps); two-source divergence check | Rolling-window or multi-window detector |
 | R7 | Fee-collector not separated | 48 h Timelock on `withdrawProtocolFees`; cancel path | Dedicated fee-collector multisig module |
 | R8 | Pre-bounty exposure window | Audit precedes launch; informal disclosure channel | Immunefi launch first week post-mainnet |
 
@@ -581,15 +581,15 @@ All values are hard-coded `constant` or enforced at deployment and verified on-c
 
 | Token | Tier | `OracleAggregator` `maxDivergenceBps` | Registry `maxOracleDeviationBps` | Guard `maxCumulativeBps` | Guard `windowSeconds` |
 |-------|------|--------------------------------------|----------------------------------|--------------------------|----------------------|
-| USDC  | USD-pegged | 50 | 200 | 200 | 86 400 |
-| USDT  | USD-pegged | 50 | 200 | 200 | 86 400 |
-| PYUSD | USD-pegged | 50 | 200 | 200 | 86 400 |
-| DAI   | USD-pegged | 50 | 200 | 200 | 86 400 |
-| EURC  | EUR (soft-FX) | 100 | 200 | 300 | 86 400 |
+| USDC  | USD-pegged | 50 | 50 | 200 | 86 400 |
+| USDT  | USD-pegged | 50 | 50 | 200 | 86 400 |
+| PYUSD | USD-pegged | 50 | 50 | 200 | 86 400 |
+| DAI   | USD-pegged | 50 | 50 | 200 | 86 400 |
+| EURC  | EUR (soft-FX) | 100 | 150 | 300 | 86 400 |
 | TRYC  | Soft-FX (TRY) | 200 | 200 | 500 | 86 400 |
 | BRLC  | Soft-FX (BRL) | 200 | 200 | 500 | 86 400 |
 
-USD-pegged stables carry the tightest divergence caps (50 bps) reflecting the low expected spread between two independent USD price feeds. EURC carries a 100 bps divergence cap and a 300 bps cumulative guard cap. TRYC and BRLC carry a 200 bps divergence cap and a 500 bps cumulative guard cap to accommodate higher natural FX volatility. All seven tokens share `maxOracleDeviationBps = 200 bps`; TRYC and BRLC were reduced from 5 000 bps to 200 bps by operations 8–9 of the P3 Timelock batch.
+USD-pegged stables carry the tightest divergence caps (50 bps) reflecting the low expected spread between two independent USD price feeds. EURC carries a 100 bps divergence cap and a 300 bps cumulative guard cap. TRYC and BRLC carry a 200 bps divergence cap and a 500 bps cumulative guard cap to accommodate higher natural FX volatility. Registry `maxOracleDeviationBps` is per-tier: 50 bps for USD-pegged stables, 150 bps for EURC, and 200 bps for TRYC and BRLC; the latter two were reduced from 5 000 bps to 200 bps by operations 8–9 of the P3 Timelock batch.
 
 ### 9.2 Arc Testnet Deployment Addresses
 
