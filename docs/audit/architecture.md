@@ -198,15 +198,15 @@ These three parameters measure distinct quantities and are not redundant. All th
 
 | Token | Aggregator `maxDivergenceBps` | Registry `maxOracleDeviationBps` | Guard `maxCumulativeBps` | Guard window |
 |-------|-------------------------------|----------------------------------|--------------------------|--------------|
-| USDC  | 50  | 200  | 200 | 86 400 s (24 h) |
-| USDT  | 50  | 200  | 200 | 86 400 s (24 h) |
-| PYUSD | 50  | 200  | 200 | 86 400 s (24 h) |
-| DAI   | 50  | 200  | 200 | 86 400 s (24 h) |
-| EURC  | 100 | 200  | 300 | 86 400 s (24 h) |
+| USDC  | 50  | 50   | 200 | 86 400 s (24 h) |
+| USDT  | 50  | 50   | 200 | 86 400 s (24 h) |
+| PYUSD | 50  | 50   | 200 | 86 400 s (24 h) |
+| DAI   | 50  | 50   | 200 | 86 400 s (24 h) |
+| EURC  | 100 | 150  | 300 | 86 400 s (24 h) |
 | TRYC  | 200 | 200  | 500 | 86 400 s (24 h) |
 | BRLC  | 200 | 200  | 500 | 86 400 s (24 h) |
 
-*TRYC and BRLC registry caps were 5 000 bps before the P3 Timelock batch; they are reduced to 200 bps by operations 8–9 in that batch (scheduled batch id `0x31218725...`, executable ≈ 2026-05-20).*
+*Registry `maxOracleDeviationBps` is per-tier — 50 bps for the USD-pegged stables, 150 bps for EURC, 200 bps for TRYC/BRLC — set at token listing (`DeployArcoraDexV3.s.sol`). TRYC and BRLC were listed at 5 000 bps and are reduced to 200 bps by operations 8–9 of the P3 Timelock batch (scheduled batch id `0x31218725...`, executable ≈ 2026-05-20); the USD-pegged stables and EURC were listed at their final values and are unchanged by that batch.*
 
 ### `_readOracle` internals
 
