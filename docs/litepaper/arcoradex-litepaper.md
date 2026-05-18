@@ -332,11 +332,185 @@ These mitigations are designed to reduce the attack surface of oracle manipulati
 
 ## 6. Governance & Operations
 
-<!-- section 6 content — Task 4 -->
+### 6.1 Ownership model
+
+`ArcoraDexPool` and `ArcoraDexRegistry` both inherit OpenZeppelin's `Ownable2Step`. Their owner is the `TimelockController` (`0x36444f653E7746d69aD5d91dA920f5Cd2F9C6E83`, `getMinDelay() = 172800 s = 48 hours`), which is in turn administered by the Governance Safe (`0x715f669D79Cc72d6685F8724c0B86f7B53d7e624`, 3/5 multisig).
+
+This means every `onlyOwner` function on the Pool and the Registry — fee mutations, oracle changes, token listing, `unpause`, and fee withdrawal — requires a Governance Safe proposal to be scheduled through the Timelock and then survive the 48-hour delay before any address can execute it. The executor role on the Timelock is open: once the delay has elapsed, any EOA may call `execute`.
+
+The Governance Safe may also cancel a scheduled proposal at any time before execution, via `TimelockController.cancel()`.
+
+### 6.2 Pause Guardian
+
+A second multisig, the Pause Guardian Safe (`0x39500e45935f36CfcEb826590aaE97226Ac6640D`, 2/3 threshold), holds the `pauseGuardian` address in `ArcoraDexPool.pauseGuardian`. It operates on a separate, smaller key set from the Governance Safe.
+
+The Pool defines the modifier used by `pause()` at lines 83–86 of `ArcoraDexPool.sol`:
+
+```solidity
+modifier onlyOwnerOrGuardian() {
+    if (msg.sender != owner() && msg.sender != pauseGuardian) revert NotAuthorized();
+    _;
+}
+```
+
+`pause()` (`ArcoraDexPool.sol` line 616) is gated by `onlyOwnerOrGuardian`, meaning either the Timelock (via a Governance Safe proposal) or the Pause Guardian Safe can freeze the pool. Because the Pause Guardian Safe bypasses the Timelock, an emergency pause takes effect within a single block — no 48-hour delay.
+
+`unpause()` (`ArcoraDexPool.sol` line 626) is gated by `onlyOwner` only, as noted in the NatSpec:
+
+> Intentionally owner-only (the governance Timelock). The Pause Guardian Safe keeps its fail-safe pause() capability, but a compromised guardian must not be able to un-protect a pool the owner deliberately paused during an incident. Only the governance Timelock — after deliberate proposal + delay — may restart.
+
+The **pause/unpause asymmetry** is a deliberate security property: a compromised Pause Guardian Safe (2 of 3 keys) can halt deposits and withdrawals instantly but cannot restart the pool. Restarting requires a full 48-hour Governance Timelock cycle, which gives the community and remaining governance keyholders a full response window.
+
+Changing the `pauseGuardian` address (`setPauseGuardian`) is `onlyOwner` and therefore also Timelock-gated.
+
+### 6.3 Oracle feed and aggregator ownership
+
+The seven primary `MockChainlinkFeedV2` instances, the seven `OracleAggregator` contracts, the seven secondary feeds, and the `CumulativeDeviationGuard` are all owned directly by the Governance Safe — **without** an intermediate Timelock.
+
+This deliberate exception enables a compromised oracle keeper EOA to be rotated out in a single Safe multisig transaction, without the 48-hour delay that governs all Pool and Registry actions. The accepted trade-off is described in R3 (§7): a compromised 3/5 Governance Safe can rotate feed writers instantly. The compensating bound is that `Registry.setOracle` — which governs whether the Pool actually uses any given oracle address — remains Timelock-gated with a 48-hour delay.
+
+### 6.4 Parameter-change process
+
+A standard governance action follows this path:
+
+1. Three of the five Governance Safe signers sign a Safe transaction calling `TimelockController.schedule(target, value, calldata, predecessor, salt, minDelay)`.
+2. The proposal is publicly visible on-chain for at least 48 hours.
+3. After the delay, any address calls `TimelockController.execute(target, value, calldata, predecessor, salt)`.
+
+The Governance Safe may cancel the scheduled operation at any time before execution.
+
+For oracle rotation (`setOracle`), token listing (`listToken`), or deviation-cap changes (`setDeviation`), the same flow applies with a 48-hour delay. The off-chain operations plan recommends a seven-day public announcement period before scheduling `setOracle` or `listToken` on mainnet, on top of the 48-hour on-chain delay.
+
+### 6.5 Emergency-pause path
+
+When the off-chain monitor detects a `CircuitBreakerTripped` event or observes abnormal price behaviour, the Pause Guardian Safe signs `pool.pause()` — bypassing the Timelock — and the pool is frozen within one block. All deposits, withdrawals, and swaps revert with `PoolPaused` while frozen; oracle state and reserves remain intact.
+
+After the incident is diagnosed, the Governance Safe proposes `pool.unpause()` through the Timelock. The pool can resume operation once the 48-hour delay elapses and the proposal is executed. This gives the team a minimum 48-hour window to investigate before re-opening the pool.
+
+### 6.6 Role and permission table
+
+| Action | Callable by | Path | Effective delay |
+|--------|-------------|------|-----------------|
+| `setSwapFeeBps` | Owner (Timelock) | Governance Safe → Timelock | 48 h |
+| `setProtocolFeeShareBps` | Owner (Timelock) | Governance Safe → Timelock | 48 h |
+| `withdrawProtocolFees` | Owner (Timelock) | Governance Safe → Timelock | 48 h |
+| `setPauseGuardian` | Owner (Timelock) | Governance Safe → Timelock | 48 h |
+| `syncAcceptedPrice` | Owner (Timelock) | Governance Safe → Timelock | 48 h |
+| `listToken` | Owner (Timelock) | Governance Safe → Timelock | 48 h |
+| `setOracle` | Owner (Timelock) | Governance Safe → Timelock | 48 h |
+| `setDeviation` | Owner (Timelock) | Governance Safe → Timelock | 48 h |
+| `setMaxStaleSeconds` | Owner (Timelock) | Governance Safe → Timelock | 48 h |
+| `deactivateToken` / `reactivateToken` | Owner (Timelock) | Governance Safe → Timelock | 48 h |
+| `transferOwnership` / `acceptOwnership` | Owner (Timelock) | Governance Safe → Timelock | 48 h |
+| `pause()` — via Timelock | Owner (Timelock) | Governance Safe → Timelock | 48 h |
+| `pause()` — emergency | Pause Guardian Safe | Direct Safe tx | Instant (< 1 block) |
+| `unpause()` | Owner (Timelock) only | Governance Safe → Timelock | 48 h |
+| `setWriter` (feeds) | Governance Safe direct | Direct Safe tx | Instant |
+| `setMaxDivergenceBps` (aggregators) | Governance Safe direct | Direct Safe tx | Instant |
+| `setConfig` (guard) | Governance Safe direct | Direct Safe tx | Instant |
+
+### 6.7 Deployed addresses
+
+| Contract | Address |
+|----------|---------|
+| ArcoraDexPool V3 | `0x1ce1ef94e7ebe70727bd69003d61a3f0c9a331bc` |
+| ArcoraDexRegistry V3 | `0x9914436e5245bf3c0d4d4338e0a8b8f5ab5505ab` |
+| ArcoraDexLP V3 | `0x17B47173C457069E53B3B75Ef42773041B79523e` |
+| TimelockController | `0x36444f653E7746d69aD5d91dA920f5Cd2F9C6E83` |
+| Governance Safe (3/5) | `0x715f669D79Cc72d6685F8724c0B86f7B53d7e624` |
+| Pause Guardian Safe (2/3) | `0x39500e45935f36CfcEb826590aaE97226Ac6640D` |
+
+All addresses verified on Arc testnet (chainId 5042002). Mainnet addresses are not yet assigned.
 
 ## 7. Risk Disclosures
 
-<!-- section 7 content — Task 4 -->
+This section discloses the risks that the ArcoraDEX team has reviewed and consciously accepts for the v1 mainnet launch. The authoritative source is `docs/audit/known-acceptable-risks.md`. For each risk the disclosure states: what the risk is, why it is accepted for v1, and the compensating control that bounds its impact.
+
+Developers, auditors, and liquidity providers should treat this section as the accurate picture of where the protocol depends on trusted parties, off-chain processes, or design trade-offs, rather than purely on code.
+
+### R1 — Oracle dependence (protocol correctness rests on the feeds)
+
+**Risk.** ArcoraDEX prices every swap from external oracle feeds rather than from an on-chain reserve ratio. If a feed delivers incorrect prices — whether through compromise, staleness, or a diverging primary/secondary pair — the pool will execute swaps at wrong rates, potentially draining reserves toward the token with the inflated price. This is not a marginal concern: oracle accuracy is the foundational assumption on which the entire pricing model rests.
+
+**Why accepted for v1.** There is no oracle-free design that delivers the pool's stated goal — eliminating curve-induced slippage for pegged assets. The choice of an oracle-priced model is a deliberate trade-off: it eliminates slippage at the cost of introducing oracle-dependence. Accepting oracle risk is the product design.
+
+**Compensating controls.** Four independent controls are deployed (described in detail in §4): dual-source `OracleAggregator` with a divergence check (`SourcesDiverge` revert at `maxDivergenceBps`); a `lastValidPrice` cache with a per-block deviation guard that prevents cache poisoning in a single block; a `lastAcceptedPrice` per-operation ratchet that limits how far the executed price can advance per transaction (`maxOracleDeviationBps = 200 bps` for all tokens post-P3); and the `CumulativeDeviationGuard` event stream, which gives off-chain monitors an on-chain record of cumulative drift. Together these controls reduce the worst-case oracle manipulation from a single-transaction drain to a slow multi-transaction walk requiring sustained cooperation between at least two compromised oracle keys, providing meaningful detection windows.
+
+**Residual exposure.** In the current testnet configuration, the same keeper EOA pushes both the primary and secondary feed for each token. A single compromised key therefore bypasses the two-source divergence check. On mainnet, primary and secondary are intended to be independent (Chainlink primary, Pyth/DEX TWAP secondary with a different key), but that independence is deferred to P5. Until then, the oracle layer provides defence-in-depth but not two-party compromise resistance.
+
+---
+
+### R2 — Liquidity-thin behaviour at very low TVL
+
+**Risk.** When the pool has very low total NAV, the LP minting formula can round small deposits to zero shares. If `usdIn` is small relative to the current NAV-to-supply ratio, `lpMinted` truncates to zero in integer arithmetic, and the depositor's tokens are accepted but zero LP is issued, locking a trivially small token amount. A near-empty pool is a poor experience for small follow-on depositors.
+
+**Why accepted for v1.** The virtual-offset pattern (`VIRTUAL_SHARES = 1e6`, `VIRTUAL_ASSETS = 1`) deployed in P1 to fix the first-depositor inflation attack also addresses rounding as a side-effect. The residual risk is confined to deposits where `usdIn` is below a few wei of USD value — economically negligible for any real depositor. Fully eliminating rounding in fixed-point math would require a different accounting model.
+
+**Compensating controls.** With `VIRTUAL_SHARES = 1e6`, any deposit where `usdIn >= 1` is guaranteed to mint at least one LP unit. The `FirstDepositTooSmall` revert enforces a minimum bootstrap deposit of `MINIMUM_LIQUIDITY` USD-units. Combined with the `MINIMUM_LIQUIDITY` permanent burn to `DEAD_ADDRESS` on the first deposit, the pool cannot return to a zero-supply state that would make follow-on deposits susceptible to zero-share rounding.
+
+---
+
+### R3 — Governance-trust assumptions (3/5 Safe compromise, bounded by 48-hour Timelock)
+
+**Risk.** The Governance Safe is a 3/5 Safe multisig. An attacker who compromises three of the five signing keys can schedule any `onlyOwner` action on `ArcoraDexPool` and `ArcoraDexRegistry`: rotating oracles to attacker-controlled feeds, changing deviation caps, withdrawing protocol fees, or transferring ownership. Additionally, the Governance Safe holds direct (non-Timelock) ownership of the seven oracle feeds and seven `OracleAggregator` contracts, so a compromised Governance Safe can rotate feed writers instantly.
+
+**Why accepted for v1.** The 3/5 threshold is a deliberate trade-off between operational liveness and security. A higher threshold (4/5 or 5/5) would make coordinated governance impractical for frequent, low-stakes operations. Timelock-fronted multisig governance is the standard approach at this scale. Key procurement requirements (hardware wallets per signer) are specified in the P2 governance spec.
+
+**Compensating controls.** Every `onlyOwner` function on the Pool and Registry passes through the `TimelockController` with `getMinDelay() = 48 hours`. A malicious proposal is publicly visible on-chain for 48 hours before it can execute; any watcher can alert the community and the remaining keyholders can cancel via `TimelockController.cancel()`. The Pause Guardian Safe (2/3, separate key set) can freeze the pool instantly while the community organises a response. On mainnet, the off-chain governance commitment includes off-chain announcement periods for high-impact actions such as `setOracle` and `listToken`.
+
+---
+
+### R4 — Permissionless `CumulativeDeviationGuard.record`
+
+**Risk.** `CumulativeDeviationGuard.record(address token, uint256 price1e18)` is unauthenticated — any caller may invoke it with any price value. An adversary can therefore: anchor the tumbling window at a favourable or unfavourable price; spam calls to force window resets; or emit spurious `CircuitBreakerTripped` events to cause alert fatigue in the off-chain monitor. If the off-chain monitor were wired to auto-pause on trip events, a griever could pause the pool at will.
+
+**Why accepted for v1.** `record` has no on-chain state effect beyond updating the per-token window state and emitting events. Nothing on-chain — no pause, no price change, no reserve mutation — is gated on the guard's output. Adding a keeper allowlist now would introduce a new failure mode (a stuck allowlist that prevents legitimate keepers from recording) with no functional benefit in the current implementation. Making `record` keeper-only is a P5 task, conditional on on-chain auto-pause being wired to the guard at that time.
+
+**Compensating controls.** The contract NatSpec explicitly documents the trust boundary: the off-chain monitor must treat `PriceObserved` and `CircuitBreakerTripped` as untrusted hints and re-validate the price against its own trusted feed before paging the Pause Guardian. No on-chain action can be triggered by `record` alone. When on-chain auto-pause is wired in P5, `record` must be made keeper-only at that time (tracked in `docs/audit/p5-tracking.md`).
+
+---
+
+### R5 — Tumbling (not rolling) deviation window
+
+**Risk.** `CumulativeDeviationGuard` measures deviation against the first observation of each 24-hour tumbling window. A slow, sustained price drift that stays just below `maxCumulativeBps` within each window is not detected across window boundaries. A compromised keeper could push `maxCumulativeBps − 1` bps of drift per window, indefinitely, without ever tripping the circuit breaker.
+
+**Why accepted for v1.** The tumbling-window approach was deliberately chosen as a P3 MVP: it catches acute intra-window spikes — the dominant attack vector — while keeping the implementation simple and cheap. A true rolling-window detector requires either a circular buffer (expensive storage) or a two-pass checkpoint scheme (more complex and more audit surface). A rolling or multi-window detector is a P5 enhancement.
+
+**Compensating controls.** The `maxOracleDeviationBps = 200 bps` per-transaction cap on `lastAcceptedPrice` limits how far the accepted price can drift in a single oracle update, regardless of the tumbling window. A cross-window drift is also a cross-transaction drift, giving the off-chain monitor many opportunities to observe and alert. The `OracleAggregator`'s two-source divergence check (`maxDivergenceBps = 200 bps` for TRYC/BRLC) means a single compromised keeper cannot push the primary source more than 200 bps without the honest secondary source triggering `SourcesDiverge`.
+
+---
+
+### R6 — Fee-collector role not separated from governance ownership
+
+**Risk.** `withdrawProtocolFees(address token, uint256 amount, address to)` in `ArcoraDexPool` is `onlyOwner`, and the owner is the `TimelockController`. The protocol-fee recipient role is not separated from governance ownership. A malicious governance majority could pass a proposal to redirect accrued protocol fees to an attacker-controlled address.
+
+**Why accepted for v1.** Separating the fee-collector into a distinct multisig was explicitly called out as out-of-scope for P2 in the governance design spec and the mainnet-readiness roadmap. The separation would require a dedicated fee-withdrawal module and adds governance surface before the Spearbit review. This is a tracked P5 item.
+
+**Compensating controls.** `withdrawProtocolFees` is `onlyOwner`; the owner is the Timelock with `getMinDelay() = 48 hours`. Any proposal to withdraw fees to an attacker-controlled address is publicly visible on-chain for 48 hours before it executes, and any `TimelockController.cancel()` call from the Governance Safe can stop it. The affected funds are accrued protocol revenue only (bounded by `protocolFeeShareBps ≤ 2500 bps` of the `swapFeeBps ≤ 100 bps` fee); they do not represent LP principal or user deposits.
+
+---
+
+### R7 — Pre-bug-bounty exposure window
+
+**Risk.** ArcoraDEX v1 will not have an active Immunefi bug-bounty program at the time of mainnet launch. Researchers who discover post-audit vulnerabilities before the bounty program launches have no formal, incentivized channel for responsible disclosure. This creates a window between mainnet deployment and Immunefi program launch during which a researcher might choose exploit-over-disclose.
+
+**Why accepted for v1.** Setting up an Immunefi program requires a finalized mainnet deployment (contract addresses, TVL commitments, reward-tier funding). The program cannot be meaningfully launched before the Spearbit audit is complete and the code is frozen for mainnet. The unavoidable sequence is: Spearbit audit → mainnet deploy → Immunefi launch. Deploying unaudited code or launching a bounty against an undeployed codebase are both worse outcomes.
+
+**Compensating controls.** The Spearbit audit precedes mainnet deployment; unaudited code does not go live. An informal responsible-disclosure contact is published in the repository and the frontend at mainnet launch. TVL during the pre-bounty window is expected to be low (founding LP bootstrap only), limiting the incentive for exploit-over-disclose. Immunefi program launch is a first-week P5 deliverable, covering Pool, Registry, OracleAggregator, and the governance contracts.
+
+---
+
+**Summary table**
+
+| ID | Risk category | Compensating control | P5 resolution |
+|----|---------------|---------------------|---------------|
+| R1 | Oracle dependence | 4-layer oracle defence; 200 bps per-op ratchet | Independent primary/secondary sources on mainnet |
+| R2 | Liquidity-thin rounding | `VIRTUAL_SHARES = 1e6`; min-liquidity bootstrap | No change needed |
+| R3 | Governance multisig compromise | 48 h Timelock; Pause Guardian instant freeze | Hardware wallets; mainnet signer onboarding |
+| R4 | Permissionless `record` | Events-only; monitor re-validates before paging | Keeper allowlist when auto-pause is wired |
+| R5 | Tumbling window blind spot | 200 bps per-op cap; two-source divergence check | Rolling-window or multi-window detector |
+| R6 | Fee-collector not separated | 48 h Timelock on `withdrawProtocolFees`; cancel path | Dedicated fee-collector multisig module |
+| R7 | Pre-bounty exposure window | Audit precedes launch; informal disclosure channel | Immunefi launch first week post-mainnet |
 
 ## 8. Audit & Roadmap
 
