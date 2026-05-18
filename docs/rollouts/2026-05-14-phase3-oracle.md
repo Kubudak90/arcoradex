@@ -2,6 +2,8 @@
 
 **Date:** 2026-05-17
 **Branch:** `phase3/oracle-rollout`
+
+> **Testnet rehearsal only.** All contract addresses listed below are deployments on the Arc testnet (chainId 5042002). None of these addresses exist on or represent mainnet production deployments.
 **Spec:** `docs/superpowers/specs/2026-05-14-phase3-oracle-hardening-design.md`
 **Plan:** `docs/superpowers/plans/2026-05-14-phase3-oracle-hardening.md`
 **Roadmap parent:** `docs/superpowers/specs/2026-05-13-mainnet-readiness-roadmap.md` §10
@@ -15,7 +17,7 @@ P2 closed the governance footgun. P3 closes the oracle footgun — audit finding
 3. **Rolling-deviation guard** — `CumulativeDeviationGuard` accumulates signed price drift per token over a 24 h window; when drift exceeds the per-token cumulative cap the guard records a trip (observable off-chain; auto-pause is deferred to P5).
 
 P3 also resolves two P1/P2 oracle-layer residuals:
-- **Reverting-oracle availability gap** — a single oracle revert would propagate up and brick swaps; the Pool's `getPrice` path is refactored to `try/catch` so a reverting aggregator returns the last-good price rather than halting.
+- **Reverting-oracle availability gap** — a single oracle revert would propagate up and brick swaps; the Pool's `_readOracle` function (called by `_readUsdPrice1e18WithGuard`) is refactored to `try/catch` so a reverting aggregator returns the last-good price rather than halting.
 - **Redundant double-read** — the Pool was calling the Registry oracle twice per swap (once for price, once for staleness); P3 consolidates to a single `latestRoundData` read.
 
 **Scope: testnet rehearsal only. Pyth / independent oracle source for mainnet is deferred to P5.**
@@ -70,6 +72,12 @@ Per-token parameters set at deploy time and in the pending Timelock batch:
 | TRYC  | 200 | 500 | 86400 |
 | BRLC  | 200 | 500 | 86400 |
 
+**Note on the three deviation caps — they measure distinct quantities and are not redundant:**
+
+- **`OracleAggregator.maxDivergenceBps`** — gates the _spread between primary and secondary_ source prices at read time. If the two sources diverge beyond this cap, `latestRoundData` reverts, preventing the aggregator from returning an implausible midpoint.
+- **`ArcoraDexRegistry.maxOracleDeviationBps`** — gates the _aggregator-output price versus the Pool's most-recently-accepted (cached) price_. A sudden jump in the aggregator's reported price — even if primary and secondary agree — is caught here.
+- **`CumulativeDeviationGuard.maxCumulativeBps`** — measures _rolling signed drift within a time window_. It is event-only (no on-chain auto-pause in P3); off-chain monitoring consumes `CircuitBreakerTripped` to detect slow drift that neither of the two above caps would catch within a single round.
+
 Registry `maxOracleDeviationBps` changes carried by the pending batch:
 
 | Token | Old value (bps) | New value (bps) |
@@ -122,7 +130,7 @@ No Pool redeploy is required at this step.
 
 The Pool (`0x1ce1ef94e7ebe70727bd69003d61a3f0c9a331bc`) was **not** redeployed as part of P3. Two code-level changes are ready but take effect only on the next Pool redeploy (earliest P4):
 
-- **A1 — try/catch oracle read** — `Pool.getPrice` wraps the oracle call in a `try/catch`; a reverting aggregator returns the last-good cached price rather than propagating a revert up to the user.
+- **A1 — try/catch oracle read** — `Pool._readOracle` (called by `_readUsdPrice1e18WithGuard`) wraps the oracle call in a `try/catch`; a reverting aggregator returns the last-good cached price rather than propagating a revert up to the user.
 - **A2 — single-read refactor** — the redundant second `latestRoundData` call (staleness check was previously a separate call) is merged into the single price-fetch path.
 
 The 7 new `OracleAggregator` contracts are consumed by the existing Registry via `setOracle` in the pending batch. Because `OracleAggregator` implements `IChainlinkAggregator`, the Registry (and the existing Pool) call it identically to the old feeds — no ABI or Pool change needed.

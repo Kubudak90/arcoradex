@@ -92,6 +92,74 @@ contract P3CircuitBreakerTest is Test {
         assertFalse(foundTripped,  "CircuitBreakerTripped must NOT be emitted within cap");
     }
 
+    // ── New coverage tests ─────────────────────────────────────────────────────
+
+    // record() reverts when price is zero
+    function test_record_reverts_on_zero_price() public {
+        vm.expectRevert(abi.encodeWithSelector(
+            CumulativeDeviationGuard.PriceMustBePositive.selector
+        ));
+        guard.record(TOKEN, 0);
+    }
+
+    /// @dev record() on a token with NO config (never setConfig'd): emits PriceObserved,
+    /// returns without reverting, and does NOT emit CircuitBreakerTripped.
+    function test_record_unconfigured_token_emits_observation_only() public {
+        address freshToken = address(0x999);
+
+        vm.recordLogs();
+        guard.record(freshToken, 1e18);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+
+        bytes32 observedTopic = keccak256("PriceObserved(address,uint256,uint256)");
+        bytes32 trippedTopic  = keccak256("CircuitBreakerTripped(address,uint256,uint256)");
+
+        bool foundObserved = false;
+        bool foundTripped  = false;
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].topics[0] == observedTopic) foundObserved = true;
+            if (logs[i].topics[0] == trippedTopic)  foundTripped  = true;
+        }
+
+        assertTrue(foundObserved,  "PriceObserved must be emitted for unconfigured token");
+        assertFalse(foundTripped,  "CircuitBreakerTripped must NOT be emitted for unconfigured token");
+    }
+
+    /// @dev setConfig reverts InvalidConfig for each of the four invalid boundary values.
+    function test_setConfig_reverts_on_invalid() public {
+        // maxCumulativeBps == 0
+        vm.prank(OWNER);
+        vm.expectRevert(abi.encodeWithSelector(
+            CumulativeDeviationGuard.InvalidConfig.selector,
+            uint32(0), uint32(86_400)
+        ));
+        guard.setConfig(TOKEN, 0, 86_400);
+
+        // maxCumulativeBps == 10_001 (above 10_000 ceiling)
+        vm.prank(OWNER);
+        vm.expectRevert(abi.encodeWithSelector(
+            CumulativeDeviationGuard.InvalidConfig.selector,
+            uint32(10_001), uint32(86_400)
+        ));
+        guard.setConfig(TOKEN, 10_001, 86_400);
+
+        // windowSeconds == 59 (below 60-second floor)
+        vm.prank(OWNER);
+        vm.expectRevert(abi.encodeWithSelector(
+            CumulativeDeviationGuard.InvalidConfig.selector,
+            uint32(500), uint32(59)
+        ));
+        guard.setConfig(TOKEN, 500, 59);
+
+        // windowSeconds == 30 days + 1 (above the 30-day ceiling)
+        vm.prank(OWNER);
+        vm.expectRevert(abi.encodeWithSelector(
+            CumulativeDeviationGuard.InvalidConfig.selector,
+            uint32(500), uint32(30 days + 1)
+        ));
+        guard.setConfig(TOKEN, 500, uint32(30 days + 1));
+    }
+
     /// @dev Verifies that a downward move exceeding the cap (7% drop > 5%) emits
     /// both PriceObserved and CircuitBreakerTripped, exercising the
     /// price < startPrice branch of the diff ternary.

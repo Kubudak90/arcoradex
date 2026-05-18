@@ -164,6 +164,73 @@ contract P3AggregatorTest is Test {
         agg.latestRoundData();
     }
 
+    // ── New coverage tests ─────────────────────────────────────────────────────
+
+    // Constructor revert: zero divergence bps
+    function test_constructor_reverts_on_zero_divergence_bps() public {
+        vm.expectRevert(abi.encodeWithSelector(
+            OracleAggregator.InvalidDivergenceBps.selector,
+            uint16(0)
+        ));
+        new OracleAggregator(
+            IChainlinkAggregator(address(primary)),
+            IChainlinkAggregator(address(secondary)),
+            0,
+            OWNER
+        );
+    }
+
+    // Constructor revert: divergence bps above 10_000
+    function test_constructor_reverts_on_divergence_bps_above_max() public {
+        vm.expectRevert(abi.encodeWithSelector(
+            OracleAggregator.InvalidDivergenceBps.selector,
+            uint16(10_001)
+        ));
+        new OracleAggregator(
+            IChainlinkAggregator(address(primary)),
+            IChainlinkAggregator(address(secondary)),
+            10_001,
+            OWNER
+        );
+    }
+
+    // setMaxDivergenceBps reverts on both invalid boundary values
+    function test_setMaxDivergenceBps_reverts_on_invalid() public {
+        OracleAggregator agg = new OracleAggregator(
+            IChainlinkAggregator(address(primary)),
+            IChainlinkAggregator(address(secondary)),
+            200,
+            OWNER
+        );
+
+        // zero bps
+        vm.prank(OWNER);
+        vm.expectRevert(abi.encodeWithSelector(
+            OracleAggregator.InvalidDivergenceBps.selector,
+            uint16(0)
+        ));
+        agg.setMaxDivergenceBps(0);
+
+        // above-max bps
+        vm.prank(OWNER);
+        vm.expectRevert(abi.encodeWithSelector(
+            OracleAggregator.InvalidDivergenceBps.selector,
+            uint16(10_001)
+        ));
+        agg.setMaxDivergenceBps(10_001);
+    }
+
+    // decimals() external view returns the feed's decimals
+    function test_decimals_returns_feed_decimals() public {
+        OracleAggregator agg = new OracleAggregator(
+            IChainlinkAggregator(address(primary)),
+            IChainlinkAggregator(address(secondary)),
+            200,
+            OWNER
+        );
+        assertEq(agg.decimals(), 8, "DECIMALS should equal the feed's 8 decimals");
+    }
+
     // I1: sourceHealth() reports degraded mode correctly
     function test_sourceHealth_reports_degraded() public {
         // One reverting secondary -> (true, false)
