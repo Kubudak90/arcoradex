@@ -556,12 +556,18 @@ contract ArcoraDexPoolTest is Test {
         pool.pause();
         assertEq(pool.paused(), true);
 
-        // Guardian can unpause
+        // Guardian cannot unpause — only the owner (Timelock) may restart (A1 asymmetry)
         vm.prank(guardian);
+        vm.expectRevert();
+        pool.unpause();
+        assertEq(pool.paused(), true); // still paused
+
+        // Owner can unpause
+        vm.prank(owner);
         pool.unpause();
         assertEq(pool.paused(), false);
 
-        // Random third party cannot
+        // Random third party cannot pause
         vm.prank(attacker);
         vm.expectRevert(abi.encodeWithSelector(IArcoraDexPool.NotAuthorized.selector));
         pool.pause();

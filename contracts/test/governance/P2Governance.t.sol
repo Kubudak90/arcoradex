@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import { Test } from "forge-std/Test.sol";
 import { TimelockController } from "@openzeppelin/contracts/governance/TimelockController.sol";
+import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 import { Safe } from "@safe-global/safe-contracts/contracts/Safe.sol";
 import { SafeProxyFactory } from "@safe-global/safe-contracts/contracts/proxies/SafeProxyFactory.sol";
 import { Enum } from "@safe-global/safe-contracts/contracts/common/Enum.sol";
@@ -180,10 +181,30 @@ contract P2GovernanceTest is Test {
         assertEq(pool.paused(), true);
     }
 
-    function test_pauseGuardian_canUnpauseInstantly() public {
+    function test_pauseGuardian_cannotUnpause() public {
+        // Guardian can pause ...
         _pgExec(address(pool), abi.encodeCall(pool.pause, ()));
         assertEq(pool.paused(), true);
-        _pgExec(address(pool), abi.encodeCall(pool.unpause, ()));
+        // ... but must NOT be able to unpause — only the owner (Timelock) may restart.
+        // A compromised guardian must not be able to un-protect a pool the owner
+        // deliberately paused during an incident.
+        vm.prank(address(pauseGuardianSafe));
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(pauseGuardianSafe)));
+        pool.unpause();
+    }
+
+    function test_owner_canUnpause() public {
+        // Pause via guardian (fast path)
+        _pgExec(address(pool), abi.encodeCall(pool.pause, ()));
+        assertEq(pool.paused(), true);
+
+        // Owner (Timelock) schedules + executes unpause after delay
+        bytes memory unpauseCall = abi.encodeCall(pool.unpause, ());
+        _govExec(address(timelock), abi.encodeCall(TimelockController.schedule,
+            (address(pool), 0, unpauseCall, bytes32(0), bytes32(0), TIMELOCK_DELAY)));
+        vm.warp(block.timestamp + TIMELOCK_DELAY + 1);
+        timelock.execute(address(pool), 0, unpauseCall, bytes32(0), bytes32(0));
+
         assertEq(pool.paused(), false);
     }
 

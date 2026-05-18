@@ -511,7 +511,12 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         emit Paused(msg.sender);
     }
 
-    function unpause() external override onlyOwnerOrGuardian {
+    /// @notice Resume the pool after an incident.
+    /// @dev Intentionally owner-only (the governance Timelock). The Pause Guardian Safe
+    ///      keeps its fail-safe pause() capability, but a compromised guardian must not
+    ///      be able to un-protect a pool the owner deliberately paused during an incident.
+    ///      Only the governance Timelock — after deliberate proposal + delay — may restart.
+    function unpause() external override onlyOwner {
         paused = false;
         emit Unpaused(msg.sender);
     }
