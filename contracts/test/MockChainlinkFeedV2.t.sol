@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import { Test } from "forge-std/Test.sol";
-import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
-import { MockChainlinkFeedV2 } from "../src/testnet/MockChainlinkFeedV2.sol";
+import {Test} from "forge-std/Test.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {MockChainlinkFeedV2} from "../src/testnet/MockChainlinkFeedV2.sol";
 
 contract MockChainlinkFeedV2Test is Test {
     MockChainlinkFeedV2 feed;
 
-    address owner   = makeAddr("owner");
-    address writer  = makeAddr("writer");
-    address other   = makeAddr("other");
+    address owner = makeAddr("owner");
+    address writer = makeAddr("writer");
+    address other = makeAddr("other");
 
     function setUp() public {
         feed = new MockChainlinkFeedV2(8, 1.0e8, writer, owner);
@@ -69,12 +69,12 @@ contract MockChainlinkFeedV2Test is Test {
         // Old writer can no longer write
         vm.prank(writer);
         vm.expectRevert(MockChainlinkFeedV2.NotWriter.selector);
-        feed.setAnswer(1.10e8);
+        feed.setAnswer(1.1e8);
 
         // New writer can
         vm.prank(newWriter);
-        feed.setAnswer(1.10e8);
-        assertEq(feed.latestAnswer(), 1.10e8);
+        feed.setAnswer(1.1e8);
+        assertEq(feed.latestAnswer(), 1.1e8);
     }
 
     function test_setWriter_emitsWriterUpdated() public {

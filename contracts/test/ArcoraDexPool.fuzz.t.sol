@@ -1,48 +1,50 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import { Test } from "forge-std/Test.sol";
-import { ArcoraDexPool }       from "../src/ArcoraDexPool.sol";
-import { ArcoraDexRegistry }   from "../src/ArcoraDexRegistry.sol";
-import { ArcoraDexLP }         from "../src/ArcoraDexLP.sol";
-import { IArcoraDexPool }      from "../src/interfaces/IArcoraDexPool.sol";
-import { IChainlinkAggregator } from "../src/interfaces/IChainlinkAggregator.sol";
-import { MintableERC20 }       from "../src/testnet/MintableERC20.sol";
-import { MockChainlinkFeed }   from "../src/testnet/MockChainlinkFeed.sol";
+import {Test} from "forge-std/Test.sol";
+import {ArcoraDexPool} from "../src/ArcoraDexPool.sol";
+import {ArcoraDexRegistry} from "../src/ArcoraDexRegistry.sol";
+import {ArcoraDexLP} from "../src/ArcoraDexLP.sol";
+import {IArcoraDexPool} from "../src/interfaces/IArcoraDexPool.sol";
+import {IChainlinkAggregator} from "../src/interfaces/IChainlinkAggregator.sol";
+import {MintableERC20} from "../src/testnet/MintableERC20.sol";
+import {MockChainlinkFeed} from "../src/testnet/MockChainlinkFeed.sol";
 
 contract ArcoraDexPoolFuzz is Test {
-    ArcoraDexPool     pool;
+    ArcoraDexPool pool;
     ArcoraDexRegistry reg;
-    ArcoraDexLP       lp;
-    MintableERC20 usdc; MockChainlinkFeed fUsdc;
-    MintableERC20 eurc; MockChainlinkFeed fEurc;
+    ArcoraDexLP lp;
+    MintableERC20 usdc;
+    MockChainlinkFeed fUsdc;
+    MintableERC20 eurc;
+    MockChainlinkFeed fEurc;
     address owner = makeAddr("owner");
     address alice = makeAddr("alice");
-    address bob   = makeAddr("bob");
+    address bob = makeAddr("bob");
 
     function setUp() public {
-        usdc  = new MintableERC20("USD Coin",  "USDC", 6,  owner);
-        eurc  = new MintableERC20("Euro Coin", "EURC", 6,  owner);
+        usdc = new MintableERC20("USD Coin", "USDC", 6, owner);
+        eurc = new MintableERC20("Euro Coin", "EURC", 6, owner);
         fUsdc = new MockChainlinkFeed(8, int256(1e8));
         fEurc = new MockChainlinkFeed(8, int256(11e7));
 
-        reg  = new ArcoraDexRegistry(owner);
+        reg = new ArcoraDexRegistry(owner);
         pool = new ArcoraDexPool(address(reg), 30, 1000, owner);
-        lp   = ArcoraDexLP(address(pool.LP()));
+        lp = ArcoraDexLP(address(pool.LP()));
 
         vm.startPrank(owner);
-        reg.listToken(address(usdc), 6, IChainlinkAggregator(address(fUsdc)),  50,  3600);
+        reg.listToken(address(usdc), 6, IChainlinkAggregator(address(fUsdc)), 50, 3600);
         reg.listToken(address(eurc), 6, IChainlinkAggregator(address(fEurc)), 150, 14400);
 
         usdc.mint(alice, 1_000_000e6);
-        usdc.mint(bob,   1_000_000e6);
+        usdc.mint(bob, 1_000_000e6);
         eurc.mint(alice, 1_000_000e6);
         vm.stopPrank();
     }
 
     /// Deposit then single-token withdraw of the same token loses at most ~swapFeeBps + tiny rounding.
     function testFuzz_deposit_then_withdraw_preserves_value(uint96 amountIn) public {
-        amountIn = uint96(bound(amountIn, 10_000e6, 100_000e6));   // 10k–100k USDC
+        amountIn = uint96(bound(amountIn, 10_000e6, 100_000e6)); // 10k–100k USDC
 
         vm.startPrank(alice);
         usdc.approve(address(pool), amountIn);
@@ -116,10 +118,10 @@ contract ArcoraDexPoolFuzz is Test {
         vm.stopPrank();
 
         // Property: ratio of lpA : lpB closely matches amtA : amtB (within rounding + 1000-LP burn dilution).
-        uint256 ratioLp_e18  = (uint256(lpB) * 1e18) / lpA;
+        uint256 ratioLp_e18 = (uint256(lpB) * 1e18) / lpA;
         uint256 ratioUsd_e18 = (uint256(amtB) * 1e18) / amtA;
         uint256 diff = ratioLp_e18 > ratioUsd_e18 ? ratioLp_e18 - ratioUsd_e18 : ratioUsd_e18 - ratioLp_e18;
-        assertLe(diff, 1e15);   // 0.1% tolerance
+        assertLe(diff, 1e15); // 0.1% tolerance
     }
 
     /// With any valid protocolFeeShareBps (≤ 2500), protocol's share of total fee is ≤ 25%.

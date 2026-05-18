@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import { Ownable }       from "@openzeppelin/contracts/access/Ownable.sol";
-import { Ownable2Step }  from "@openzeppelin/contracts/access/Ownable2Step.sol";
-import { IChainlinkAggregator } from "../interfaces/IChainlinkAggregator.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
+import {IChainlinkAggregator} from "../interfaces/IChainlinkAggregator.sol";
 
 /// @title OracleAggregator
 /// @notice 2-source `IChainlinkAggregator` wrapper. Returns the average of the
@@ -26,8 +26,8 @@ contract OracleAggregator is IChainlinkAggregator, Ownable2Step {
     IChainlinkAggregator public immutable SECONDARY;
     // Justification [naming-convention]: UPPER_CASE marks an immutable, per project convention.
     // slither-disable-next-line naming-convention
-    uint8                public immutable DECIMALS;     // M4: removed trailing underscore
-    uint16               public maxDivergenceBps;
+    uint8 public immutable DECIMALS; // M4: removed trailing underscore
+    uint16 public maxDivergenceBps;
 
     error SourcesDiverge(uint256 primary, uint256 secondary, uint16 capBps);
     error AllSourcesUnavailable();
@@ -50,20 +50,15 @@ contract OracleAggregator is IChainlinkAggregator, Ownable2Step {
         if (pDec != sDec) revert DecimalsMismatch(pDec, sDec);
         PRIMARY = primary_;
         SECONDARY = secondary_;
-        DECIMALS = pDec;                                // M4: renamed from DECIMALS_
+        DECIMALS = pDec; // M4: renamed from DECIMALS_
         maxDivergenceBps = initialMaxDivergenceBps;
     }
 
     function decimals() external view override returns (uint8) {
-        return DECIMALS;                                // M4: renamed from DECIMALS_
+        return DECIMALS; // M4: renamed from DECIMALS_
     }
 
-    function latestRoundData()
-        external
-        view
-        override
-        returns (uint80, int256, uint256, uint256, uint80)
-    {
+    function latestRoundData() external view override returns (uint80, int256, uint256, uint256, uint80) {
         (bool pOk, int256 pAns, uint256 pAt) = _tryRead(PRIMARY);
         (bool sOk, int256 sAns, uint256 sAt) = _tryRead(SECONDARY);
 
@@ -74,12 +69,12 @@ contract OracleAggregator is IChainlinkAggregator, Ownable2Step {
 
         // Both succeeded — divergence check.
         uint256 absDiff = pAns > sAns ? uint256(pAns - sAns) : uint256(sAns - pAns);
-        uint256 minAns  = pAns < sAns ? uint256(pAns) : uint256(sAns);
+        uint256 minAns = pAns < sAns ? uint256(pAns) : uint256(sAns);
         if (absDiff * 10_000 > minAns * uint256(maxDivergenceBps)) {
             revert SourcesDiverge(uint256(pAns), uint256(sAns), maxDivergenceBps);
         }
 
-        int256  mid    = (pAns + sAns) / 2; // sum of two positive feed answers cannot realistically overflow int256 (M5)
+        int256 mid = (pAns + sAns) / 2; // sum of two positive feed answers cannot realistically overflow int256 (M5)
         uint256 latest = pAt > sAt ? pAt : sAt;
         return (1, mid, latest, latest, 1);
     }
@@ -88,8 +83,8 @@ contract OracleAggregator is IChainlinkAggregator, Ownable2Step {
     /// keepers can detect when the aggregator is running in degraded
     /// (single-source) mode — i.e. the divergence cross-check is inactive.
     function sourceHealth() external view returns (bool primaryOk, bool secondaryOk) {
-        (primaryOk, , ) = _tryRead(PRIMARY);
-        (secondaryOk, , ) = _tryRead(SECONDARY);
+        (primaryOk,,) = _tryRead(PRIMARY);
+        (secondaryOk,,) = _tryRead(SECONDARY);
     }
 
     function setMaxDivergenceBps(uint16 newBps) external onlyOwner {
@@ -102,11 +97,7 @@ contract OracleAggregator is IChainlinkAggregator, Ownable2Step {
     /// Validates: positive answer, positive timestamp, AND round completeness
     /// (roundId != 0 and answeredInRound >= roundId). A stale round where
     /// answeredInRound < roundId is treated as a failed read.
-    function _tryRead(IChainlinkAggregator src)
-        private
-        view
-        returns (bool ok, int256 answer, uint256 updatedAt)
-    {
+    function _tryRead(IChainlinkAggregator src) private view returns (bool ok, int256 answer, uint256 updatedAt) {
         // Justification [unused-return]: latestRoundData's 5-tuple is fully destructured; only startedAt (3rd field) is discarded as per Chainlink integration best practice — it carries no useful staleness information.
         // slither-disable-next-line unused-return
         try src.latestRoundData() returns (uint80 roundId, int256 a, uint256, uint256 u, uint80 answeredInRound) {

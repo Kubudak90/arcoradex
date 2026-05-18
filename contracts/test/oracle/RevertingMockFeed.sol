@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import { IChainlinkAggregator } from "../../src/interfaces/IChainlinkAggregator.sol";
+import {IChainlinkAggregator} from "../../src/interfaces/IChainlinkAggregator.sol";
 
 /// @notice Test helper: a Chainlink-shape feed whose `latestRoundData()` always reverts.
 /// Used to verify the Pool's try/catch handles reverting oracles by falling back to cache.
@@ -16,12 +16,7 @@ contract RevertingMockFeed is IChainlinkAggregator {
         return _decimals;
     }
 
-    function latestRoundData()
-        external
-        pure
-        override
-        returns (uint80, int256, uint256, uint256, uint80)
-    {
+    function latestRoundData() external pure override returns (uint80, int256, uint256, uint256, uint80) {
         revert("oracle unavailable");
     }
 }

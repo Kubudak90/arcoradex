@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import { Script, console2 }   from "forge-std/Script.sol";
-import { ArcoraDexRegistry }  from "../src/ArcoraDexRegistry.sol";
-import { ArcoraDexPool }      from "../src/ArcoraDexPool.sol";
-import { MockChainlinkFeedV2 } from "../src/testnet/MockChainlinkFeedV2.sol";
-import { IChainlinkAggregator } from "../src/interfaces/IChainlinkAggregator.sol";
+import {Script, console2} from "forge-std/Script.sol";
+import {ArcoraDexRegistry} from "../src/ArcoraDexRegistry.sol";
+import {ArcoraDexPool} from "../src/ArcoraDexPool.sol";
+import {MockChainlinkFeedV2} from "../src/testnet/MockChainlinkFeedV2.sol";
+import {IChainlinkAggregator} from "../src/interfaces/IChainlinkAggregator.sol";
 
 /// @notice Deploys MockChainlinkFeedV2 instances for every active token in the
 /// registry, copies the current oracle's latestAnswer as initialAnswer, sets
@@ -19,13 +19,13 @@ import { IChainlinkAggregator } from "../src/interfaces/IChainlinkAggregator.sol
 ///   KEEPER_EOA            — address (NOT key) of the new keeper EOA
 contract MigrateFeedsToV2 is Script {
     function run() external {
-        uint256 pk        = vm.envUint("DEPLOYER_PRIVATE_KEY");
+        uint256 pk = vm.envUint("DEPLOYER_PRIVATE_KEY");
         address keeperEOA = vm.envAddress("KEEPER_EOA");
         require(keeperEOA != address(0), "keeper EOA is zero");
-        address deployer  = vm.addr(pk);
+        address deployer = vm.addr(pk);
 
-        ArcoraDexRegistry reg  = ArcoraDexRegistry(vm.envAddress("REGISTRY_ADDR"));
-        ArcoraDexPool     pool = ArcoraDexPool(vm.envAddress("POOL_ADDR"));
+        ArcoraDexRegistry reg = ArcoraDexRegistry(vm.envAddress("REGISTRY_ADDR"));
+        ArcoraDexPool pool = ArcoraDexPool(vm.envAddress("POOL_ADDR"));
 
         uint256 navBefore = pool.totalReservesUSD();
         console2.log("NAV before:", navBefore);
@@ -45,23 +45,13 @@ contract MigrateFeedsToV2 is Script {
         require(navDiff <= 1, "NAV invariant broken");
     }
 
-    function _migrateOne(
-        ArcoraDexRegistry reg,
-        address token,
-        address keeperEOA,
-        address deployer
-    ) internal {
+    function _migrateOne(ArcoraDexRegistry reg, address token, address keeperEOA, address deployer) internal {
         IChainlinkAggregator oldOracle = reg.tokenInfo(token).usdOracle;
-        (, int256 currentAnswer, , , ) = oldOracle.latestRoundData();
+        (, int256 currentAnswer,,,) = oldOracle.latestRoundData();
         require(currentAnswer > 0, "old oracle answer is zero");
         uint8 oracleDec = oldOracle.decimals();
 
-        MockChainlinkFeedV2 newFeed = new MockChainlinkFeedV2(
-            oracleDec,
-            currentAnswer,
-            keeperEOA,
-            deployer
-        );
+        MockChainlinkFeedV2 newFeed = new MockChainlinkFeedV2(oracleDec, currentAnswer, keeperEOA, deployer);
 
         reg.setOracle(token, IChainlinkAggregator(address(newFeed)));
 
@@ -72,7 +62,7 @@ contract MigrateFeedsToV2 is Script {
         console2.log("  writer    :", keeperEOA);
 
         require(newFeed.writer() == keeperEOA, "writer != keeper");
-        require(newFeed.owner()  == deployer, "owner != deployer");
+        require(newFeed.owner() == deployer, "owner != deployer");
         require(address(reg.tokenInfo(token).usdOracle) == address(newFeed), "registry not updated");
     }
 }

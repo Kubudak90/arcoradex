@@ -1,22 +1,21 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import { Script, console2 } from "forge-std/Script.sol";
-import { TimelockController } from "@openzeppelin/contracts/governance/TimelockController.sol";
-import { Safe } from "@safe-global/safe-contracts/contracts/Safe.sol";
-import { SafeProxyFactory } from "@safe-global/safe-contracts/contracts/proxies/SafeProxyFactory.sol";
+import {Script, console2} from "forge-std/Script.sol";
+import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
+import {Safe} from "@safe-global/safe-contracts/contracts/Safe.sol";
+import {SafeProxyFactory} from "@safe-global/safe-contracts/contracts/proxies/SafeProxyFactory.sol";
 
-import { ArcoraDexPool }      from "../src/ArcoraDexPool.sol";
-import { ArcoraDexRegistry }  from "../src/ArcoraDexRegistry.sol";
-import { SafeSigHelpers }     from "../test/governance/SafeSigHelpers.sol";
+import {ArcoraDexPool} from "../src/ArcoraDexPool.sol";
+import {ArcoraDexRegistry} from "../src/ArcoraDexRegistry.sol";
+import {SafeSigHelpers} from "../test/governance/SafeSigHelpers.sol";
 
 contract DeployGovernanceP2 is Script {
     using SafeSigHelpers for Safe;
 
     // Foundry standard test mnemonic (NOT for mainnet — throwaway testnet wallets only).
     // All 12 words are valid BIP39 wordlist members.
-    string constant MNEMONIC =
-        "test test test test test test test test test test test junk";
+    string constant MNEMONIC = "test test test test test test test test test test test junk";
     uint256 constant TIMELOCK_DELAY = 48 hours;
     uint256 constant SIGNER_FUND_AMT = 0.1 ether;
 
@@ -35,42 +34,50 @@ contract DeployGovernanceP2 is Script {
         require(block.chainid == 5042002, "Arc testnet only");
 
         uint256 deployerKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
-        ArcoraDexPool     pool = ArcoraDexPool(vm.envAddress("POOL_V3"));
-        ArcoraDexRegistry reg  = ArcoraDexRegistry(vm.envAddress("REGISTRY_V3"));
+        ArcoraDexPool pool = ArcoraDexPool(vm.envAddress("POOL_V3"));
+        ArcoraDexRegistry reg = ArcoraDexRegistry(vm.envAddress("REGISTRY_V3"));
 
         vm.startBroadcast(deployerKey);
 
         // Steps 1-5: fund signers, deploy Safe infrastructure, deploy Timelock
-        (Safe governanceSafe, Safe pauseGuardianSafe, TimelockController timelock,
-         uint256[5] memory govKeys) = _deployInfra();
+        (Safe governanceSafe, Safe pauseGuardianSafe, TimelockController timelock, uint256[5] memory govKeys) =
+            _deployInfra();
 
         // Step 6: Pool + Registry: transferOwnership to Timelock
         pool.transferOwnership(address(timelock));
         reg.transferOwnership(address(timelock));
 
         // Step 7: Governance Safe schedules + executes Pool/Registry acceptOwnership
-        _scheduleAndExec(governanceSafe, govKeys, timelock,
-            address(pool), abi.encodeCall(pool.acceptOwnership, ()));
-        _scheduleAndExec(governanceSafe, govKeys, timelock,
-            address(reg), abi.encodeCall(reg.acceptOwnership, ()));
+        _scheduleAndExec(governanceSafe, govKeys, timelock, address(pool), abi.encodeCall(pool.acceptOwnership, ()));
+        _scheduleAndExec(governanceSafe, govKeys, timelock, address(reg), abi.encodeCall(reg.acceptOwnership, ()));
 
         // Step 8: setPauseGuardian
-        _scheduleAndExec(governanceSafe, govKeys, timelock,
-            address(pool), abi.encodeCall(pool.setPauseGuardian, (address(pauseGuardianSafe))));
+        _scheduleAndExec(
+            governanceSafe,
+            govKeys,
+            timelock,
+            address(pool),
+            abi.encodeCall(pool.setPauseGuardian, (address(pauseGuardianSafe)))
+        );
 
         // Step 9: Transfer feed ownership to Governance Safe (direct, no timelock)
         _transferFeedOwnership(governanceSafe, govKeys);
 
         // Step 10: Lockdown: updateDelay(48h)
-        _scheduleAndExec(governanceSafe, govKeys, timelock,
-            address(timelock), abi.encodeCall(TimelockController.updateDelay, (TIMELOCK_DELAY)));
+        _scheduleAndExec(
+            governanceSafe,
+            govKeys,
+            timelock,
+            address(timelock),
+            abi.encodeCall(TimelockController.updateDelay, (TIMELOCK_DELAY))
+        );
 
         vm.stopBroadcast();
 
         // Hard-fail final-state assertions: catch encoder mistakes that would let
         // the broadcast succeed at the tx level but leave the system in a wrong state.
         require(pool.owner() == address(timelock), "pool owner != timelock");
-        require(reg.owner()  == address(timelock), "registry owner != timelock");
+        require(reg.owner() == address(timelock), "registry owner != timelock");
         require(pool.pauseGuardian() == address(pauseGuardianSafe), "pauseGuardian mismatch");
         require(timelock.getMinDelay() == TIMELOCK_DELAY, "minDelay not locked down");
 
@@ -85,23 +92,18 @@ contract DeployGovernanceP2 is Script {
     /// Returns the two Safes, Timelock, and the 5 governance keys (for later use in run()).
     function _deployInfra()
         internal
-        returns (
-            Safe governanceSafe,
-            Safe pauseGuardianSafe,
-            TimelockController timelock,
-            uint256[5] memory govKeys
-        )
+        returns (Safe governanceSafe, Safe pauseGuardianSafe, TimelockController timelock, uint256[5] memory govKeys)
     {
         // Derive signers (8 total: 5 gov + 3 pg)
         address[5] memory govAddrs;
         uint256[3] memory pgKeys;
         address[3] memory pgAddrs;
         for (uint256 i = 0; i < 5; i++) {
-            govKeys[i]  = vm.deriveKey(MNEMONIC, uint32(i));
+            govKeys[i] = vm.deriveKey(MNEMONIC, uint32(i));
             govAddrs[i] = vm.addr(govKeys[i]);
         }
         for (uint256 i = 0; i < 3; i++) {
-            pgKeys[i]  = vm.deriveKey(MNEMONIC, uint32(5 + i));
+            pgKeys[i] = vm.deriveKey(MNEMONIC, uint32(5 + i));
             pgAddrs[i] = vm.addr(pgKeys[i]);
         }
 
@@ -126,10 +128,11 @@ contract DeployGovernanceP2 is Script {
         // 3. Governance Safe (3/5)
         {
             address[] memory govOwners = new address[](5);
-            for (uint256 i = 0; i < 5; i++) govOwners[i] = govAddrs[i];
+            for (uint256 i = 0; i < 5; i++) {
+                govOwners[i] = govAddrs[i];
+            }
             bytes memory govSetup = abi.encodeCall(
-                Safe.setup,
-                (govOwners, 3, address(0), bytes(""), address(0), address(0), 0, payable(address(0)))
+                Safe.setup, (govOwners, 3, address(0), bytes(""), address(0), address(0), 0, payable(address(0)))
             );
             governanceSafe = Safe(payable(address(factory.createProxyWithNonce(address(safeSingleton), govSetup, 1))));
             console2.log("Governance Safe:", address(governanceSafe));
@@ -138,10 +141,11 @@ contract DeployGovernanceP2 is Script {
         // 4. Pause Guardian Safe (2/3)
         {
             address[] memory pgOwners = new address[](3);
-            for (uint256 i = 0; i < 3; i++) pgOwners[i] = pgAddrs[i];
+            for (uint256 i = 0; i < 3; i++) {
+                pgOwners[i] = pgAddrs[i];
+            }
             bytes memory pgSetup = abi.encodeCall(
-                Safe.setup,
-                (pgOwners, 2, address(0), bytes(""), address(0), address(0), 0, payable(address(0)))
+                Safe.setup, (pgOwners, 2, address(0), bytes(""), address(0), address(0), 0, payable(address(0)))
             );
             pauseGuardianSafe = Safe(payable(address(factory.createProxyWithNonce(address(safeSingleton), pgSetup, 2))));
             console2.log("Pause Guardian Safe:", address(pauseGuardianSafe));
@@ -165,7 +169,9 @@ contract DeployGovernanceP2 is Script {
             require(ok, "feed transferOwnership failed");
         }
         uint256[] memory acceptKeys = new uint256[](3);
-        acceptKeys[0] = govKeys[0]; acceptKeys[1] = govKeys[1]; acceptKeys[2] = govKeys[2];
+        acceptKeys[0] = govKeys[0];
+        acceptKeys[1] = govKeys[1];
+        acceptKeys[2] = govKeys[2];
         for (uint256 i = 0; i < 7; i++) {
             require(
                 governanceSafe.execCall(FEEDS[i], abi.encodeWithSignature("acceptOwnership()"), acceptKeys),
@@ -185,7 +191,9 @@ contract DeployGovernanceP2 is Script {
         bytes memory call
     ) internal {
         uint256[] memory keys = new uint256[](3);
-        keys[0] = govKeys[0]; keys[1] = govKeys[1]; keys[2] = govKeys[2];
+        keys[0] = govKeys[0];
+        keys[1] = govKeys[1];
+        keys[2] = govKeys[2];
 
         require(
             gov.execCall(

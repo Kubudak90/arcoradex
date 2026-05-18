@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import { Ownable }            from "@openzeppelin/contracts/access/Ownable.sol";
-import { Ownable2Step }       from "@openzeppelin/contracts/access/Ownable2Step.sol";
-import { IERC20Metadata }     from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
+import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 
-import { IArcoraDexRegistry } from "./interfaces/IArcoraDexRegistry.sol";
-import { IChainlinkAggregator } from "./interfaces/IChainlinkAggregator.sol";
+import {IArcoraDexRegistry} from "./interfaces/IArcoraDexRegistry.sol";
+import {IChainlinkAggregator} from "./interfaces/IChainlinkAggregator.sol";
 
 /// @title ArcoraDexRegistry
 /// @notice Per-token catalogue: decimals, USD oracle, deviation cap, active flag.

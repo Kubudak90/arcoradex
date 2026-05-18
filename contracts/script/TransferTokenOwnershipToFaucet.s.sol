@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import { Script, console2 }  from "forge-std/Script.sol";
-import { ArcoraDexRegistry } from "../src/ArcoraDexRegistry.sol";
-import { MintableERC20 }     from "../src/testnet/MintableERC20.sol";
+import {Script, console2} from "forge-std/Script.sol";
+import {ArcoraDexRegistry} from "../src/ArcoraDexRegistry.sol";
+import {MintableERC20} from "../src/testnet/MintableERC20.sol";
 
 /// @notice For each active token in the registry, transfer MintableERC20
 /// ownership from the deployer to FAUCET_EOA. After this runs, the deployer
@@ -15,10 +15,10 @@ import { MintableERC20 }     from "../src/testnet/MintableERC20.sol";
 ///   FAUCET_EOA            — address of the new faucet EOA
 contract TransferTokenOwnershipToFaucet is Script {
     function run() external {
-        uint256 pk        = vm.envUint("DEPLOYER_PRIVATE_KEY");
-        address registry  = vm.envAddress("REGISTRY_ADDR");
+        uint256 pk = vm.envUint("DEPLOYER_PRIVATE_KEY");
+        address registry = vm.envAddress("REGISTRY_ADDR");
         address faucetEOA = vm.envAddress("FAUCET_EOA");
-        address deployer  = vm.addr(pk);
+        address deployer = vm.addr(pk);
 
         ArcoraDexRegistry reg = ArcoraDexRegistry(registry);
         uint256 n = reg.tokensLength();

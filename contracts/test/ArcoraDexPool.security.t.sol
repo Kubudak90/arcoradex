@@ -1,33 +1,33 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import { Test } from "forge-std/Test.sol";
-import { ArcoraDexPool }      from "../src/ArcoraDexPool.sol";
-import { ArcoraDexRegistry }  from "../src/ArcoraDexRegistry.sol";
-import { ArcoraDexLP }        from "../src/ArcoraDexLP.sol";
-import { IArcoraDexPool }     from "../src/interfaces/IArcoraDexPool.sol";
-import { MockChainlinkFeedV2 } from "../src/testnet/MockChainlinkFeedV2.sol";
-import { IChainlinkAggregator } from "../src/interfaces/IChainlinkAggregator.sol";
-import { MockERC20 } from "./helpers/MockERC20.sol";
+import {Test} from "forge-std/Test.sol";
+import {ArcoraDexPool} from "../src/ArcoraDexPool.sol";
+import {ArcoraDexRegistry} from "../src/ArcoraDexRegistry.sol";
+import {ArcoraDexLP} from "../src/ArcoraDexLP.sol";
+import {IArcoraDexPool} from "../src/interfaces/IArcoraDexPool.sol";
+import {MockChainlinkFeedV2} from "../src/testnet/MockChainlinkFeedV2.sol";
+import {IChainlinkAggregator} from "../src/interfaces/IChainlinkAggregator.sol";
+import {MockERC20} from "./helpers/MockERC20.sol";
 
 contract ArcoraDexPoolSecurityTest is Test {
     ArcoraDexRegistry reg;
-    ArcoraDexPool     pool;
-    MockERC20         usdc;
-    MockERC20         eurc;
+    ArcoraDexPool pool;
+    MockERC20 usdc;
+    MockERC20 eurc;
     MockChainlinkFeedV2 fUsdc;
     MockChainlinkFeedV2 fEurc;
     address constant DEPLOYER = address(0xD3);
-    address constant ALICE    = address(0xA1);
+    address constant ALICE = address(0xA1);
 
     function setUp() public {
         vm.startPrank(DEPLOYER);
-        reg   = new ArcoraDexRegistry(DEPLOYER);
-        usdc  = new MockERC20("USDC", "USDC", 6);
-        eurc  = new MockERC20("EURC", "EURC", 6);
-        fUsdc = new MockChainlinkFeedV2(8, 100_000_000, DEPLOYER, DEPLOYER);  // $1.00
-        fEurc = new MockChainlinkFeedV2(8, 110_000_000, DEPLOYER, DEPLOYER);  // $1.10
-        reg.listToken(address(usdc), 6, IChainlinkAggregator(address(fUsdc)),  50, 3600);
+        reg = new ArcoraDexRegistry(DEPLOYER);
+        usdc = new MockERC20("USDC", "USDC", 6);
+        eurc = new MockERC20("EURC", "EURC", 6);
+        fUsdc = new MockChainlinkFeedV2(8, 100_000_000, DEPLOYER, DEPLOYER); // $1.00
+        fEurc = new MockChainlinkFeedV2(8, 110_000_000, DEPLOYER, DEPLOYER); // $1.10
+        reg.listToken(address(usdc), 6, IChainlinkAggregator(address(fUsdc)), 50, 3600);
         reg.listToken(address(eurc), 6, IChainlinkAggregator(address(fEurc)), 150, 14400);
         pool = new ArcoraDexPool(address(reg), 5, 2500, DEPLOYER);
         vm.stopPrank();
@@ -87,10 +87,10 @@ contract ArcoraDexPoolSecurityTest is Test {
     /// This protection is structural (independent of virtual shares).
     function test_donation_does_not_inflate_nav() public {
         address attacker = address(0xBADC0FFEE);
-        address victim   = address(0xBE);
+        address victim = address(0xBE);
 
         usdc.mint(attacker, 100_000_000_000); // 100,000 USDC
-        usdc.mint(victim,     1_000_000_000); //   1,000 USDC
+        usdc.mint(victim, 1_000_000_000); //   1,000 USDC
 
         vm.startPrank(attacker);
         usdc.approve(address(pool), type(uint256).max);
@@ -102,8 +102,7 @@ contract ArcoraDexPoolSecurityTest is Test {
         uint256 navAfterDonation = pool.totalReservesUSD();
         vm.stopPrank();
 
-        assertEq(navAfterDonation, navAfterTinyDeposit,
-            "explicit reserves[] must ignore direct-transfer donations");
+        assertEq(navAfterDonation, navAfterTinyDeposit, "explicit reserves[] must ignore direct-transfer donations");
 
         // Victim deposits, receives LP based on legitimate NAV (not the inflated balance)
         vm.startPrank(victim);
@@ -120,15 +119,15 @@ contract ArcoraDexPoolSecurityTest is Test {
         pool.withdraw(address(usdc), victimLp, 0, block.timestamp + 60);
 
         uint256 victimUsdcOut = usdc.balanceOf(victim);
-        assertGe(victimUsdcOut, (100_000_000 * 99) / 100,
-            "victim must recover >=99% of deposit (only swap fee deducted)");
+        assertGe(
+            victimUsdcOut, (100_000_000 * 99) / 100, "victim must recover >=99% of deposit (only swap fee deducted)"
+        );
 
         // The donated 10,000 USDC is "orphaned" in the pool's token balance —
         // no LP has a claim against it because reserves[] never recorded it.
-        uint256 poolBalance     = usdc.balanceOf(address(pool));
-        uint256 poolReserves    = pool.reserves(address(usdc));
-        assertGt(poolBalance, poolReserves,
-            "orphaned donation should sit outside reserves[]");
+        uint256 poolBalance = usdc.balanceOf(address(pool));
+        uint256 poolReserves = pool.reserves(address(usdc));
+        assertGt(poolBalance, poolReserves, "orphaned donation should sit outside reserves[]");
     }
 
     function test_jit_mev_blocked_by_min_hold() public {
@@ -261,11 +260,7 @@ contract ArcoraDexPoolSecurityTest is Test {
         // vs lastAcceptedPrice $1.10 is 290 bps > 150 bps cap).
         vm.expectRevert(
             abi.encodeWithSelector(
-                IArcoraDexPool.PriceDeviation.selector,
-                address(eurc),
-                uint256(1.132e18),
-                uint256(1.10e18),
-                uint16(150)
+                IArcoraDexPool.PriceDeviation.selector, address(eurc), uint256(1.132e18), uint256(1.1e18), uint16(150)
             )
         );
         pool.quote(address(usdc), address(eurc), 10_000_000);
@@ -274,14 +269,7 @@ contract ArcoraDexPoolSecurityTest is Test {
         // This documents the intentional behavioral asymmetry.
         usdc.mint(address(this), 10_000_000);
         usdc.approve(address(pool), 10_000_000);
-        uint256 amountOut = pool.swap(
-            address(usdc),
-            address(eurc),
-            10_000_000,
-            0,
-            block.timestamp + 60,
-            address(this)
-        );
+        uint256 amountOut = pool.swap(address(usdc), address(eurc), 10_000_000, 0, block.timestamp + 60, address(this));
         assertGt(amountOut, 0, "swap should silently execute at cached price");
 
         // After syncAcceptedPrice, quote unblocks (lastAcceptedPrice catches up).
@@ -383,14 +371,7 @@ contract ArcoraDexPoolSecurityTest is Test {
         usdc.mint(address(this), 10_000_000);
         usdc.approve(address(pool), 10_000_000);
         vm.expectRevert();
-        pool.swap(
-            address(usdc),
-            address(eurc),
-            10_000_000,
-            0,
-            block.timestamp + 60,
-            address(this)
-        );
+        pool.swap(address(usdc), address(eurc), 10_000_000, 0, block.timestamp + 60, address(this));
     }
 
     /// @notice Verifies that virtual shares defeat the round-down-dust dilution
@@ -404,10 +385,10 @@ contract ArcoraDexPoolSecurityTest is Test {
     /// With the offset (supply + 1e6) and (NAV + 1), the floor guarantees
     /// non-zero usdIn -> non-zero lpMinted regardless of the supply/NAV ratio.
     function test_virtual_shares_prevent_lp_round_to_zero() public {
-        address first  = address(0xF1);
+        address first = address(0xF1);
         address second = address(0x52);
 
-        usdc.mint(first,  1_000_000_000); //  1,000 USDC
+        usdc.mint(first, 1_000_000_000); //  1,000 USDC
         usdc.mint(second, 1_000_000_000); //  1,000 USDC
 
         // First depositor: 500 USDC → mints a lot of LP, NAV = 500 USD

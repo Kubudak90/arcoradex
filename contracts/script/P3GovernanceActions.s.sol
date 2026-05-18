@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import { console2 } from "forge-std/Script.sol";
-import { TimelockController } from "@openzeppelin/contracts/governance/TimelockController.sol";
-import { Ownable }      from "@openzeppelin/contracts/access/Ownable.sol";
-import { Ownable2Step } from "@openzeppelin/contracts/access/Ownable2Step.sol";
-import { Safe } from "@safe-global/safe-contracts/contracts/Safe.sol";
-import { SafeSigHelpers }            from "../test/governance/SafeSigHelpers.sol";
-import { P3BatchBuilder }            from "./P3BatchBuilder.sol";
+import {console2} from "forge-std/Script.sol";
+import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
+import {Safe} from "@safe-global/safe-contracts/contracts/Safe.sol";
+import {SafeSigHelpers} from "../test/governance/SafeSigHelpers.sol";
+import {P3BatchBuilder} from "./P3BatchBuilder.sol";
 
 /// @notice Phase 3 operational script. Phase A: Governance Safe accepts
 /// ownership of the 15 P3 contracts (guard + 7 aggregators + 7 secondary
@@ -28,11 +28,10 @@ import { P3BatchBuilder }            from "./P3BatchBuilder.sol";
 contract P3GovernanceActions is P3BatchBuilder {
     using SafeSigHelpers for Safe;
 
-    string constant MNEMONIC =
-        "test test test test test test test test test test test junk";
+    string constant MNEMONIC = "test test test test test test test test test test test junk";
 
-    Safe               constant GOV_SAFE  = Safe(payable(0x715f669D79Cc72d6685F8724c0B86f7B53d7e624));
-    TimelockController constant TIMELOCK  = TimelockController(payable(0x36444f653E7746d69aD5d91dA920f5Cd2F9C6E83));
+    Safe constant GOV_SAFE = Safe(payable(0x715f669D79Cc72d6685F8724c0B86f7B53d7e624));
+    TimelockController constant TIMELOCK = TimelockController(payable(0x36444f653E7746d69aD5d91dA920f5Cd2F9C6E83));
 
     function run() external {
         require(block.chainid == 5042002, "Arc testnet only");
@@ -79,18 +78,13 @@ contract P3GovernanceActions is P3BatchBuilder {
         // ── Phase B: schedule 9-operation batch through the 48h Timelock ──
         // 7 x Registry.setOracle  (point each token at its new OracleAggregator)
         // 2 x Registry.setDeviation (tighten TRYC [5] and BRLC [6] caps to 200 bps)
-        (address[] memory targets, uint256[] memory values, bytes[] memory payloads) =
-            _buildP3Batch(aggs);
+        (address[] memory targets, uint256[] memory values, bytes[] memory payloads) = _buildP3Batch(aggs);
 
         bytes memory schedBatchCall = abi.encodeCall(
-            TimelockController.scheduleBatch,
-            (targets, values, payloads, PREDECESSOR, SALT, TIMELOCK_DELAY)
+            TimelockController.scheduleBatch, (targets, values, payloads, PREDECESSOR, SALT, TIMELOCK_DELAY)
         );
 
-        require(
-            GOV_SAFE.execCall(address(TIMELOCK), schedBatchCall, _keys3(govKeys)),
-            "scheduleBatch failed"
-        );
+        require(GOV_SAFE.execCall(address(TIMELOCK), schedBatchCall, _keys3(govKeys)), "scheduleBatch failed");
         console2.log("Phase B: scheduled 9-operation batch through Timelock (48h delay)");
 
         bytes32 batchId = TIMELOCK.hashOperationBatch(targets, values, payloads, PREDECESSOR, SALT);

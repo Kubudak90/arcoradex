@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import { console2 } from "forge-std/Script.sol";
-import { TimelockController } from "@openzeppelin/contracts/governance/TimelockController.sol";
-import { P3BatchBuilder } from "./P3BatchBuilder.sol";
+import {console2} from "forge-std/Script.sol";
+import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
+import {P3BatchBuilder} from "./P3BatchBuilder.sol";
 
 /// @notice Executes the P3 Registry migration batch 48h after
 /// P3GovernanceActions scheduled it. The Timelock executor role is open,
@@ -13,16 +13,14 @@ import { P3BatchBuilder } from "./P3BatchBuilder.sol";
 ///
 /// Required env: DEPLOYER_PRIVATE_KEY, P3_AGG_<SYM> x7.
 contract ExecuteP3Batch is P3BatchBuilder {
-    TimelockController constant TIMELOCK =
-        TimelockController(payable(0x36444f653E7746d69aD5d91dA920f5Cd2F9C6E83));
+    TimelockController constant TIMELOCK = TimelockController(payable(0x36444f653E7746d69aD5d91dA920f5Cd2F9C6E83));
 
     function run() external {
         require(block.chainid == 5042002, "Arc testnet only");
         uint256 deployerKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
 
         address[7] memory aggs = _readAggregators();
-        (address[] memory targets, uint256[] memory values, bytes[] memory payloads) =
-            _buildP3Batch(aggs);
+        (address[] memory targets, uint256[] memory values, bytes[] memory payloads) = _buildP3Batch(aggs);
 
         bytes32 id = TIMELOCK.hashOperationBatch(targets, values, payloads, PREDECESSOR, SALT);
         console2.log("Batch id:");

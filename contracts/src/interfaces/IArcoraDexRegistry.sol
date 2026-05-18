@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import { IChainlinkAggregator } from "./IChainlinkAggregator.sol";
+import {IChainlinkAggregator} from "./IChainlinkAggregator.sol";
 
 interface IArcoraDexRegistry {
     struct TokenInfo {
-        uint8                decimals;
-        bool                 isActive;
+        uint8 decimals;
+        bool isActive;
         IChainlinkAggregator usdOracle;
-        uint16               maxOracleDeviationBps;
-        uint32               maxStaleSeconds;
+        uint16 maxOracleDeviationBps;
+        uint32 maxStaleSeconds;
     }
 
     // ── Errors ────────────────────────────────────────────────────────
@@ -24,12 +24,12 @@ interface IArcoraDexRegistry {
     // ── Events ────────────────────────────────────────────────────────
     event TokenListed(
         address indexed token,
-        uint8   decimals,
+        uint8 decimals,
         address indexed oracle,
-        uint16  maxOracleDeviationBps,
-        uint32  maxStaleSeconds
+        uint16 maxOracleDeviationBps,
+        uint32 maxStaleSeconds
     );
-    event OracleUpdated   (address indexed token, address oldOracle, address newOracle);
+    event OracleUpdated(address indexed token, address oldOracle, address newOracle);
     event DeviationUpdated(address indexed token, uint16 oldBps, uint16 newBps);
     event MaxStaleSecondsUpdated(address indexed token, uint32 oldVal, uint32 newVal);
     event TokenDeactivated(address indexed token);
@@ -43,15 +43,15 @@ interface IArcoraDexRegistry {
         uint16 maxDeviationBps,
         uint32 maxStaleSeconds_
     ) external;
-    function setOracle         (address token, IChainlinkAggregator newOracle) external;
-    function setDeviation      (address token, uint16 maxDeviationBps) external;
+    function setOracle(address token, IChainlinkAggregator newOracle) external;
+    function setDeviation(address token, uint16 maxDeviationBps) external;
     function setMaxStaleSeconds(address token, uint32 maxStaleSeconds_) external;
     function deactivateToken(address token) external;
     function reactivateToken(address token) external;
 
     // ── Views ─────────────────────────────────────────────────────────
     function tokens(uint256 i) external view returns (address);
-    function tokensLength()    external view returns (uint256);
+    function tokensLength() external view returns (uint256);
     function tokenInfo(address token) external view returns (TokenInfo memory);
     function isActive(address token) external view returns (bool);
 }

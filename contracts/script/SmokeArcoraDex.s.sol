@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import { Script, console2 } from "forge-std/Script.sol";
-import { ArcoraDexPool } from "../src/ArcoraDexPool.sol";
-import { ArcoraDexLP }   from "../src/ArcoraDexLP.sol";
-import { MintableERC20 } from "../src/testnet/MintableERC20.sol";
+import {Script, console2} from "forge-std/Script.sol";
+import {ArcoraDexPool} from "../src/ArcoraDexPool.sol";
+import {ArcoraDexLP} from "../src/ArcoraDexLP.sol";
+import {MintableERC20} from "../src/testnet/MintableERC20.sol";
 
 /// @notice Post-deploy smoke run. Reads addresses from env:
 ///   POOL_ADDRESS, USDC, USDT, PYUSD, DAI, EURC, TRYC, BRLC
@@ -56,13 +56,13 @@ contract SmokeArcoraDex is Script {
 
         // Flow 6: withdraw 500 LP as USDC
         uint256 lpBal = lp.balanceOf(vm.addr(actorKey));
-        uint256 burn  = lpBal > 500e18 ? 500e18 : lpBal / 2;
-        uint256 wOut  = pool.withdraw(toks[0], burn, 0, block.timestamp + 1 days);
+        uint256 burn = lpBal > 500e18 ? 500e18 : lpBal / 2;
+        uint256 wOut = pool.withdraw(toks[0], burn, 0, block.timestamp + 1 days);
         console2.log("withdraw->USDC out:", wOut);
 
         // Flow 7: withdraw 500 LP as BRLC
         lpBal = lp.balanceOf(vm.addr(actorKey));
-        burn  = lpBal > 500e18 ? 500e18 : lpBal / 2;
+        burn = lpBal > 500e18 ? 500e18 : lpBal / 2;
         uint256 wOutBRLC = pool.withdraw(toks[6], burn, 0, block.timestamp + 1 days);
         console2.log("withdraw->BRLC out:", wOutBRLC);
 
