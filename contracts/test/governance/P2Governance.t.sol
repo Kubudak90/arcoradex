@@ -1,28 +1,28 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import { Test } from "forge-std/Test.sol";
-import { TimelockController } from "@openzeppelin/contracts/governance/TimelockController.sol";
-import { Safe } from "@safe-global/safe-contracts/contracts/Safe.sol";
-import { SafeProxyFactory } from "@safe-global/safe-contracts/contracts/proxies/SafeProxyFactory.sol";
-import { Enum } from "@safe-global/safe-contracts/contracts/common/Enum.sol";
+import {Test} from "forge-std/Test.sol";
+import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Safe} from "@safe-global/safe-contracts/contracts/Safe.sol";
+import {SafeProxyFactory} from "@safe-global/safe-contracts/contracts/proxies/SafeProxyFactory.sol";
+import {Enum} from "@safe-global/safe-contracts/contracts/common/Enum.sol";
 
-import { ArcoraDexPool }      from "../../src/ArcoraDexPool.sol";
-import { ArcoraDexRegistry }  from "../../src/ArcoraDexRegistry.sol";
-import { IArcoraDexPool }     from "../../src/interfaces/IArcoraDexPool.sol";
-import { IChainlinkAggregator } from "../../src/interfaces/IChainlinkAggregator.sol";
-import { MockChainlinkFeedV2 } from "../../src/testnet/MockChainlinkFeedV2.sol";
-import { MockERC20 } from "../helpers/MockERC20.sol";
+import {ArcoraDexPool} from "../../src/ArcoraDexPool.sol";
+import {ArcoraDexRegistry} from "../../src/ArcoraDexRegistry.sol";
+import {IArcoraDexPool} from "../../src/interfaces/IArcoraDexPool.sol";
+import {IChainlinkAggregator} from "../../src/interfaces/IChainlinkAggregator.sol";
+import {MockChainlinkFeedV2} from "../../src/testnet/MockChainlinkFeedV2.sol";
+import {MockERC20} from "../helpers/MockERC20.sol";
 
-import { SafeSigHelpers } from "./SafeSigHelpers.sol";
+import {SafeSigHelpers} from "./SafeSigHelpers.sol";
 
 contract P2GovernanceTest is Test {
     using SafeSigHelpers for Safe;
 
     // Standard Foundry/Hardhat test mnemonic (all BIP-39 valid words).
     // Gives 8 deterministic but throwaway private keys — no mainnet funds.
-    string constant MNEMONIC =
-        "test test test test test test test test test test test junk";
+    string constant MNEMONIC = "test test test test test test test test test test test junk";
 
     address constant DEPLOYER = address(0xD3);
     uint256 constant TIMELOCK_DELAY = 48 hours;
@@ -34,12 +34,12 @@ contract P2GovernanceTest is Test {
     address[3] pgAddrs;
 
     // Deployed contracts
-    Safe                governanceSafe;
-    Safe                pauseGuardianSafe;
-    TimelockController  timelock;
-    ArcoraDexRegistry   reg;
-    ArcoraDexPool       pool;
-    MockERC20           usdc;
+    Safe governanceSafe;
+    Safe pauseGuardianSafe;
+    TimelockController timelock;
+    ArcoraDexRegistry reg;
+    ArcoraDexPool pool;
+    MockERC20 usdc;
     MockChainlinkFeedV2 fUsdc;
 
     function setUp() public {
@@ -49,17 +49,17 @@ contract P2GovernanceTest is Test {
 
         // Derive signers
         for (uint256 i = 0; i < 5; i++) {
-            govKeys[i]  = vm.deriveKey(MNEMONIC, uint32(i));
+            govKeys[i] = vm.deriveKey(MNEMONIC, uint32(i));
             govAddrs[i] = vm.addr(govKeys[i]);
         }
         for (uint256 i = 0; i < 3; i++) {
-            pgKeys[i]  = vm.deriveKey(MNEMONIC, uint32(5 + i));
+            pgKeys[i] = vm.deriveKey(MNEMONIC, uint32(5 + i));
             pgAddrs[i] = vm.addr(pgKeys[i]);
         }
 
         // Deploy Pool + Registry + a test token under DEPLOYER ownership
         vm.startPrank(DEPLOYER);
-        reg  = new ArcoraDexRegistry(DEPLOYER);
+        reg = new ArcoraDexRegistry(DEPLOYER);
         usdc = new MockERC20("USDC", "USDC", 6);
         fUsdc = new MockChainlinkFeedV2(8, 100_000_000, DEPLOYER, DEPLOYER);
         reg.listToken(address(usdc), 6, IChainlinkAggregator(address(fUsdc)), 50, 3600);
@@ -77,19 +77,21 @@ contract P2GovernanceTest is Test {
 
         // Governance Safe (3/5)
         address[] memory govOwners = new address[](5);
-        for (uint256 i = 0; i < 5; i++) govOwners[i] = govAddrs[i];
+        for (uint256 i = 0; i < 5; i++) {
+            govOwners[i] = govAddrs[i];
+        }
         bytes memory govSetup = abi.encodeCall(
-            Safe.setup,
-            (govOwners, 3, address(0), bytes(""), address(0), address(0), 0, payable(address(0)))
+            Safe.setup, (govOwners, 3, address(0), bytes(""), address(0), address(0), 0, payable(address(0)))
         );
         governanceSafe = Safe(payable(address(factory.createProxyWithNonce(address(safeSingleton), govSetup, 1))));
 
         // Pause Guardian Safe (2/3)
         address[] memory pgOwners = new address[](3);
-        for (uint256 i = 0; i < 3; i++) pgOwners[i] = pgAddrs[i];
+        for (uint256 i = 0; i < 3; i++) {
+            pgOwners[i] = pgAddrs[i];
+        }
         bytes memory pgSetup = abi.encodeCall(
-            Safe.setup,
-            (pgOwners, 2, address(0), bytes(""), address(0), address(0), 0, payable(address(0)))
+            Safe.setup, (pgOwners, 2, address(0), bytes(""), address(0), address(0), 0, payable(address(0)))
         );
         pauseGuardianSafe = Safe(payable(address(factory.createProxyWithNonce(address(safeSingleton), pgSetup, 2))));
 
@@ -107,26 +109,92 @@ contract P2GovernanceTest is Test {
         vm.stopPrank();
 
         // Timelock executes acceptOwnership on Pool + Registry
-        _govExec(address(timelock), abi.encodeCall(TimelockController.schedule,
-            (address(pool), 0, abi.encodeCall(pool.acceptOwnership, ()), bytes32(0), bytes32(0), 0)));
-        _govExec(address(timelock), abi.encodeCall(TimelockController.execute,
-            (address(pool), 0, abi.encodeCall(pool.acceptOwnership, ()), bytes32(0), bytes32(0))));
-        _govExec(address(timelock), abi.encodeCall(TimelockController.schedule,
-            (address(reg), 0, abi.encodeCall(reg.acceptOwnership, ()), bytes32(0), bytes32(0), 0)));
-        _govExec(address(timelock), abi.encodeCall(TimelockController.execute,
-            (address(reg), 0, abi.encodeCall(reg.acceptOwnership, ()), bytes32(0), bytes32(0))));
+        _govExec(
+            address(timelock),
+            abi.encodeCall(
+                TimelockController.schedule,
+                (address(pool), 0, abi.encodeCall(pool.acceptOwnership, ()), bytes32(0), bytes32(0), 0)
+            )
+        );
+        _govExec(
+            address(timelock),
+            abi.encodeCall(
+                TimelockController.execute,
+                (address(pool), 0, abi.encodeCall(pool.acceptOwnership, ()), bytes32(0), bytes32(0))
+            )
+        );
+        _govExec(
+            address(timelock),
+            abi.encodeCall(
+                TimelockController.schedule,
+                (address(reg), 0, abi.encodeCall(reg.acceptOwnership, ()), bytes32(0), bytes32(0), 0)
+            )
+        );
+        _govExec(
+            address(timelock),
+            abi.encodeCall(
+                TimelockController.execute,
+                (address(reg), 0, abi.encodeCall(reg.acceptOwnership, ()), bytes32(0), bytes32(0))
+            )
+        );
 
         // setPauseGuardian
-        _govExec(address(timelock), abi.encodeCall(TimelockController.schedule,
-            (address(pool), 0, abi.encodeCall(pool.setPauseGuardian, (address(pauseGuardianSafe))), bytes32(0), bytes32(0), 0)));
-        _govExec(address(timelock), abi.encodeCall(TimelockController.execute,
-            (address(pool), 0, abi.encodeCall(pool.setPauseGuardian, (address(pauseGuardianSafe))), bytes32(0), bytes32(0))));
+        _govExec(
+            address(timelock),
+            abi.encodeCall(
+                TimelockController.schedule,
+                (
+                    address(pool),
+                    0,
+                    abi.encodeCall(pool.setPauseGuardian, (address(pauseGuardianSafe))),
+                    bytes32(0),
+                    bytes32(0),
+                    0
+                )
+            )
+        );
+        _govExec(
+            address(timelock),
+            abi.encodeCall(
+                TimelockController.execute,
+                (
+                    address(pool),
+                    0,
+                    abi.encodeCall(pool.setPauseGuardian, (address(pauseGuardianSafe))),
+                    bytes32(0),
+                    bytes32(0)
+                )
+            )
+        );
 
         // Lockdown: updateDelay(48h)
-        _govExec(address(timelock), abi.encodeCall(TimelockController.schedule,
-            (address(timelock), 0, abi.encodeCall(TimelockController.updateDelay, (TIMELOCK_DELAY)), bytes32(0), bytes32(0), 0)));
-        _govExec(address(timelock), abi.encodeCall(TimelockController.execute,
-            (address(timelock), 0, abi.encodeCall(TimelockController.updateDelay, (TIMELOCK_DELAY)), bytes32(0), bytes32(0))));
+        _govExec(
+            address(timelock),
+            abi.encodeCall(
+                TimelockController.schedule,
+                (
+                    address(timelock),
+                    0,
+                    abi.encodeCall(TimelockController.updateDelay, (TIMELOCK_DELAY)),
+                    bytes32(0),
+                    bytes32(0),
+                    0
+                )
+            )
+        );
+        _govExec(
+            address(timelock),
+            abi.encodeCall(
+                TimelockController.execute,
+                (
+                    address(timelock),
+                    0,
+                    abi.encodeCall(TimelockController.updateDelay, (TIMELOCK_DELAY)),
+                    bytes32(0),
+                    bytes32(0)
+                )
+            )
+        );
     }
 
     /// @dev Calls Safe.execTransaction with the first 3 governance signers (meets the 3/5 threshold).
@@ -148,7 +216,7 @@ contract P2GovernanceTest is Test {
 
     function test_setup_state_correct() public view {
         assertEq(pool.owner(), address(timelock));
-        assertEq(reg.owner(),  address(timelock));
+        assertEq(reg.owner(), address(timelock));
         assertEq(pool.pauseGuardian(), address(pauseGuardianSafe));
         assertEq(timelock.getMinDelay(), TIMELOCK_DELAY);
         assertEq(governanceSafe.getThreshold(), 3);
@@ -160,8 +228,12 @@ contract P2GovernanceTest is Test {
         bytes memory call = abi.encodeCall(pool.setSwapFeeBps, (newFee));
 
         // Schedule via governance
-        _govExec(address(timelock), abi.encodeCall(TimelockController.schedule,
-            (address(pool), 0, call, bytes32(0), bytes32(0), TIMELOCK_DELAY)));
+        _govExec(
+            address(timelock),
+            abi.encodeCall(
+                TimelockController.schedule, (address(pool), 0, call, bytes32(0), bytes32(0), TIMELOCK_DELAY)
+            )
+        );
 
         // Cannot execute before delay
         vm.expectRevert();
@@ -180,10 +252,34 @@ contract P2GovernanceTest is Test {
         assertEq(pool.paused(), true);
     }
 
-    function test_pauseGuardian_canUnpauseInstantly() public {
+    function test_pauseGuardian_cannotUnpause() public {
+        // Guardian can pause ...
         _pgExec(address(pool), abi.encodeCall(pool.pause, ()));
         assertEq(pool.paused(), true);
-        _pgExec(address(pool), abi.encodeCall(pool.unpause, ()));
+        // ... but must NOT be able to unpause — only the owner (Timelock) may restart.
+        // A compromised guardian must not be able to un-protect a pool the owner
+        // deliberately paused during an incident.
+        vm.prank(address(pauseGuardianSafe));
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(pauseGuardianSafe)));
+        pool.unpause();
+    }
+
+    function test_owner_canUnpause() public {
+        // Pause via guardian (fast path)
+        _pgExec(address(pool), abi.encodeCall(pool.pause, ()));
+        assertEq(pool.paused(), true);
+
+        // Owner (Timelock) schedules + executes unpause after delay
+        bytes memory unpauseCall = abi.encodeCall(pool.unpause, ());
+        _govExec(
+            address(timelock),
+            abi.encodeCall(
+                TimelockController.schedule, (address(pool), 0, unpauseCall, bytes32(0), bytes32(0), TIMELOCK_DELAY)
+            )
+        );
+        vm.warp(block.timestamp + TIMELOCK_DELAY + 1);
+        timelock.execute(address(pool), 0, unpauseCall, bytes32(0), bytes32(0));
+
         assertEq(pool.paused(), false);
     }
 
@@ -197,8 +293,10 @@ contract P2GovernanceTest is Test {
         uint32 newStale = 7200;
         bytes memory call = abi.encodeCall(reg.setMaxStaleSeconds, (address(usdc), newStale));
 
-        _govExec(address(timelock), abi.encodeCall(TimelockController.schedule,
-            (address(reg), 0, call, bytes32(0), bytes32(0), TIMELOCK_DELAY)));
+        _govExec(
+            address(timelock),
+            abi.encodeCall(TimelockController.schedule, (address(reg), 0, call, bytes32(0), bytes32(0), TIMELOCK_DELAY))
+        );
 
         vm.warp(block.timestamp + TIMELOCK_DELAY + 1);
         timelock.execute(address(reg), 0, call, bytes32(0), bytes32(0));
@@ -209,8 +307,12 @@ contract P2GovernanceTest is Test {
     function test_executor_open_anyone_can_execute_after_delay() public {
         uint16 newFee = 7;
         bytes memory call = abi.encodeCall(pool.setSwapFeeBps, (newFee));
-        _govExec(address(timelock), abi.encodeCall(TimelockController.schedule,
-            (address(pool), 0, call, bytes32(0), bytes32(0), TIMELOCK_DELAY)));
+        _govExec(
+            address(timelock),
+            abi.encodeCall(
+                TimelockController.schedule, (address(pool), 0, call, bytes32(0), bytes32(0), TIMELOCK_DELAY)
+            )
+        );
 
         vm.warp(block.timestamp + TIMELOCK_DELAY + 1);
         // Random non-Safe address executes

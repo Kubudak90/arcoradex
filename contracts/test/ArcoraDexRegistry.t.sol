@@ -1,25 +1,25 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import { Test } from "forge-std/Test.sol";
-import { ArcoraDexRegistry }    from "../src/ArcoraDexRegistry.sol";
-import { IArcoraDexRegistry }   from "../src/interfaces/IArcoraDexRegistry.sol";
-import { IChainlinkAggregator } from "../src/interfaces/IChainlinkAggregator.sol";
-import { MintableERC20 }        from "../src/testnet/MintableERC20.sol";
-import { MockChainlinkFeed }    from "../src/testnet/MockChainlinkFeed.sol";
+import {Test} from "forge-std/Test.sol";
+import {ArcoraDexRegistry} from "../src/ArcoraDexRegistry.sol";
+import {IArcoraDexRegistry} from "../src/interfaces/IArcoraDexRegistry.sol";
+import {IChainlinkAggregator} from "../src/interfaces/IChainlinkAggregator.sol";
+import {MintableERC20} from "../src/testnet/MintableERC20.sol";
+import {MockChainlinkFeed} from "../src/testnet/MockChainlinkFeed.sol";
 
 contract ArcoraDexRegistryTest is Test {
     ArcoraDexRegistry reg;
-    MintableERC20     usdc;
+    MintableERC20 usdc;
     MockChainlinkFeed feed;
-    address owner   = makeAddr("owner");
+    address owner = makeAddr("owner");
     address newOwner = makeAddr("newOwner");
     address attacker = makeAddr("attacker");
 
     function setUp() public {
-        reg  = new ArcoraDexRegistry(owner);
+        reg = new ArcoraDexRegistry(owner);
         usdc = new MintableERC20("USD Coin", "USDC", 6, owner);
-        feed = new MockChainlinkFeed(8, int256(1e8));  // 8 dec, $1.00
+        feed = new MockChainlinkFeed(8, int256(1e8)); // 8 dec, $1.00
     }
 
     // ── listToken ───────────────────────────────────────────────────
@@ -85,7 +85,7 @@ contract ArcoraDexRegistryTest is Test {
 
     function test_listToken_revertsNotOwner() public {
         vm.prank(attacker);
-        vm.expectRevert();   // OZ Ownable revert
+        vm.expectRevert(); // OZ Ownable revert
         reg.listToken(address(usdc), 6, IChainlinkAggregator(address(feed)), 50, 3600);
     }
 

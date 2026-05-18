@@ -1,65 +1,69 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import { Test } from "forge-std/Test.sol";
-import { ArcoraDexPool }       from "../src/ArcoraDexPool.sol";
-import { ArcoraDexRegistry }   from "../src/ArcoraDexRegistry.sol";
-import { ArcoraDexLP }         from "../src/ArcoraDexLP.sol";
-import { IArcoraDexPool }      from "../src/interfaces/IArcoraDexPool.sol";
-import { IArcoraDexRegistry }  from "../src/interfaces/IArcoraDexRegistry.sol";
-import { IChainlinkAggregator } from "../src/interfaces/IChainlinkAggregator.sol";
-import { MintableERC20 }       from "../src/testnet/MintableERC20.sol";
-import { MockChainlinkFeed }   from "../src/testnet/MockChainlinkFeed.sol";
-import { RevertingMockFeed, RevertingDecimalsMockFeed } from "./oracle/RevertingMockFeed.sol";
+import {Test} from "forge-std/Test.sol";
+import {ArcoraDexPool} from "../src/ArcoraDexPool.sol";
+import {ArcoraDexRegistry} from "../src/ArcoraDexRegistry.sol";
+import {ArcoraDexLP} from "../src/ArcoraDexLP.sol";
+import {IArcoraDexPool} from "../src/interfaces/IArcoraDexPool.sol";
+import {IArcoraDexRegistry} from "../src/interfaces/IArcoraDexRegistry.sol";
+import {IChainlinkAggregator} from "../src/interfaces/IChainlinkAggregator.sol";
+import {MintableERC20} from "../src/testnet/MintableERC20.sol";
+import {MockChainlinkFeed} from "../src/testnet/MockChainlinkFeed.sol";
+import {RevertingMockFeed, RevertingDecimalsMockFeed} from "./oracle/RevertingMockFeed.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 contract ArcoraDexPoolTest is Test {
-    ArcoraDexPool     pool;
+    ArcoraDexPool pool;
     ArcoraDexRegistry reg;
-    ArcoraDexLP       lp;
-    MintableERC20 usdc; MockChainlinkFeed fUsdc;
-    MintableERC20 eurc; MockChainlinkFeed fEurc;
-    MintableERC20 dai;  MockChainlinkFeed fDai;
+    ArcoraDexLP lp;
+    MintableERC20 usdc;
+    MockChainlinkFeed fUsdc;
+    MintableERC20 eurc;
+    MockChainlinkFeed fEurc;
+    MintableERC20 dai;
+    MockChainlinkFeed fDai;
     address owner = makeAddr("owner");
     address alice = makeAddr("alice");
-    address bob   = makeAddr("bob");
+    address bob = makeAddr("bob");
 
     uint16 constant SWAP_FEE_BPS_DEFAULT = 30;
-    uint16 constant PROT_SHARE_DEFAULT   = 1000; // 10%
+    uint16 constant PROT_SHARE_DEFAULT = 1000; // 10%
 
     function setUp() public {
         // Tokens (decimals: USDC=6, EURC=6, DAI=18). 4-arg MintableERC20 ctor.
-        usdc = new MintableERC20("USD Coin",    "USDC", 6,  owner);
-        eurc = new MintableERC20("Euro Coin",   "EURC", 6,  owner);
-        dai  = new MintableERC20("Dai",         "DAI",  18, owner);
+        usdc = new MintableERC20("USD Coin", "USDC", 6, owner);
+        eurc = new MintableERC20("Euro Coin", "EURC", 6, owner);
+        dai = new MintableERC20("Dai", "DAI", 18, owner);
         // Feeds (decimals first, answer second). Initial: 1.00 USD, 1.10 USD, 1.00 USD.
         fUsdc = new MockChainlinkFeed(8, int256(1e8));
         fEurc = new MockChainlinkFeed(8, int256(11e7));
-        fDai  = new MockChainlinkFeed(8, int256(1e8));
+        fDai = new MockChainlinkFeed(8, int256(1e8));
 
-        reg  = new ArcoraDexRegistry(owner);
+        reg = new ArcoraDexRegistry(owner);
         pool = new ArcoraDexPool(address(reg), SWAP_FEE_BPS_DEFAULT, PROT_SHARE_DEFAULT, owner);
-        lp   = ArcoraDexLP(address(pool.LP()));
+        lp = ArcoraDexLP(address(pool.LP()));
 
         vm.startPrank(owner);
-        reg.listToken(address(usdc), 6,  IChainlinkAggregator(address(fUsdc)),  50,  3600);
-        reg.listToken(address(eurc), 6,  IChainlinkAggregator(address(fEurc)), 150, 14400);
-        reg.listToken(address(dai),  18, IChainlinkAggregator(address(fDai)),   50,  3600);
+        reg.listToken(address(usdc), 6, IChainlinkAggregator(address(fUsdc)), 50, 3600);
+        reg.listToken(address(eurc), 6, IChainlinkAggregator(address(fEurc)), 150, 14400);
+        reg.listToken(address(dai), 18, IChainlinkAggregator(address(fDai)), 50, 3600);
         vm.stopPrank();
 
         // Mint to alice/bob via owner (MintableERC20 mint may be owner-only — check).
         vm.startPrank(owner);
         usdc.mint(alice, 10_000e6);
-        usdc.mint(bob,   10_000e6);
+        usdc.mint(bob, 10_000e6);
         eurc.mint(alice, 10_000e6);
-        dai.mint (alice, 10_000e18);
+        dai.mint(alice, 10_000e18);
         vm.stopPrank();
     }
 
     // ── Constructor / wiring ─────────────────────────────────────────
     function test_constructor_setsImmutables() public view {
         assertEq(address(pool.REGISTRY()), address(reg));
-        assertEq(address(pool.LP()),       address(lp));
-        assertEq(pool.swapFeeBps(),        SWAP_FEE_BPS_DEFAULT);
+        assertEq(address(pool.LP()), address(lp));
+        assertEq(pool.swapFeeBps(), SWAP_FEE_BPS_DEFAULT);
         assertEq(pool.protocolFeeShareBps(), PROT_SHARE_DEFAULT);
         assertFalse(pool.paused());
         assertEq(lp.MINTER(), address(pool));
@@ -101,7 +105,9 @@ contract ArcoraDexPoolTest is Test {
         dai.mint(alice, 1000);
         vm.startPrank(alice);
         dai.approve(address(pool), 999);
-        vm.expectRevert(abi.encodeWithSelector(IArcoraDexPool.FirstDepositTooSmall.selector, uint256(999), uint256(1000)));
+        vm.expectRevert(
+            abi.encodeWithSelector(IArcoraDexPool.FirstDepositTooSmall.selector, uint256(999), uint256(1000))
+        );
         pool.deposit(address(dai), 999, 0, block.timestamp);
         vm.stopPrank();
     }
@@ -113,7 +119,7 @@ contract ArcoraDexPoolTest is Test {
         pool.deposit(address(usdc), 1000e6, 0, block.timestamp);
         vm.stopPrank();
         uint256 supplyAfter1 = lp.totalSupply();
-        uint256 navAfter1    = pool.totalReservesUSD();
+        uint256 navAfter1 = pool.totalReservesUSD();
 
         // Bob deposits 500 USDC. lpMinted = 500e18 * (supply + VIRTUAL_SHARES) / (nav + VIRTUAL_ASSETS).
         // VIRTUAL_SHARES = 1e6, VIRTUAL_ASSETS = 1.
@@ -130,7 +136,9 @@ contract ArcoraDexPoolTest is Test {
         vm.startPrank(alice);
         usdc.approve(address(pool), 1000e6);
         // First deposit yields 1000e24 (virtual shares); require minLpOut = 1000e24 + 1 (impossible).
-        vm.expectRevert(abi.encodeWithSelector(IArcoraDexPool.InsufficientLpOut.selector, uint256(1000e24), uint256(1000e24 + 1)));
+        vm.expectRevert(
+            abi.encodeWithSelector(IArcoraDexPool.InsufficientLpOut.selector, uint256(1000e24), uint256(1000e24 + 1))
+        );
         pool.deposit(address(usdc), 1000e6, 1000e24 + 1, block.timestamp);
         vm.stopPrank();
     }
@@ -193,7 +201,7 @@ contract ArcoraDexPoolTest is Test {
         vm.startPrank(alice);
         usdc.approve(address(pool), 1000e6);
         pool.deposit(address(usdc), 1000e6, 0, block.timestamp);
-        vm.expectRevert();   // InsufficientLiquidity
+        vm.expectRevert(); // InsufficientLiquidity
         pool.withdraw(address(eurc), 100e18, 0, block.timestamp);
         vm.stopPrank();
     }
@@ -231,7 +239,7 @@ contract ArcoraDexPoolTest is Test {
     // ── quote ───────────────────────────────────────────────────────
     function test_quote_USDC_to_EURC_oracle_price() public {
         // 1.00 USDC → 1.10 EUR per EURC oracle. amount = 110 USDC, expected gross = 100 EURC, net = 100 * (10000-30)/10000 = 99.7 EURC.
-        uint256 amountIn  = 110e6;       // 110 USDC
+        uint256 amountIn = 110e6; // 110 USDC
         uint256 amountOut = pool.quote(address(usdc), address(eurc), amountIn);
         // gross = 110e18 (USD value) / 1.10 (EURC price 1.1e18) * 1e6 ≈ 100e6
         // net   = 100e6 * 9970/10000 = 99.7e6
@@ -240,7 +248,7 @@ contract ArcoraDexPoolTest is Test {
 
     function test_quote_USDC_to_DAI_decimals_6_to_18() public {
         // Both at $1.00. 100 USDC → ~99.7 DAI (after 30 bps swap fee).
-        uint256 amountIn  = 100e6;
+        uint256 amountIn = 100e6;
         uint256 amountOut = pool.quote(address(usdc), address(dai), amountIn);
         // gross = 100e18; net = 100e18 * 9970/10000 = 99.7e18
         assertApproxEqAbs(amountOut, 99_700_000_000_000_000_000, 1e12);
@@ -291,7 +299,7 @@ contract ArcoraDexPoolTest is Test {
         vm.stopPrank();
         assertGt(amountOut, 996e6);
         assertLt(amountOut, 998e6);
-        assertGt(fee, 0);     // protocol's 10% of 30 bps fee on ~1000 USDC
+        assertGt(fee, 0); // protocol's 10% of 30 bps fee on ~1000 USDC
     }
 
     // ── swap ────────────────────────────────────────────────────────
@@ -300,10 +308,10 @@ contract ArcoraDexPoolTest is Test {
         vm.startPrank(alice);
         usdc.approve(address(pool), 5_000e6);
         eurc.approve(address(pool), 5_000e6);
-        dai .approve(address(pool), 5_000e18);
-        pool.deposit(address(usdc), 5_000e6,  0, block.timestamp);
-        pool.deposit(address(eurc), 5_000e6,  0, block.timestamp);
-        pool.deposit(address(dai),  5_000e18, 0, block.timestamp);
+        dai.approve(address(pool), 5_000e18);
+        pool.deposit(address(usdc), 5_000e6, 0, block.timestamp);
+        pool.deposit(address(eurc), 5_000e6, 0, block.timestamp);
+        pool.deposit(address(dai), 5_000e18, 0, block.timestamp);
         vm.stopPrank();
     }
 
@@ -430,9 +438,9 @@ contract ArcoraDexPoolTest is Test {
         // With the cache-deviation guard, excessive oracle moves are now rejected at the
         // cache level: the swap proceeds using the old cached price and the cache is NOT
         // updated — rather than reverting, the pool stays available.
-        _seedAllThree();   // first reads accept current oracle prices; cache = $1.10.
+        _seedAllThree(); // first reads accept current oracle prices; cache = $1.10.
 
-        uint256 cachedEurcBefore   = pool.lastValidPrice(address(eurc));
+        uint256 cachedEurcBefore = pool.lastValidPrice(address(eurc));
         uint256 cachedEurcAtBefore = pool.lastValidPriceAt(address(eurc));
 
         // Move EURC oracle by +2% (200 bps over 110_000_000 → 112_200_000) — exceeds 150 bps cap.
@@ -449,14 +457,20 @@ contract ArcoraDexPoolTest is Test {
 
         assertGt(amountOut, 0, "swap should proceed using cached price");
         // Cache must remain unchanged — the excessive oracle value was rejected.
-        assertEq(pool.lastValidPrice(address(eurc)),   cachedEurcBefore,   "cache value must not update on excessive deviation");
-        assertEq(pool.lastValidPriceAt(address(eurc)), cachedEurcAtBefore, "cache timestamp must not update on excessive deviation");
+        assertEq(
+            pool.lastValidPrice(address(eurc)), cachedEurcBefore, "cache value must not update on excessive deviation"
+        );
+        assertEq(
+            pool.lastValidPriceAt(address(eurc)),
+            cachedEurcAtBefore,
+            "cache timestamp must not update on excessive deviation"
+        );
     }
 
     function test_priceGuard_acceptsWithinCap() public {
         _seedAllThree();
         // Move EURC by +1% (100 bps), within 150 bps cap.
-        fEurc.setAnswer(int256(111_100_000));   // 1.111 USD
+        fEurc.setAnswer(int256(111_100_000)); // 1.111 USD
 
         vm.prank(owner);
         usdc.mint(bob, 100e6);
@@ -473,7 +487,7 @@ contract ArcoraDexPoolTest is Test {
         vm.warp(block.timestamp + 1 hours + 1);
 
         // Capture cache state BEFORE the swap — the stale fallback should not update it.
-        uint256 cachedUsdcBefore   = pool.lastValidPrice(address(usdc));
+        uint256 cachedUsdcBefore = pool.lastValidPrice(address(usdc));
         uint256 cachedUsdcAtBefore = pool.lastValidPriceAt(address(usdc));
 
         vm.prank(owner);
@@ -484,15 +498,17 @@ contract ArcoraDexPoolTest is Test {
         uint256 amountOut = pool.swap(address(usdc), address(eurc), 100e6, 0, block.timestamp, bob);
         vm.stopPrank();
 
-        assertEq(pool.lastValidPrice(address(usdc)),   cachedUsdcBefore,   "stale fallback should not update cache value");
-        assertEq(pool.lastValidPriceAt(address(usdc)), cachedUsdcAtBefore, "stale fallback should not update cache timestamp");
+        assertEq(pool.lastValidPrice(address(usdc)), cachedUsdcBefore, "stale fallback should not update cache value");
+        assertEq(
+            pool.lastValidPriceAt(address(usdc)), cachedUsdcAtBefore, "stale fallback should not update cache timestamp"
+        );
         assertGt(amountOut, 0);
     }
 
     function test_syncAcceptedPrice_resetsBaseline() public {
         _seedAllThree();
         // Move EURC by +5% (500 bps) — exceeds 150 bps cap; would revert without sync.
-        fEurc.setAnswer(int256(115_500_000));   // 1.155 USD
+        fEurc.setAnswer(int256(115_500_000)); // 1.155 USD
 
         // Owner syncs the new price as accepted baseline.
         vm.prank(owner);
@@ -511,7 +527,7 @@ contract ArcoraDexPoolTest is Test {
 
     function test_syncAcceptedPrice_revertsNotOwner() public {
         vm.prank(alice);
-        vm.expectRevert();   // OZ Ownable
+        vm.expectRevert(); // OZ Ownable
         pool.syncAcceptedPrice(address(usdc));
     }
 
@@ -545,7 +561,7 @@ contract ArcoraDexPoolTest is Test {
         pool.setPauseGuardian(address(0xC0DE));
     }
 
-    function test_pause_byGuardian_succeeds_byThirdParty_reverts() public {
+    function test_pauseUnpause_guardianCanPause_cannotUnpause() public {
         address guardian = address(0xC0DE);
         address attacker = address(0xBAD);
         vm.prank(owner);
@@ -556,12 +572,18 @@ contract ArcoraDexPoolTest is Test {
         pool.pause();
         assertEq(pool.paused(), true);
 
-        // Guardian can unpause
+        // Guardian cannot unpause — only the owner (Timelock) may restart (A1 asymmetry)
         vm.prank(guardian);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, guardian));
+        pool.unpause();
+        assertEq(pool.paused(), true); // still paused
+
+        // Owner can unpause
+        vm.prank(owner);
         pool.unpause();
         assertEq(pool.paused(), false);
 
-        // Random third party cannot
+        // Random third party cannot pause
         vm.prank(attacker);
         vm.expectRevert(abi.encodeWithSelector(IArcoraDexPool.NotAuthorized.selector));
         pool.pause();

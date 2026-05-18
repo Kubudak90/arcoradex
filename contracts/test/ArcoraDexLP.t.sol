@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import { Test } from "forge-std/Test.sol";
-import { ArcoraDexLP }  from "../src/ArcoraDexLP.sol";
-import { IArcoraDexLP } from "../src/interfaces/IArcoraDexLP.sol";
+import {Test} from "forge-std/Test.sol";
+import {ArcoraDexLP} from "../src/ArcoraDexLP.sol";
+import {IArcoraDexLP} from "../src/interfaces/IArcoraDexLP.sol";
 
 /// @dev Minimal stub that satisfies the notifyLPTransfer callback so LP unit
 /// tests don't need a full pool deployment. It records the last call for
@@ -23,15 +23,15 @@ contract MockMinter {
 
     function notifyLPTransfer(address from, address to) external {
         lastFrom = from;
-        lastTo   = to;
+        lastTo = to;
     }
 }
 
 contract ArcoraDexLPTest is Test {
-    MockMinter  minterContract;
+    MockMinter minterContract;
     ArcoraDexLP lp;
     address alice = makeAddr("alice");
-    address bob   = makeAddr("bob");
+    address bob = makeAddr("bob");
 
     function setUp() public {
         minterContract = new MockMinter();
@@ -100,19 +100,19 @@ contract ArcoraDexLPTest is Test {
 
         // Mint (from==0) must NOT call notifyLPTransfer — lastFrom/To stay zero.
         assertEq(minterContract.lastFrom(), address(0));
-        assertEq(minterContract.lastTo(),   address(0));
+        assertEq(minterContract.lastTo(), address(0));
 
         // Normal transfer must invoke notifyLPTransfer.
         vm.prank(alice);
         lp.transfer(bob, 50e18);
         assertEq(minterContract.lastFrom(), alice);
-        assertEq(minterContract.lastTo(),   bob);
+        assertEq(minterContract.lastTo(), bob);
 
         // Burn (to==0) must NOT update lastFrom/To (the hook skips burns).
         vm.prank(address(minterContract));
         lp.burn(bob, 50e18);
         // lastFrom/To remain as set by the transfer above.
         assertEq(minterContract.lastFrom(), alice);
-        assertEq(minterContract.lastTo(),   bob);
+        assertEq(minterContract.lastTo(), bob);
     }
 }

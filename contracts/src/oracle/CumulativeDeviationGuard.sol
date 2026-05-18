@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import { Ownable }       from "@openzeppelin/contracts/access/Ownable.sol";
-import { Ownable2Step }  from "@openzeppelin/contracts/access/Ownable2Step.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 
 /// @title CumulativeDeviationGuard
 /// @notice Tracks a 24 h tumbling-window price deviation per token. Permissionless
@@ -33,13 +33,14 @@ contract CumulativeDeviationGuard is Ownable2Step {
         uint256 startPrice1e18;
         uint256 startTimestamp;
     }
+
     struct Config {
         uint32 maxCumulativeBps;
         uint32 windowSeconds;
     }
 
     mapping(address token => WindowState) public windows;
-    mapping(address token => Config)      public configs;
+    mapping(address token => Config) public configs;
 
     event PriceObserved(address indexed token, uint256 price1e18, uint256 timestamp);
     event CircuitBreakerTripped(address indexed token, uint256 deviationBps, uint256 timestamp);
@@ -50,14 +51,8 @@ contract CumulativeDeviationGuard is Ownable2Step {
 
     constructor(address initialOwner) Ownable(initialOwner) {}
 
-    function setConfig(address token, uint32 maxCumulativeBps_, uint32 windowSeconds_)
-        external
-        onlyOwner
-    {
-        if (
-            maxCumulativeBps_ == 0 || maxCumulativeBps_ > 10_000 ||
-            windowSeconds_   < 60  || windowSeconds_  > 30 days
-        ) {
+    function setConfig(address token, uint32 maxCumulativeBps_, uint32 windowSeconds_) external onlyOwner {
+        if (maxCumulativeBps_ == 0 || maxCumulativeBps_ > 10_000 || windowSeconds_ < 60 || windowSeconds_ > 30 days) {
             revert InvalidConfig(maxCumulativeBps_, windowSeconds_);
         }
         configs[token] = Config(maxCumulativeBps_, windowSeconds_);
@@ -75,6 +70,8 @@ contract CumulativeDeviationGuard is Ownable2Step {
         }
 
         WindowState memory win = windows[token];
+        // Justification [incorrect-equality,timestamp]: win.startTimestamp == 0 is the correct sentinel for an uninitialised window; block.timestamp is used for the tumbling-window boundary, and miner manipulation (~15 s) is negligible vs. the minimum 60-second window.
+        // slither-disable-next-line incorrect-equality,timestamp
         if (win.startTimestamp == 0 || block.timestamp - win.startTimestamp > cfg.windowSeconds) {
             // First observation or window expired — reset.
             windows[token] = WindowState(price1e18, block.timestamp);
@@ -84,9 +81,7 @@ contract CumulativeDeviationGuard is Ownable2Step {
 
         emit PriceObserved(token, price1e18, block.timestamp);
 
-        uint256 diff = price1e18 > win.startPrice1e18
-            ? price1e18 - win.startPrice1e18
-            : win.startPrice1e18 - price1e18;
+        uint256 diff = price1e18 > win.startPrice1e18 ? price1e18 - win.startPrice1e18 : win.startPrice1e18 - price1e18;
         // Integer division truncates, so deviationBps rounds DOWN. Combined with
         // the strict `>` trip test this biases slightly toward under-tripping at
         // the sub-bps margin — acceptable for an advisory (event-only) breaker.
