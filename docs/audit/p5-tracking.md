@@ -71,7 +71,7 @@ nothing in this section is still open.
 
 | Item | Status | Notes |
 |------|--------|-------|
-| **A1 — pause/unpause asymmetry fix** — `unpause()` modifier changed from `onlyOwnerOrGuardian` to `onlyOwner`; guardian retains `pause()` only. | DONE (P4, Part A) | `ArcoraDexPool.sol` line 626. Test updated: guardian-initiated `unpause()` now reverts `NotAuthorized`. |
+| **A1 — pause/unpause asymmetry fix** — `unpause()` modifier changed from `onlyOwnerOrGuardian` to `onlyOwner`; guardian retains `pause()` only. | DONE (P4, Part A) | `ArcoraDexPool.sol` line 626. Test updated: guardian-initiated `unpause()` now reverts `OwnableUnauthorizedAccount` (OZ `Ownable`). |
 | **A2 — Slither hygiene** — benign Slither warnings (rounding, calls-in-loop, reentrancy-benign categories) either refactored away or suppressed with inline justification comments visible to auditors. | DONE (P4, Part A) | All remaining Slither items carry a `// slither-disable-next-line` with a one-line rationale. No unexplained warnings remain. |
 | **A3 — `forge fmt` baseline** — formatting pass across `contracts/src/`, `contracts/test/`, `contracts/script/` committed as a standalone formatting-only commit. | DONE (P4, Part A) | Full test suite passes unchanged. No logic modifications. |
 | **Audit documentation pack** — `docs/audit/audit-scope.md`, `docs/audit/invariants.md`, `docs/audit/threat-model.md`, `docs/audit/known-acceptable-risks.md`, `docs/audit/architecture.md`, `docs/audit/p5-tracking.md` (this file). | DONE (P4, Part B) | All six documents committed on `phase4/audit-rollout`. |

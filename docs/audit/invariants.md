@@ -109,7 +109,7 @@ where `price1e18[t]` is the value returned by `_readUsdPrice1e18View(t)` (fresh 
 - **Single source alive**: `answer` equals the surviving source's `answer` exactly.
 - **Both sources unavailable**: reverts with `AllSourcesUnavailable`.
 
-The aggregator never fabricates a price outside the `[min(pAns, sAns), max(pAns, sAns)]` band of its live sources, and never silently returns a stale or zero answer.
+The aggregator never fabricates a price outside the `[min(pAns, sAns), max(pAns, sAns)]` band of its live sources. `_tryRead` rejects zero or negative answers and incomplete rounds (`answeredInRound < roundId` or zero `roundId`), but performs no age-based staleness check — per-token staleness (maximum answer age) is enforced downstream by the Pool's `_readOracle` using the per-token `maxStaleSeconds` registered in `ArcoraDexRegistry`.
 
 **Rationale.** `_tryRead` rejects zero answers, zero timestamps, and incomplete rounds (`answeredInRound < roundId`). When both sources pass `_tryRead`, the divergence check `absDiff * 10_000 > minAns * maxDivergenceBps` reverts rather than averaging if they disagree beyond the cap. The average `(pAns + sAns) / 2` is an integer floor that is always `<= max(pAns, sAns)` and `>= min(pAns, sAns)`. In single-source mode the surviving answer is returned directly with no averaging. The `maxDivergenceBps` is constrained to `[1, 10_000]` by constructor and `setMaxDivergenceBps`.
 
