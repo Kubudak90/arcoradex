@@ -190,9 +190,9 @@ These three parameters measure distinct quantities and are not redundant. All th
 
 | Parameter | Location | What it measures | Enforcement |
 |-----------|----------|------------------|-------------|
-| `OracleAggregator.maxDivergenceBps` | `OracleAggregator.sol` line 31 | Spread between the **primary and secondary source prices** at read time | Revert `SourcesDiverge` during `latestRoundData()` — happens inside the aggregator before any price reaches the Pool |
+| `OracleAggregator.maxDivergenceBps` | `OracleAggregator.sol` line 30 | Spread between the **primary and secondary source prices** at read time | Revert `SourcesDiverge` during `latestRoundData()` — happens inside the aggregator before any price reaches the Pool |
 | `ArcoraDexRegistry.maxOracleDeviationBps` (per token) | `IArcoraDexRegistry.TokenInfo.maxOracleDeviationBps` | Jump from the **aggregator's output vs. the Pool's cached/last-accepted price** (`lastAcceptedPrice[token]`) per operation | Revert `PriceDeviation` in `_readAndGuardPrice()` (stateful path, used in deposit/withdraw/swap) and in `_readUsdPrice1e18WithGuard()` (view path, used in quote functions); the cache-deviation guard within `_readUsdPrice1e18Mut()` additionally demotes a fresh oracle reading that jumps too far from `lastValidPrice[token]`, preventing cache poisoning within a single block |
-| `CumulativeDeviationGuard.maxCumulativeBps` (per token) | `CumulativeDeviationGuard.sol` `Config.maxCumulativeBps` | **Rolling signed drift** from the tumbling-window anchor price over 24 h | Event-only: emits `CircuitBreakerTripped`; no on-chain auto-pause in P3 |
+| `CumulativeDeviationGuard.maxCumulativeBps` (per token) | `CumulativeDeviationGuard.sol` `Config.maxCumulativeBps` | **Absolute (unsigned) deviation** from the tumbling-window anchor price over the window period — fires equally for an up-move or a down-move of the same magnitude | Event-only: emits `CircuitBreakerTripped`; no on-chain auto-pause in P3 |
 
 **Deployed configuration (post-P3 batch execution):**
 
@@ -317,7 +317,7 @@ ArcoraDexPool.swap()
 
 ### Oracle read path (isolated)
 
-This is the canonical oracle read path exercised by every stateful operation. The view path (`_readUsdPrice1e18View`, used in `totalReservesUSD()` for quote calculations) is structurally identical but does not write `lastValidPrice` or `lastAcceptedPrice`.
+This is the canonical oracle read path exercised by every stateful operation. Two view-only reader wrappers sit above `_readOracle` alongside the stateful ones: `_readUsdPrice1e18WithGuard` (used by `quote()`, `quoteDeposit()`, and `quoteWithdraw()` for per-token price reads) is a stricter view variant that runs the `lastAcceptedPrice` ratchet check against the raw oracle reading and can revert `PriceDeviation` — a scenario where the stateful `_readUsdPrice1e18Mut` path would silently fall back to the cache instead; `_readUsdPrice1e18View` is the cache-aware view reader used only inside `totalReservesUSD()` (NAV computation), which `quoteDeposit()` and `quoteWithdraw()` call for the NAV term, not for the per-token price.
 
 ```
 _readOracle(token)               ← internal view; no state writes
@@ -369,6 +369,32 @@ _readAndGuardPrice(token)        ← internal; additionally writes lastAcceptedP
     ├─ ratchet guard: if lastAcceptedPrice[token] != 0:
     │       |price1e18 - prev| > prev * maxOracleDeviationBps/BPS → revert PriceDeviation
     └─ write lastAcceptedPrice[token] = price1e18
+
+_readUsdPrice1e18WithGuard(token) ← internal view; does NOT write state
+    │                                used by: quote(), quoteDeposit(), quoteWithdraw()
+    │                                (per-token price reads in quote functions)
+    ├─ calls _readOracle(token) → (rawPrice1e18, dec, isFresh)
+    ├─ fresh-branch ratchet (STRICTER than stateful path):
+    │       if isFresh AND lastAcceptedPrice[token] != 0:
+    │         |rawPrice1e18 - prev| > prev * maxOracleDeviationBps/BPS
+    │           → revert PriceDeviation
+    │           (fires even when the mut path would silently fall back to cache)
+    ├─ inline cache-deviation guard (same semantics as _readUsdPrice1e18View):
+    │       if isFresh AND lastValidPrice != 0 AND deviation > cap: isFresh = false
+    ├─ price1e18 = isFresh ? rawPrice1e18 : lastValidPrice[token]
+    ├─ if price1e18 == 0: revert NoValidPrice
+    └─ stale-branch ratchet: if !isFresh AND lastAcceptedPrice[token] != 0:
+            |price1e18 - prev| > prev * maxOracleDeviationBps/BPS → revert PriceDeviation
+
+_readUsdPrice1e18View(token)     ← internal view; does NOT write state
+    │                               used by: totalReservesUSD()
+    │                               (NAV computation — called by quoteDeposit/quoteWithdraw
+    │                                for the NAV term, NOT for the per-token price)
+    ├─ calls _readOracle(token) → (price1e18, dec, isFresh)
+    ├─ cache-deviation guard: if isFresh AND lastValidPrice != 0:
+    │       |price1e18 - cached| > cached * maxOracleDeviationBps/BPS → isFresh = false
+    ├─ if isFresh: return (price1e18, tokenDecimals)
+    └─ else: return lastValidPrice[token] (or revert NoValidPrice if unset)
 ```
 
 ### LP transfer lock propagation
