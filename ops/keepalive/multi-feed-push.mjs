@@ -1,8 +1,9 @@
 // ArcoraDEX multi-feed price keeper (renamed from arcora-v07-feeds).
 //
 // Pulls 6 USD prices from CoinGecko (USDC stays hardcoded at peg = $1.0000)
-// and pushes them into the corresponding MockChainlinkFeed contracts on Arc
-// testnet. Skips pushes when the on-chain answer is already current and
+// and pushes each price to both the primary and the P3 secondary
+// MockChainlinkFeedV2 feed on Arc testnet. Skips pushes when the on-chain
+// answer is already current and
 // rejects fetched prices that fall outside per-feed sanity bands.
 //
 // Designed to run from a systemd timer on the VPS (Type=oneshot every 30 min).
@@ -186,7 +187,7 @@ async function main() {
     for (const f of FEEDS) {
         const usd = prices.get(f.symbol);
         if (typeof usd !== "number") {
-            log(`${f.symbol}: price source returned no value (likely 429 or upstream gap) — skip both feeds`);
+            log(`${f.symbol}: ERROR price source returned no value (likely 429 or upstream gap) — skip both feeds`);
             errored += 2;
             continue;
         }
