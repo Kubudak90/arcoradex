@@ -527,12 +527,134 @@ Developers, auditors, and liquidity providers should treat this section as the a
 
 ## 8. Audit & Roadmap
 
-<!-- section 8 content — Task 5 -->
+### 8.1 P1–P4 Mainnet-Readiness Programme
+
+ArcoraDEX completed a four-phase mainnet-readiness programme before submitting for independent audit. Each phase targeted a distinct subsystem; all four are prerequisites for the Spearbit review.
+
+| Phase | Scope | Key deliverables |
+|-------|-------|-----------------|
+| **P1 — Contract fixes** | Protocol math and economics | Virtual-shares inflation-attack defence (`VIRTUAL_SHARES = 1e6`, `MINIMUM_LIQUIDITY` permanent burn); `MIN_HOLD_SECONDS` JIT sandwich defence; `lastAcceptedPrice` ratchet and `quote()` alignment; per-token `maxStaleSeconds` with last-valid-price cache fallback |
+| **P2 — Governance migration** | Ownership model | Safe 3/5 `TimelockController` with 48-hour delay on all `onlyOwner` calls; separate Pause Guardian Safe (2/3) for instant `pause()`; deployer EOA retired from all control paths; testnet dry-run of the full governance lifecycle |
+| **P3 — Oracle hardening** | Oracle architecture | `OracleAggregator` (two-source with `maxDivergenceBps` divergence guard) deployed for all seven tokens; `CumulativeDeviationGuard` for 24-hour tumbling-window observability; TRYC/BRLC `maxOracleDeviationBps` tightened from 5 000 bps to 200 bps; `_readOracle` rewritten with `try/catch` revert tolerance; redundant double-read refactored to a single `latestRoundData` call |
+| **P4 — Audit readiness** | Pre-audit hygiene | `unpause()` modifier tightened to `onlyOwner` (pause/unpause asymmetry); Slither warning remediation (inline suppression with rationale where refactor was not safe); `forge fmt` baseline pass; audit documentation pack (`audit-scope.md`, `invariants.md`, `threat-model.md`, `known-acceptable-risks.md`, `architecture.md`, `p5-tracking.md`) |
+
+### 8.2 Spearbit Private Security Review
+
+A Spearbit private security review is underway against the `audit/spearbit-p4` baseline commit (tag created at merge of `phase4/audit-rollout` into `main`). The in-scope surface is 1 230 lines across five contracts: `ArcoraDexPool`, `ArcoraDexLP`, `ArcoraDexRegistry`, `OracleAggregator`, and `CumulativeDeviationGuard`. The review scope, toolchain settings, and test-coverage summary are documented in `docs/audit/audit-scope.md`.
+
+The audit review covers all P1–P4 merged fixes. All Critical and High findings from the internal review were addressed before the `audit/spearbit-p4` freeze. The Spearbit report is private pending the protocol team's decision on publication.
+
+### 8.3 Forward Look: P5 Mainnet Deployment and Deferred Work
+
+**P5 — Mainnet Deployment & Operations** is the next phase, conditional on P4 sign-off (all Critical/High Spearbit findings remediated and the final report received). P5 deliverables include: a step-by-step mainnet deployment runbook (Registry → Pool → token listings → oracle wiring → governance ownership transfer → liquidity bootstrap → unpause); an off-chain monitoring stack (feed freshness watcher, reserves-imbalance alert, multisig-pending-tx Slack webhook, deviation-breach alert, NAV daily snapshot); an incident-response playbook with a live drill across all Pause Guardian signers; and an Immunefi bug-bounty launch in the first week post-mainnet covering Pool, Registry, `OracleAggregator`, and governance contracts.
+
+Deferred work tracked in `docs/audit/p5-tracking.md`:
+
+| Register ID | Item | Why deferred |
+|-------------|------|--------------|
+| D1 | On-chain auto-pause wired to `CumulativeDeviationGuard` | No operational experience with false-positive trip rate; requires D2 first to avoid griefing |
+| D2 | Keeper-only access control on `CumulativeDeviationGuard.record` | No functional benefit while `record` has no on-chain action; must precede D1 |
+| D3 | Rolling (vs tumbling) deviation window in `CumulativeDeviationGuard` | Tumbling window is the deliberate P3 MVP; rolling window requires circular buffer or two-checkpoint scheme (audit surface, higher gas) |
+| D6 | Fee-collector multisig separated from governance ownership | Dedicated withdrawal module adds governance audit surface pre-Spearbit review |
+| D9 | Pyth / independent secondary mainnet source for TRYC, BRLC | No Chainlink or Pyth mainnet coverage for TRY/BRL confirmed at P3 time; real independence deferred to P5 once availability is confirmed |
+| D10, D11, D12 | Off-chain monitoring script; secondary-feed writer migration; full alerting stack | Operational tooling delivered in parallel with the mainnet deployment runbook |
+
+The complete register (22 items, each with traceability to its source document) is in `docs/audit/p5-tracking.md`.
 
 ## 9. Parameters & Addresses
 
-<!-- section 9 content — Task 5 -->
+### 9.1 Key Parameters
+
+All values are hard-coded `constant` or enforced at deployment and verified on-chain. Sources: `contracts/src/ArcoraDexPool.sol` (pool constants); `docs/rollouts/2026-05-14-phase3-oracle.md` (per-token oracle configuration).
+
+| Name | Value | Source | Meaning |
+|------|-------|--------|---------|
+| `VIRTUAL_SHARES` | `1_000_000` (1e6) | `ArcoraDexPool.sol` line 37 (`internal constant`) | Virtual-share offset in LP mint/redeem formula; prevents round-down-to-zero on small follow-on deposits and inflation-attack LP manipulation |
+| `VIRTUAL_ASSETS` | `1` | `ArcoraDexPool.sol` line 38 (`internal constant`) | Virtual-asset offset (symmetric with `VIRTUAL_SHARES`); denominator floor in LP math |
+| `MINIMUM_LIQUIDITY` | `1000` (USD-units, 18 dec) | `ArcoraDexPool.sol` line 24 (`public constant`) | Minimum first-deposit size; also the number of LP shares permanently burned to `DEAD_ADDRESS` on the first deposit to set a non-zero LP floor |
+| `MIN_HOLD_SECONDS` | `3600` (1 hour) | `ArcoraDexPool.sol` line 43 (`public constant`; `1 hours`) | Minimum time between a deposit mint and a withdrawal by the same address; enforced via `lastMintAt[msg.sender]`; propagated to LP token recipients via `notifyLPTransfer` |
+| `MAX_SWAP_FEE_BPS` | `100` (1%) | `ArcoraDexPool.sol` line 22 (`uint16 public constant`) | Hard cap on `swapFeeBps`; enforced in `setSwapFeeBps` |
+| `MAX_PROTOCOL_FEE_SHARE_BPS` | `2500` (25%) | `ArcoraDexPool.sol` line 23 (`uint16 public constant`) | Hard cap on `protocolFeeShareBps`; enforced in `setProtocolFeeShareBps` |
+| Timelock `minDelay` | `172800 s` (48 hours) | `TimelockController` constructor; verified via `getMinDelay()` on-chain | Mandatory delay between governance proposal scheduling and execution for all `onlyOwner` pool and registry calls |
+
+**Per-token oracle deviation and divergence caps** (post-P3 Timelock batch; source: `docs/rollouts/2026-05-14-phase3-oracle.md`):
+
+| Token | Tier | `OracleAggregator` `maxDivergenceBps` | Registry `maxOracleDeviationBps` | Guard `maxCumulativeBps` | Guard `windowSeconds` |
+|-------|------|--------------------------------------|----------------------------------|--------------------------|----------------------|
+| USDC  | USD-pegged | 50 | 200 | 200 | 86 400 |
+| USDT  | USD-pegged | 50 | 200 | 200 | 86 400 |
+| PYUSD | USD-pegged | 50 | 200 | 200 | 86 400 |
+| DAI   | USD-pegged | 50 | 200 | 200 | 86 400 |
+| EURC  | EUR (soft-FX) | 100 | 200 | 300 | 86 400 |
+| TRYC  | Soft-FX (TRY) | 200 | 200 | 500 | 86 400 |
+| BRLC  | Soft-FX (BRL) | 200 | 200 | 500 | 86 400 |
+
+USD-pegged stables carry the tightest divergence caps (50 bps) reflecting the low expected spread between two independent USD price feeds. EURC carries a 100 bps divergence cap and a 300 bps cumulative guard cap. TRYC and BRLC carry a 200 bps divergence cap and a 500 bps cumulative guard cap to accommodate higher natural FX volatility. All seven tokens share `maxOracleDeviationBps = 200 bps`; TRYC and BRLC were reduced from 5 000 bps to 200 bps by operations 8–9 of the P3 Timelock batch.
+
+### 9.2 Arc Testnet Deployment Addresses
+
+> **Note:** All addresses below are deployments on the **Arc testnet (chainId 5042002)**. They are not mainnet addresses. Mainnet addresses are not yet assigned and will be published at the P5 mainnet deployment.
+
+**Core protocol contracts** (P2 redeploy, 2026-05-14):
+
+| Contract | Address |
+|----------|---------|
+| `ArcoraDexPool` V3 | `0x1ce1ef94e7ebe70727bd69003d61a3f0c9a331bc` |
+| `ArcoraDexRegistry` V3 | `0x9914436e5245bf3c0d4d4338e0a8b8f5ab5505ab` |
+| `ArcoraDexLP` V3 | `0x17B47173C457069E53B3B75Ef42773041B79523e` |
+
+**Governance contracts** (P2, 2026-05-14):
+
+| Contract | Address | Config |
+|----------|---------|--------|
+| `TimelockController` | `0x36444f653E7746d69aD5d91dA920f5Cd2F9C6E83` | `minDelay = 172800 s` |
+| Governance Safe (3/5) | `0x715f669D79Cc72d6685F8724c0B86f7B53d7e624` | Owns Pool + Registry (via Timelock); directly owns 7 feeds + 7 aggregators + guard |
+| Pause Guardian Safe (2/3) | `0x39500e45935f36CfcEb826590aaE97226Ac6640D` | Holds `pool.pauseGuardian`; can call `pause()` without Timelock delay |
+
+**`OracleAggregator` contracts** (P3, deployed 2026-05-17):
+
+| Token | `OracleAggregator` Address |
+|-------|---------------------------|
+| USDC  | `0x6c6519cB0C66c2269505833382f23D4e8f915480` |
+| USDT  | `0x3e58dd7fD2729A27961Ffb11d37BFf42874cAa34` |
+| PYUSD | `0x78cB5F03b420F0CD2E8adcb141069F31a38E07E8` |
+| DAI   | `0x3e542b4d2EdBFC965028eB85140BcFEa6868A37E` |
+| EURC  | `0x1357cf421A8c3b732A882e4812AFba6209EBEBbc` |
+| TRYC  | `0xFE3FE7F2b2693D676E4831283dd1B81665AC9faA` |
+| BRLC  | `0xF5021349E0D6e2ACB00bEb105D7793202ac3Aa46` |
+
+**`CumulativeDeviationGuard`** (P3, deployed 2026-05-17):
+
+| Contract | Address |
+|----------|---------|
+| `CumulativeDeviationGuard` | `0x035447f8d97A23fFfC32aa8bFb8ffDbC7B94E608` |
+
+The P3 Timelock batch (`batchId 0x31218725d7f61c128825c982ecd962183136a0b755381d128052a09c84c23587`) — which points the Registry at the seven `OracleAggregator` addresses and tightens the TRYC/BRLC deviation caps — is pending execution at approximately 2026-05-20 after the 48-hour delay.
 
 ## 10. References
 
-<!-- section 10 content — Task 5 -->
+### Internal — Repository Documents
+
+**Mainnet-readiness programme:**
+- `docs/superpowers/specs/2026-05-13-mainnet-readiness-roadmap.md` — P1–P5 phase structure, approval gates, and out-of-scope boundaries
+
+**Audit documentation pack (`docs/audit/`):**
+- `docs/audit/audit-scope.md` — in-scope contracts, LoC, toolchain, baseline commit tag (`audit/spearbit-p4`), test-coverage summary
+- `docs/audit/invariants.md` — formal invariants the protocol guarantees (NAV monotonicity, LP supply floor, reserves integrity, `protocolFeesAccrued ≤ reserves`)
+- `docs/audit/threat-model.md` — consolidated finding register (P1–P4 internal review findings plus three economic-attack vectors)
+- `docs/audit/known-acceptable-risks.md` — R1–R8 residual risks accepted for v1 with compensating controls and P5 resolution paths
+- `docs/audit/architecture.md` — high-level architecture reference for auditors
+- `docs/audit/p5-tracking.md` — deferred-work register (22 items, all traceable to source documents)
+
+**Rollout records:**
+- `docs/rollouts/2026-05-14-phase2-governance.md` — P2 governance migration: V3 contract addresses, governance addresses, ownership matrix, testnet dry-run results
+- `docs/rollouts/2026-05-14-phase3-oracle.md` — P3 oracle hardening: `OracleAggregator` and secondary-feed addresses, per-token configuration, Timelock batch details
+
+### External Standards and Upstream Dependencies
+
+- **Chainlink `AggregatorV3Interface`** — `OracleAggregator` and `ArcoraDexRegistry` consume the `latestRoundData()` / `decimals()` interface from this standard (mirrored in `contracts/src/interfaces/IChainlinkAggregator.sol`). Reference: [Chainlink Data Feeds — latestRoundData](https://docs.chain.link/data-feeds/api-reference)
+- **OpenZeppelin `Ownable2Step`** — base class for `ArcoraDexPool` and `ArcoraDexRegistry`; two-step ownership transfer prevents accidental ownership loss. Reference: [OpenZeppelin Contracts v5 — `Ownable2Step`](https://docs.openzeppelin.com/contracts/5.x/api/access#Ownable2Step)
+- **OpenZeppelin `TimelockController`** — governs all `onlyOwner` calls on Pool and Registry with a 48-hour delay; upstream-audited, consumed unmodified. Reference: [OpenZeppelin Contracts v5 — `TimelockController`](https://docs.openzeppelin.com/contracts/5.x/api/governance#TimelockController)
+- **OpenZeppelin `ERC20`** — base class for `ArcoraDexLP`; `_update` override is the only modification (min-hold lock propagation). Reference: [OpenZeppelin Contracts v5 — `ERC20`](https://docs.openzeppelin.com/contracts/5.x/api/token/erc20)
+- **OpenZeppelin `ReentrancyGuard`** — applied to all mutating entry points on `ArcoraDexPool`; upstream-audited, consumed unmodified. Reference: [OpenZeppelin Contracts v5 — `ReentrancyGuard`](https://docs.openzeppelin.com/contracts/5.x/api/utils#ReentrancyGuard)
+- **Safe v1.4.1** — governance infrastructure for the Governance Safe (3/5) and Pause Guardian Safe (2/3); upstream-audited, consumed as a library dependency (`contracts/lib/safe-contracts/`). Reference: [Safe Smart Account v1.4.1](https://github.com/safe-global/safe-smart-account/releases/tag/v1.4.1)
