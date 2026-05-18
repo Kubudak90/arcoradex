@@ -1,0 +1,12 @@
+{
+  "name": "arcoradex-litepaper",
+  "private": true,
+  "type": "module",
+  "description": "Build script for the ArcoraDEX litepaper HTML rendering.",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "dependencies": {
+    "marked": "^14.1.0"
+  }
+}
