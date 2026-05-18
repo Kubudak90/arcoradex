@@ -540,7 +540,7 @@ ArcoraDEX completed a four-phase mainnet-readiness programme before submitting f
 
 ### 8.2 Spearbit Private Security Review
 
-A Spearbit private security review is underway against the `audit/spearbit-p4` baseline commit (tag created at merge of `phase4/audit-rollout` into `main`). The in-scope surface is 1 230 lines across five contracts: `ArcoraDexPool`, `ArcoraDexLP`, `ArcoraDexRegistry`, `OracleAggregator`, and `CumulativeDeviationGuard`. The review scope, toolchain settings, and test-coverage summary are documented in `docs/audit/audit-scope.md`.
+A Spearbit private security review is underway against the `audit/spearbit-p4` baseline commit (tag created at merge of `phase4/audit-rollout` into `main`). The in-scope surface is 1 024 lines across five contracts (`ArcoraDexPool`, `ArcoraDexLP`, `ArcoraDexRegistry`, `OracleAggregator`, and `CumulativeDeviationGuard`) plus 206 lines of interface definitions, totalling 1 230 lines (per `docs/audit/audit-scope.md`). The review scope, toolchain settings, and test-coverage summary are documented in `docs/audit/audit-scope.md`.
 
 The audit review covers all P1–P4 merged fixes. All Critical and High findings from the internal review were addressed before the `audit/spearbit-p4` freeze. The Spearbit report is private pending the protocol team's decision on publication.
 
