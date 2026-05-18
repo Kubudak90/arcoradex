@@ -25,6 +25,7 @@ contract MockChainlinkFeedV2 is IChainlinkAggregator, Ownable2Step {
         address initialWriter,
         address initialOwner
     ) Ownable(initialOwner) {
+        if (initialWriter == address(0)) revert NotWriter();
         decimalsValue   = _decimals;
         latestAnswer    = initialAnswer;
         latestUpdatedAt = block.timestamp;
@@ -34,6 +35,7 @@ contract MockChainlinkFeedV2 is IChainlinkAggregator, Ownable2Step {
     }
 
     function setWriter(address newWriter) external onlyOwner {
+        if (newWriter == address(0)) revert NotWriter();
         emit WriterUpdated(writer, newWriter);
         writer = newWriter;
     }

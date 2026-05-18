@@ -7,7 +7,7 @@ import { IChainlinkAggregator } from "../interfaces/IChainlinkAggregator.sol";
 /// @notice Testnet-only Chainlink-shaped price feed. Owner can update the price.
 /// @dev Use this on Arc testnet until a native EUR/USD feed exists.
 contract MockChainlinkFeed is IChainlinkAggregator {
-    address public owner;
+    address public immutable owner;
     int256  public latestAnswer;
     uint256 public latestUpdatedAt;
     uint8   public immutable decimalsValue;

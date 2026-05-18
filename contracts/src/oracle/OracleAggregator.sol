@@ -18,8 +18,14 @@ import { IChainlinkAggregator } from "../interfaces/IChainlinkAggregator.sol";
 /// CumulativeDeviationGuard events) to detect when the aggregator has entered
 /// single-source mode and the divergence check is inactive.
 contract OracleAggregator is IChainlinkAggregator, Ownable2Step {
+    // Justification [naming-convention]: PRIMARY is an immutable oracle source; UPPER_CASE is the project convention for immutables, signalling that these oracle sources and their shared decimal precision are fixed at construction.
+    // slither-disable-next-line naming-convention
     IChainlinkAggregator public immutable PRIMARY;
+    // Justification [naming-convention]: SECONDARY is an immutable oracle source; UPPER_CASE per project immutable convention.
+    // slither-disable-next-line naming-convention
     IChainlinkAggregator public immutable SECONDARY;
+    // Justification [naming-convention]: DECIMALS is an immutable precision value derived at construction; UPPER_CASE per project immutable convention.
+    // slither-disable-next-line naming-convention
     uint8                public immutable DECIMALS;     // M4: removed trailing underscore
     uint16               public maxDivergenceBps;
 
@@ -101,6 +107,8 @@ contract OracleAggregator is IChainlinkAggregator, Ownable2Step {
         view
         returns (bool ok, int256 answer, uint256 updatedAt)
     {
+        // Justification [unused-return]: latestRoundData's 5-tuple is fully destructured; only startedAt (3rd field) is discarded as per Chainlink integration best practice — it carries no useful staleness information.
+        // slither-disable-next-line unused-return
         try src.latestRoundData() returns (uint80 roundId, int256 a, uint256, uint256 u, uint80 answeredInRound) {
             if (a > 0 && u > 0 && roundId != 0 && answeredInRound >= roundId) {
                 return (true, a, u);

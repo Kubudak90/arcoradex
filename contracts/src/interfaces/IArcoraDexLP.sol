@@ -9,6 +9,8 @@ interface IArcoraDexLP is IERC20 {
 
     event MinterSet(address indexed minter);
 
+    // Justification [naming-convention]: MINTER() is the getter for an immutable; UPPER_CASE matches the implementing contract's immutable naming convention and signals to callers that this value never changes.
+    // slither-disable-next-line naming-convention
     function MINTER() external view returns (address);
     function mint(address to, uint256 amount) external;
     function burn(address from, uint256 amount) external;

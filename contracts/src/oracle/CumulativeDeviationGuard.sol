@@ -75,6 +75,8 @@ contract CumulativeDeviationGuard is Ownable2Step {
         }
 
         WindowState memory win = windows[token];
+        // Justification [incorrect-equality,timestamp]: win.startTimestamp == 0 is the correct sentinel for an uninitialised window; block.timestamp is used for the tumbling-window boundary, and miner manipulation (~15 s) is negligible vs. the minimum 60-second window.
+        // slither-disable-next-line incorrect-equality,timestamp
         if (win.startTimestamp == 0 || block.timestamp - win.startTimestamp > cfg.windowSeconds) {
             // First observation or window expired — reset.
             windows[token] = WindowState(price1e18, block.timestamp);
