@@ -367,7 +367,9 @@ Changing the `pauseGuardian` address (`setPauseGuardian`) is `onlyOwner` and the
 
 The seven primary `MockChainlinkFeedV2` instances, the seven `OracleAggregator` contracts, the seven secondary feeds, and the `CumulativeDeviationGuard` are all owned directly by the Governance Safe — **without** an intermediate Timelock.
 
-This deliberate exception enables a compromised oracle keeper EOA to be rotated out in a single Safe multisig transaction, without the 48-hour delay that governs all Pool and Registry actions. The accepted trade-off is described in R3 (§7): a compromised 3/5 Governance Safe can rotate feed writers instantly. The compensating bound is that `Registry.setOracle` — which governs whether the Pool actually uses any given oracle address — remains Timelock-gated with a 48-hour delay.
+This deliberate exception enables a compromised oracle keeper EOA to be rotated out in a single Safe multisig transaction, without the 48-hour delay that governs all Pool and Registry actions. The accepted trade-off is described in R4 (§7): a compromised 3/5 Governance Safe can rotate feed writers instantly. The compensating bound is that `Registry.setOracle` — which governs whether the Pool actually uses any given oracle address — remains Timelock-gated with a 48-hour delay.
+
+> **Current testnet deployment note.** On the Arc testnet deployment as of this writing, the secondary-feed `writer` migration is a pending downstream operational task (see `docs/rollouts/2026-05-14-phase3-oracle.md`, "Downstream tasks"). The seven secondary feeds were deployed with the deployer EOA as their initial writer; the Governance Safe has not yet called `setWriter(keeperEOA)` on each feed. Until those calls are made, the secondary feeds hold their deploy-time prices and are not being driven by the keeper. As a result, the `OracleAggregator` instances on the current testnet are not yet operating on two independently-updated sources — the two-source divergence cross-check is architecturally present but not yet exercised on live keeper data. This is a known pending operational step, not an architectural change; the design is two-source and the migration will complete before any mainnet deployment.
 
 ### 6.4 Parameter-change process
 
@@ -450,7 +452,17 @@ Developers, auditors, and liquidity providers should treat this section as the a
 
 ---
 
-### R3 — Governance-trust assumptions (3/5 Safe compromise, bounded by 48-hour Timelock)
+### R3 — Centralized initial liquidity
+
+**Risk.** At mainnet launch the founding LP(s) will hold most or all of the `ADEX-LP` supply. A single large LP exiting rapidly could drain the pool, leaving smaller LPs with a thin market and materially higher slippage on withdrawal. This is a centralization risk at the liquidity layer, not a smart-contract vulnerability.
+
+**Why accepted for v1.** A trust-minimized bootstrapping mechanism — such as a bonding curve or a vesting lock on founding LP tokens — would add non-trivial audit surface before the initial deployment. The standard industry approach is to start with committed founding LPs under off-chain commercial terms and migrate toward a more decentralized LP incentive model as TVL grows.
+
+**Compensating controls.** Founding LPs are subject to the same `MIN_HOLD_SECONDS = 1 hours` lock as all other depositors — a mass exit cannot be atomic. The LP transfer hook (`ArcoraDexLP._update` → `ArcoraDexPool.notifyLPTransfer`) propagates the lock to any LP token recipient, preventing a rapid exit via an intermediary fresh wallet. The P5 mainnet-operations plan calls for founding LP commitments, a TVL-floor agreement, and a decentralized LP incentive program to dilute initial concentration over time.
+
+---
+
+### R4 — Governance-trust assumptions (3/5 Safe compromise, bounded by 48-hour Timelock)
 
 **Risk.** The Governance Safe is a 3/5 Safe multisig. An attacker who compromises three of the five signing keys can schedule any `onlyOwner` action on `ArcoraDexPool` and `ArcoraDexRegistry`: rotating oracles to attacker-controlled feeds, changing deviation caps, withdrawing protocol fees, or transferring ownership. Additionally, the Governance Safe holds direct (non-Timelock) ownership of the seven oracle feeds and seven `OracleAggregator` contracts, so a compromised Governance Safe can rotate feed writers instantly.
 
@@ -460,7 +472,7 @@ Developers, auditors, and liquidity providers should treat this section as the a
 
 ---
 
-### R4 — Permissionless `CumulativeDeviationGuard.record`
+### R5 — Permissionless `CumulativeDeviationGuard.record`
 
 **Risk.** `CumulativeDeviationGuard.record(address token, uint256 price1e18)` is unauthenticated — any caller may invoke it with any price value. An adversary can therefore: anchor the tumbling window at a favourable or unfavourable price; spam calls to force window resets; or emit spurious `CircuitBreakerTripped` events to cause alert fatigue in the off-chain monitor. If the off-chain monitor were wired to auto-pause on trip events, a griever could pause the pool at will.
 
@@ -470,7 +482,7 @@ Developers, auditors, and liquidity providers should treat this section as the a
 
 ---
 
-### R5 — Tumbling (not rolling) deviation window
+### R6 — Tumbling (not rolling) deviation window
 
 **Risk.** `CumulativeDeviationGuard` measures deviation against the first observation of each 24-hour tumbling window. A slow, sustained price drift that stays just below `maxCumulativeBps` within each window is not detected across window boundaries. A compromised keeper could push `maxCumulativeBps − 1` bps of drift per window, indefinitely, without ever tripping the circuit breaker.
 
@@ -480,7 +492,7 @@ Developers, auditors, and liquidity providers should treat this section as the a
 
 ---
 
-### R6 — Fee-collector role not separated from governance ownership
+### R7 — Fee-collector role not separated from governance ownership
 
 **Risk.** `withdrawProtocolFees(address token, uint256 amount, address to)` in `ArcoraDexPool` is `onlyOwner`, and the owner is the `TimelockController`. The protocol-fee recipient role is not separated from governance ownership. A malicious governance majority could pass a proposal to redirect accrued protocol fees to an attacker-controlled address.
 
@@ -490,7 +502,7 @@ Developers, auditors, and liquidity providers should treat this section as the a
 
 ---
 
-### R7 — Pre-bug-bounty exposure window
+### R8 — Pre-bug-bounty exposure window
 
 **Risk.** ArcoraDEX v1 will not have an active Immunefi bug-bounty program at the time of mainnet launch. Researchers who discover post-audit vulnerabilities before the bounty program launches have no formal, incentivized channel for responsible disclosure. This creates a window between mainnet deployment and Immunefi program launch during which a researcher might choose exploit-over-disclose.
 
@@ -506,11 +518,12 @@ Developers, auditors, and liquidity providers should treat this section as the a
 |----|---------------|---------------------|---------------|
 | R1 | Oracle dependence | 4-layer oracle defence; 200 bps per-op ratchet | Independent primary/secondary sources on mainnet |
 | R2 | Liquidity-thin rounding | `VIRTUAL_SHARES = 1e6`; min-liquidity bootstrap | No change needed |
-| R3 | Governance multisig compromise | 48 h Timelock; Pause Guardian instant freeze | Hardware wallets; mainnet signer onboarding |
-| R4 | Permissionless `record` | Events-only; monitor re-validates before paging | Keeper allowlist when auto-pause is wired |
-| R5 | Tumbling window blind spot | 200 bps per-op cap; two-source divergence check | Rolling-window or multi-window detector |
-| R6 | Fee-collector not separated | 48 h Timelock on `withdrawProtocolFees`; cancel path | Dedicated fee-collector multisig module |
-| R7 | Pre-bounty exposure window | Audit precedes launch; informal disclosure channel | Immunefi launch first week post-mainnet |
+| R3 | Centralized initial liquidity | 1 h min-hold lock; LP transfer hook; founding LP commitments | Decentralized LP incentive program |
+| R4 | Governance multisig compromise | 48 h Timelock; Pause Guardian instant freeze | Hardware wallets; mainnet signer onboarding |
+| R5 | Permissionless `record` | Events-only; monitor re-validates before paging | Keeper allowlist when auto-pause is wired |
+| R6 | Tumbling window blind spot | 200 bps per-op cap; two-source divergence check | Rolling-window or multi-window detector |
+| R7 | Fee-collector not separated | 48 h Timelock on `withdrawProtocolFees`; cancel path | Dedicated fee-collector multisig module |
+| R8 | Pre-bounty exposure window | Audit precedes launch; informal disclosure channel | Immunefi launch first week post-mainnet |
 
 ## 8. Audit & Roadmap
 
