@@ -54,7 +54,7 @@ NAV = Σ ( reserves[token] × price1e18[token] / 10^decimals[token] )
 
 `reserves[token]` is an explicit storage mapping in `ArcoraDexPool` — it is updated on every `deposit`, `withdraw`, and `swap` call. The pool does **not** read `token.balanceOf(address(this))` for accounting. This architectural choice makes the pool immune to donation-inflation attacks: tokens sent to the pool address outside of a `deposit` call land in the contract's token balance but do not affect `reserves[]`, so NAV is unchanged and no attacker can inflate it by donating tokens.
 
-LP share minting and redemption use virtual offsets (`VIRTUAL_SHARES = 1e6`, `VIRTUAL_ASSETS = 1`) in an ERC4626-style formula. These offsets guarantee that any non-zero deposit mints at least one LP share (preventing round-down-to-zero on small follow-up deposits) and provide belt-and-suspenders defence against inflation attacks on the LP math, independently of the `reserves[]` structural protection above.
+LP share minting and redemption use virtual offsets (`VIRTUAL_SHARES = 1e6`, `VIRTUAL_ASSETS = 1` — both declared `internal constant` in `ArcoraDexPool`, fixed at compile time and not exposed in the ABI) in an ERC4626-style formula. These offsets guarantee that any non-zero deposit mints at least one LP share (preventing round-down-to-zero on small follow-up deposits) and provide belt-and-suspenders defence against inflation attacks on the LP math, independently of the `reserves[]` structural protection above.
 
 ### Registry configuration
 
@@ -84,7 +84,7 @@ The trade-off is oracle dependence: if an oracle is compromised or goes stale, t
 
 Function: `deposit(address token, uint256 amount, uint256 minLpOut, uint256 deadline)`
 
-A depositor transfers `amount` of `token` to the pool. The pool prices the deposit in USD using `_readAndGuardPrice(token)` (the oracle price, after passing the deviation ratchet check — see §4). The USD value is:
+A depositor transfers `amount` of `token` to the pool. The pool prices the deposit in USD using `_readAndGuardPrice(token)` (the guarded oracle price: a live oracle reading resolved through a cache-fallback / deviation guard and then a per-operation ratchet against `lastAcceptedPrice` — the full mechanism is described in §4). The USD value is:
 
 ```
 usdIn = amount × price1e18[token] / 10^decimals[token]
@@ -97,7 +97,7 @@ LP shares minted are proportional to the NAV increase the deposit represents. Th
 lpMinted = usdIn × (totalSupply + VIRTUAL_SHARES) / (NAV + VIRTUAL_ASSETS)
 ```
 
-where `VIRTUAL_SHARES = 1e6` and `VIRTUAL_ASSETS = 1`.
+where `VIRTUAL_SHARES = 1e6` and `VIRTUAL_ASSETS = 1` (both `internal constant` in `ArcoraDexPool` — compile-time fixed, not ABI-exposed).
 
 **First deposit.** When `LP.totalSupply() == 0`, the formula simplifies to `usdIn × VIRTUAL_SHARES / VIRTUAL_ASSETS`. The first deposit must exceed `MINIMUM_LIQUIDITY` (1000 USD-units); on success, `MINIMUM_LIQUIDITY` LP shares are permanently burned to `DEAD_ADDRESS` (`0x000…dead`) to prevent the pool from returning to a zero-supply state (see §5 for the inflation-attack defence rationale).
 
