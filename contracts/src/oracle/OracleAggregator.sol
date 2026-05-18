@@ -18,13 +18,13 @@ import { IChainlinkAggregator } from "../interfaces/IChainlinkAggregator.sol";
 /// CumulativeDeviationGuard events) to detect when the aggregator has entered
 /// single-source mode and the divergence check is inactive.
 contract OracleAggregator is IChainlinkAggregator, Ownable2Step {
-    // Justification [naming-convention]: PRIMARY is an immutable oracle source; UPPER_CASE is the project convention for immutables, signalling that these oracle sources and their shared decimal precision are fixed at construction.
+    // Justification [naming-convention]: UPPER_CASE marks an immutable, per project convention.
     // slither-disable-next-line naming-convention
     IChainlinkAggregator public immutable PRIMARY;
-    // Justification [naming-convention]: SECONDARY is an immutable oracle source; UPPER_CASE per project immutable convention.
+    // Justification [naming-convention]: UPPER_CASE marks an immutable, per project convention.
     // slither-disable-next-line naming-convention
     IChainlinkAggregator public immutable SECONDARY;
-    // Justification [naming-convention]: DECIMALS is an immutable precision value derived at construction; UPPER_CASE per project immutable convention.
+    // Justification [naming-convention]: UPPER_CASE marks an immutable, per project convention.
     // slither-disable-next-line naming-convention
     uint8                public immutable DECIMALS;     // M4: removed trailing underscore
     uint16               public maxDivergenceBps;

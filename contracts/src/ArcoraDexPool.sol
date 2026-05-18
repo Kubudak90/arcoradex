@@ -43,10 +43,10 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
     uint256 public constant MIN_HOLD_SECONDS = 1 hours;
 
     // ── Immutables ───────────────────────────────────────────────────
-    // Justification: REGISTRY is an immutable contract reference; UPPER_CASE is the project convention for immutables, matching the interface declaration and signalling to readers that this address never changes post-construction.
+    // Justification [naming-convention]: REGISTRY is an immutable contract reference; UPPER_CASE marks an immutable, per project convention.
     // slither-disable-next-line naming-convention
     IArcoraDexRegistry public immutable override REGISTRY;
-    // Justification: LP is an immutable contract reference; UPPER_CASE signals immutability per project convention.
+    // Justification [naming-convention]: LP is an immutable contract reference; UPPER_CASE marks an immutable, per project convention.
     // slither-disable-next-line naming-convention
     IArcoraDexLP       public immutable override LP;
 
@@ -160,8 +160,10 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
             // Justification [calls-loop]: REGISTRY.tokenInfo called here when _readUsdPrice1e18Mut runs inside the NAV loop; the permissioned, small-count token set bounds the gas and there is no reentrancy risk from a view-only registry call.
             // slither-disable-next-line calls-loop
             IArcoraDexRegistry.TokenInfo memory info = REGISTRY.tokenInfo(token);
+            // Justification [timestamp]: see above — diff arithmetic on oracle-derived values that flow from block.timestamp staleness check.
             // slither-disable-next-line timestamp
             uint256 diff = price1e18 > cached ? price1e18 - cached : cached - price1e18;
+            // Justification [timestamp]: see above — deviation guard comparison on oracle-derived values.
             // slither-disable-next-line timestamp
             if (diff * BPS > cached * uint256(info.maxOracleDeviationBps)) {
                 isFresh = false;
@@ -198,8 +200,10 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
             // Justification [calls-loop]: REGISTRY.tokenInfo is called here when this view function is invoked inside the NAV loop; the token set is small and owner-permissioned so gas cost is bounded and no reentrancy risk exists from a view-only call.
             // slither-disable-next-line calls-loop
             IArcoraDexRegistry.TokenInfo memory info = REGISTRY.tokenInfo(token);
+            // Justification [timestamp]: see above — diff arithmetic on oracle-derived values that flow from block.timestamp staleness check.
             // slither-disable-next-line timestamp
             uint256 diff = price1e18 > cached ? price1e18 - cached : cached - price1e18;
+            // Justification [timestamp]: see above — deviation guard comparison on oracle-derived values.
             // slither-disable-next-line timestamp
             if (diff * BPS > cached * uint256(info.maxOracleDeviationBps)) {
                 isFresh = false;
@@ -262,8 +266,10 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         // Justification [timestamp]: isFresh is derived from block.timestamp oracle staleness check; miner manipulation window (~15 s) is negligible vs. the configured maxStaleSeconds and does not affect the deviation ratchet logic.
         // slither-disable-next-line timestamp
         if (isFresh && prev != 0) {
+            // Justification [timestamp]: see above — diff arithmetic on oracle-derived values flowing from block.timestamp staleness check.
             // slither-disable-next-line timestamp
             uint256 diff = rawPrice1e18 > prev ? rawPrice1e18 - prev : prev - rawPrice1e18;
+            // Justification [timestamp]: see above — deviation ratchet comparison on oracle-derived values.
             // slither-disable-next-line timestamp
             if (diff * BPS > prev * uint256(info.maxOracleDeviationBps)) {
                 revert PriceDeviation(token, rawPrice1e18, prev, info.maxOracleDeviationBps);
@@ -279,8 +285,10 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         // to stale so the cached price is used as the canonical return value.
         if (isFresh) {
             if (cached != 0) {
+                // Justification [timestamp]: see above — diff arithmetic on oracle-derived values for the cache-deviation guard.
                 // slither-disable-next-line timestamp
                 uint256 diff = rawPrice1e18 > cached ? rawPrice1e18 - cached : cached - rawPrice1e18;
+                // Justification [timestamp]: see above — deviation guard comparison on oracle-derived values.
                 // slither-disable-next-line timestamp
                 if (diff * BPS > cached * uint256(info.maxOracleDeviationBps)) {
                     isFresh = false;
@@ -298,8 +306,10 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         // Justification [timestamp]: isFresh is derived from block.timestamp staleness in _readOracle; the deviation ratchet check that follows is the intended oracle-manipulation defence.
         // slither-disable-next-line timestamp
         if (!isFresh && prev != 0) {
+            // Justification [timestamp]: see above — diff arithmetic on cache-derived values for the stale-branch deviation ratchet.
             // slither-disable-next-line timestamp
             uint256 diff = price1e18 > prev ? price1e18 - prev : prev - price1e18;
+            // Justification [timestamp]: see above — stale-branch deviation guard comparison on oracle-derived values.
             // slither-disable-next-line timestamp
             if (diff * BPS > prev * uint256(info.maxOracleDeviationBps)) {
                 revert PriceDeviation(token, price1e18, prev, info.maxOracleDeviationBps);
@@ -321,6 +331,7 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
             // Justification [timestamp]: price deviation check uses values that flow from block.timestamp oracle staleness in _readOracle; miner manipulation window (~15 s) is negligible vs. the configured thresholds.
             // slither-disable-next-line timestamp
             uint256 diff = price1e18 > prev ? price1e18 - prev : prev - price1e18;
+            // Justification [timestamp]: see above — deviation guard comparison on oracle-derived values.
             // slither-disable-next-line timestamp
             if (diff * BPS > prev * uint256(maxDevBps)) {
                 revert PriceDeviation(token, price1e18, prev, maxDevBps);
@@ -336,6 +347,7 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
             // Justification [calls-loop]: REGISTRY.tokens and isActive are called in the NAV loop; token count is small and permissioned so gas is bounded, and no reentrancy is possible from view-only registry calls.
             // slither-disable-next-line calls-loop
             address t = REGISTRY.tokens(i);
+            // Justification [calls-loop]: see above — REGISTRY.isActive is a view-only call inside the same bounded NAV loop.
             // slither-disable-next-line calls-loop
             if (!REGISTRY.isActive(t)) continue;
             (uint256 p, uint8 d) = _readUsdPrice1e18Mut(t);
@@ -350,6 +362,7 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
             // Justification [calls-loop]: REGISTRY.tokens and isActive are called in the NAV loop; token count is small and permissioned so gas is bounded, and no reentrancy is possible from view-only registry calls.
             // slither-disable-next-line calls-loop
             address t = REGISTRY.tokens(i);
+            // Justification [calls-loop]: see above — REGISTRY.isActive is a view-only call inside the same bounded NAV loop.
             // slither-disable-next-line calls-loop
             if (!REGISTRY.isActive(t)) continue;
             (uint256 p, uint8 d) = _readUsdPrice1e18View(t);
@@ -445,6 +458,7 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         // Justification [timestamp]: amountOut and protFeeAmt are derived from oracle-priced NAV calculations that use block.timestamp for freshness; the liquidity and slippage checks themselves are simple value bounds.
         // slither-disable-next-line timestamp
         if (r < amountOut + protFeeAmt) revert InsufficientLiquidity(tokenOut, amountOut + protFeeAmt, r);
+        // Justification [timestamp]: see above — slippage guard on oracle-derived amountOut.
         // slither-disable-next-line timestamp
         if (amountOut < minTokenOut) revert InsufficientTokenOut(amountOut, minTokenOut);
 
@@ -452,6 +466,7 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         // Justification [reentrancy-no-eth,reentrancy-benign]: function is protected by nonReentrant; reserves and protocolFeesAccrued are written immediately after LP.burn with no intermediate state that could be exploited — the guard prevents any reentrant call from reaching this path.
         // slither-disable-next-line reentrancy-no-eth,reentrancy-benign
         reserves[tokenOut] = r - (amountOut + protFeeAmt);
+        // Justification [reentrancy-benign]: see above — protocolFeesAccrued write is in the same nonReentrant-guarded post-burn block; no exploitable intermediate state.
         // slither-disable-next-line reentrancy-benign
         protocolFeesAccrued[tokenOut] += protFeeAmt;
 
@@ -494,6 +509,7 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         // slither-disable-next-line timestamp
         if (amountOut < minOut) revert InsufficientOutput(amountOut, minOut);
         uint256 r = reserves[tokenOut];
+        // Justification [timestamp]: see above — liquidity guard on oracle-derived amountOut and protFee.
         // slither-disable-next-line timestamp
         if (r < amountOut + protFee) revert InsufficientLiquidity(tokenOut, amountOut + protFee, r);
 

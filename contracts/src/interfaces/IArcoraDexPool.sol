@@ -65,10 +65,10 @@ interface IArcoraDexPool {
     event PauseGuardianUpdated(address indexed prev, address indexed next);
 
     // ── Views ─────────────────────────────────────────────────────────
-    // Justification [naming-convention]: REGISTRY() is the getter for an immutable registry reference; UPPER_CASE matches the implementing contract's immutable naming convention signalling the address is fixed post-construction.
+    // Justification [naming-convention]: UPPER_CASE marks an immutable, per project convention.
     // slither-disable-next-line naming-convention
     function REGISTRY()             external view returns (IArcoraDexRegistry);
-    // Justification [naming-convention]: LP() is the getter for the immutable LP token address; UPPER_CASE per project immutable convention.
+    // Justification [naming-convention]: UPPER_CASE marks an immutable, per project convention.
     // slither-disable-next-line naming-convention
     function LP()                   external view returns (IArcoraDexLP);
     function reserves(address token)             external view returns (uint256);
