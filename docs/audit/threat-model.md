@@ -10,7 +10,7 @@
 
 ArcoraDEX underwent a two-pass security review in May 2026: an external audit pass on 2026-05-12 that surfaced eight findings (spanning smart-contract economics, governance, oracle dependence, dependency hygiene, and operational configuration), followed immediately by a second-opinion internal pass that added three further economic-attack vectors the original review had not raised. The combined eleven findings drove a three-phase remediation programme (P1 — contract fixes, P2 — governance migration, P3 — oracle hardening) executed before the code was submitted to Spearbit. This document maps every finding to its fix, names the contract and function where the fix lives, and states the residual risk that persists after remediation.
 
-**Note on finding counts across source documents.** The mainnet-readiness roadmap (`docs/superpowers/specs/2026-05-13-mainnet-readiness-roadmap.md`) is the authoritative reconciliation point: §1 states "8 findings total + 3 additional Claude-surfaced economic-attack vectors", §6 references "all 11 findings". The original audit-cleanup design (`docs/superpowers/specs/2026-05-12-audit-cleanup-design.md`) records only the three operational footguns it addressed (P2 #1, P2 #2, P3) and does not enumerate the full set — it pre-dates the 2026-05-13 external review. The P4 design spec (`docs/superpowers/specs/2026-05-18-phase4-audit-readiness-design.md`) explicitly asks this document to reconcile the count against the source docs rather than assert a number. The count this document uses is **11**, derived from the tables in the roadmap §3–§6 plus the ops-level items in the audit-cleanup design.
+**Note on finding counts across source documents.** The mainnet-readiness roadmap (`docs/superpowers/specs/2026-05-13-mainnet-readiness-roadmap.md`) is the authoritative reconciliation point: its header states "8 findings total + 3 additional Claude-surfaced economic-attack vectors" — the three Claude-surfaced vectors are **#A (first-depositor inflation attack), #B (JIT/MEV sandwich), and #C (quote↔execute gap)**, all identified during the 2026-05-13 economic-attack follow-up pass and addressed in P1. The roadmap also references "all 11 findings" in §6. The original audit-cleanup design (`docs/superpowers/specs/2026-05-12-audit-cleanup-design.md`) records only the three operational footguns it addressed (P2 #1, P2 #2, P3) and does not enumerate the full set — it pre-dates the 2026-05-13 external review. The P4 design spec (`docs/superpowers/specs/2026-05-18-phase4-audit-readiness-design.md`) explicitly asks this document to reconcile the count against the source docs rather than assert a number. The count this document uses is **11**, derived from the tables in the roadmap §3–§6 plus the ops-level items in the audit-cleanup design. **#P3-R, #P3-G, and #P3-O** are oracle-layer residuals surfaced during P3 implementation — they are not part of the original "8 + 3" and are tracked here as additional implementation-surfaced items. **#OPS** is an operational item from the pre-P1 audit-cleanup design, tracked here for completeness.
 
 ---
 
@@ -23,11 +23,11 @@ ArcoraDEX underwent a two-pass security review in May 2026: an external audit pa
 | **#1** | TRYC/BRLC iterative writer-compromise drain | HIGH | Mitigated | P3 | `OracleAggregator.sol` (two-source median + `SourcesDiverge` revert) + `ArcoraDexRegistry.sol` `setDeviation()` (caps reduced from 5 000 bps to 200 bps) |
 | **#3** | Deployer EOA — single point of failure for all owner actions | HIGH | Fixed | P2 | `ArcoraDexPool.sol` — `pauseGuardian` + `onlyOwnerOrGuardian` modifier + `setPauseGuardian()`; governance: `TimelockController` (48 h) + Governance Safe 3/5 |
 | **#C** | Quote↔execute deviation gap | MEDIUM | Fixed | P1 | `ArcoraDexPool.sol` — `_readUsdPrice1e18WithGuard()` applied to `quote()`, `quoteDeposit()`, `quoteWithdraw()` |
-| **#4** | Stale feed locks deposit/withdraw globally | MEDIUM | Fixed | P1 | `ArcoraDexRegistry.sol` — per-token `maxStaleSeconds` field; `ArcoraDexPool.sol` — `lastValidPrice`/`lastValidPriceAt` cache + fallback path in `_readOracle()` |
+| **#4** | Stale feed locks deposit/withdraw globally | MEDIUM | Fixed | P1 | `ArcoraDexRegistry.sol` — per-token `maxStaleSeconds` field; `ArcoraDexPool.sol` — `lastValidPrice`/`lastValidPriceAt` cache + fallback path in `_readUsdPrice1e18Mut()` |
 | **#P3-R** | Reverting oracle call bricks pool globally | MEDIUM | Fixed | P3 | `ArcoraDexPool.sol` — try/catch wrapping `info.usdOracle.latestRoundData()` and `info.usdOracle.decimals()` inside `_readOracle()` |
 | **#P3-G** | Gas-redundant double oracle read in quote path | LOW | Fixed | P3 | `ArcoraDexPool.sol` — `_readUsdPrice1e18WithGuard()` refactored to single `_readOracle()` call |
 | **#P3-O** | No on-chain rolling-deviation observability | LOW | Mitigated | P3 | `CumulativeDeviationGuard.sol` — `record()` + `PriceObserved` / `CircuitBreakerTripped` events; tumbling 24 h window per token |
-| **#5** | Frontend dependency vulnerabilities (35 vulns incl. 1 critical, 13 high) | MEDIUM | Accepted / Deferred | P4/P5 | Not in contract audit scope; tracked in `docs/audit/p5-tracking.md` |
+| **#5** | Frontend dependency vulnerabilities (35 vulns incl. 1 critical, 13 high) | MEDIUM | Accepted / Deferred | P4/P5 | Not in contract audit scope; tracked in the P5 deferred-work register (`docs/audit/p5-tracking.md`) |
 | **#OPS** | Operational footguns: `DEPLOYER_PRIVATE_KEY` rename, legacy v07 keeper unit, `KEEPER_EOA` zero-address guard | LOW | Fixed | Pre-P1 | `ops/keepalive/multi-feed-push.mjs`, `ops/keepalive/fetch-keeper-secret.sh`, `contracts/script/MigrateFeedsToV2.s.sol` |
 
 ---
@@ -48,9 +48,11 @@ ArcoraDEX underwent a two-pass security review in May 2026: an external audit pa
 
 **Attack.** Atomic deposit-then-withdraw across an oracle update lets an MEV bot capture the NAV delta with no capital at risk. `totalReservesUSD()` always reads the current oracle; a bot could deposit just before the keeper's `setAnswer` oracle push and withdraw immediately after, extracting the price-delta gain.
 
-**Fix.** A `lastMintAt` mapping (line 59 of `ArcoraDexPool.sol`) records `block.timestamp` for every depositor at the end of `deposit()`. `withdraw()` enforces `block.timestamp >= lastMintAt[msg.sender] + MIN_HOLD_SECONDS` (line 422), where `MIN_HOLD_SECONDS = 1 hours` (line 43). The 1-hour hold covers at least two keeper cycles (keeper fires every 30 minutes), making atomic same-MEV-bundle extract impossible. A violation reverts with `EarlyWithdraw(unlockAt, block.timestamp)`. LP token transfer to a fresh address resets `lastMintAt` to zero, allowing immediate withdrawal by the recipient — this is documented as intentional (the JIT pattern requires the same account to deposit and extract).
+**Fix.** A `lastMintAt` mapping (line 59 of `ArcoraDexPool.sol`) records `block.timestamp` for every depositor at the end of `deposit()`. `withdraw()` enforces `block.timestamp >= lastMintAt[msg.sender] + MIN_HOLD_SECONDS` (line 422), where `MIN_HOLD_SECONDS = 1 hours` (line 43). The 1-hour hold covers at least two keeper cycles (keeper fires every 30 minutes), making atomic same-MEV-bundle extract impossible. A violation reverts with `EarlyWithdraw(unlockAt, block.timestamp)`.
 
-**Verify.** `ArcoraDexPool.sol` lines 43–44 (constants), 59 (mapping), 418–422 (withdraw guard). Run `forge test --match-test test_jit_mev_blocked_by_min_hold`.
+The deposit→transfer-to-fresh-wallet→withdraw JIT bypass is also **closed** by a transfer hook. `ArcoraDexLP._update` (line 36–41 of `ArcoraDexLP.sol`) calls `IArcoraDexPool(MINTER).notifyLPTransfer(from, to)` on every non-mint/non-burn transfer. `ArcoraDexPool.notifyLPTransfer` (lines 636–644 of `ArcoraDexPool.sol`) propagates the sender's lock to the recipient: `if (fromLock > lastMintAt[to]) { lastMintAt[to] = fromLock; }`. The recipient therefore inherits the sender's unexpired hold — a fresh wallet that has never deposited cannot withdraw until the transferred LP's original lock has elapsed.
+
+**Verify.** `ArcoraDexPool.sol` lines 43–44 (constants), 59 (mapping), 418–422 (withdraw guard), 636–644 (`notifyLPTransfer`). `ArcoraDexLP.sol` lines 36–41 (`_update` hook). Run `forge test --match-test test_jit_mev_blocked_by_min_hold` and `forge test --match-test test_jit_mev_blocked_by_lp_transfer_hook`.
 
 ---
 
@@ -90,9 +92,9 @@ The seven `MockChainlinkFeedV2` feeds are owned directly by the Governance Safe 
 
 **Attack.** `quote()` used `_readUsdPrice1e18` (no ratchet check) while `swap()` used `_readAndGuardPrice` (ratchet check). Users and integrators called `quote()` as a preflight, received a valid price, then submitted `swap()` which reverted with `PriceDeviation` — a broken UX and a broken promise to SDK consumers.
 
-**Fix.** `_readUsdPrice1e18WithGuard()` (line 243 of `ArcoraDexPool.sol`) is a view-only function that runs the same deviation-ratchet logic as the stateful path but without writing to `lastAcceptedPrice`. It is applied to all three quote entry-points: `quote()` (line 538), `quoteDeposit()` (line 546), `quoteWithdraw()` (line 573). A quote now reverts with `PriceDeviation` under exactly the same conditions that would cause the corresponding execute to revert.
+**Fix.** `_readUsdPrice1e18WithGuard()` (line 243 of `ArcoraDexPool.sol`) is a view-only function that runs the same deviation-ratchet logic as the stateful path but without writing to `lastAcceptedPrice`. It is applied to all three quote entry-points: `quote()` (function at line 530, `_readUsdPrice1e18WithGuard` call at line 538), `quoteDeposit()` (function at line 544, call at line 546), `quoteWithdraw()` (function at line 566, call at line 573). A quote now reverts with `PriceDeviation` under exactly the same conditions that would cause the corresponding execute to revert.
 
-**Verify.** `ArcoraDexPool.sol` lines 243–310 (`_readUsdPrice1e18WithGuard`), 530–580 (quote functions). Run `forge test --match-test test_quote_reverts_when_swap_would_revert`.
+**Verify.** `ArcoraDexPool.sol` lines 243–308 (`_readUsdPrice1e18WithGuard`), 530–591 (quote functions). Run `forge test --match-test test_quote_reverts_when_swap_would_revert`.
 
 ---
 
@@ -102,9 +104,9 @@ The seven `MockChainlinkFeedV2` feeds are owned directly by the Governance Safe 
 
 **Fix — two-part.**
 1. `ArcoraDexRegistry.sol`: `TokenInfo` struct extended with `uint32 maxStaleSeconds` field (line 38). `listToken()` validates `60 ≤ maxStaleSeconds ≤ 7 days`. `setMaxStaleSeconds()` (line 77) allows governance to retune post-deploy. Default values: USDC/USDT/PYUSD/DAI = 3 600 s; EURC = 14 400 s; TRYC/BRLC = 86 400 s.
-2. `ArcoraDexPool.sol`: `lastValidPrice[token]` and `lastValidPriceAt[token]` mappings (lines 57–58) cache the last known good price per token. `_readOracle()` (line 98) writes the cache on every fresh oracle read, and falls back to it when the oracle is stale, returning `isFresh = false` rather than reverting. A `NoValidPrice(token)` revert only occurs if the cache has never been seeded (first-read scenario for a never-traded token).
+2. `ArcoraDexPool.sol`: `lastValidPrice[token]` and `lastValidPriceAt[token]` mappings (lines 57–58) cache the last known good price per token. `_readOracle()` (line 98) is `internal view` — it reads the oracle but does **not** write state. The cache is written by `_readUsdPrice1e18Mut()` (line 142), which calls `_readOracle()` and, when the result is fresh and within the cache-deviation guard, writes `lastValidPrice[token]` and `lastValidPriceAt[token]` (lines 168–169). When the oracle is stale or the cache-deviation guard rejects the reading, `_readUsdPrice1e18Mut()` falls back to the existing cache value and returns it rather than reverting. A `NoValidPrice(token)` revert only occurs if the cache has never been seeded (first-read scenario for a never-traded token).
 
-**Verify.** `ArcoraDexRegistry.sol` lines 38, 45, 77–83. `ArcoraDexPool.sol` lines 57–58, 98–140. Run `forge test --match-test test_stale_feed_falls_back_to_cache` and `test_no_valid_price_reverts_when_never_seeded`.
+**Verify.** `ArcoraDexRegistry.sol` lines 38, 45, 77–83. `ArcoraDexPool.sol` lines 57–58 (cache mappings), 98–135 (`_readOracle` — view, no state write), 142–179 (`_readUsdPrice1e18Mut` — writes cache at lines 168–169). Run `forge test --match-test test_stale_feed_falls_back_to_cache` and `test_no_valid_price_reverts_when_never_seeded`.
 
 ---
 
@@ -124,7 +126,7 @@ The seven `MockChainlinkFeedV2` feeds are owned directly by the Governance Safe 
 
 **Fix.** `_readUsdPrice1e18WithGuard()` (line 243 of `ArcoraDexPool.sol`) was refactored to a single `_readOracle()` call that resolves both fresh and cached branches internally. The quote gas cost was reduced accordingly without behavioural change.
 
-**Verify.** `ArcoraDexPool.sol` lines 243–310: exactly one `_readOracle(token)` call at line 250. Run `forge test --match-test test_pool_quote_gas_reduction` (snapshot assertion).
+**Verify.** `ArcoraDexPool.sol` lines 243–308: exactly one `_readOracle(token)` call at line 250. Run `forge test --match-test test_pool_quote_gas_reduction` (snapshot assertion).
 
 ---
 
@@ -144,7 +146,7 @@ The seven `MockChainlinkFeedV2` feeds are owned directly by the Governance Safe 
 
 **Finding.** `pnpm audit` on the frontend repository reported 35 vulnerabilities including 1 critical and 13 high in Next.js, axios, and happy-dom chains.
 
-**Status.** This is a frontend/SDK repository issue, not a smart-contract audit target. It is documented in `docs/audit/p5-tracking.md` and must be resolved before the G3 gate (Spearbit sign-off → mainnet). It is not in scope for this contract review.
+**Status.** This is a frontend/SDK repository issue, not a smart-contract audit target. It is tracked in the P5 deferred-work register (`docs/audit/p5-tracking.md`, a sibling document in this audit pack) and must be resolved before the G3 gate (Spearbit sign-off → mainnet). It is not in scope for this contract review.
 
 ---
 
@@ -198,7 +200,7 @@ The seven `MockChainlinkFeedV2` feeds are owned directly by the Governance Safe 
 **Compensating controls.**
 - The P3 design spec (`docs/superpowers/specs/2026-05-14-phase3-oracle-hardening-design.md` §6) and the `CumulativeDeviationGuard.sol` NatSpec (lines 26–30) explicitly document that the off-chain monitor must treat events as untrusted hints and re-validate the price against the actual aggregator before acting.
 - No on-chain action (pause, freeze, price change) can be triggered by `record` alone in the current implementation.
-- When on-chain auto-pause is wired to the guard in P5, `record` must be made keeper-only at that time.
+- When on-chain auto-pause is wired to the guard in P5, `record` must be made keeper-only at that time (see the P5 deferred-work register, `docs/audit/p5-tracking.md`).
 
 ---
 
