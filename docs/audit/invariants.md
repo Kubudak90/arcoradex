@@ -117,6 +117,13 @@ The aggregator never fabricates a price outside the `[min(pAns, sAns), max(pAns,
 
 **Test coverage.** `contracts/test/oracle/P3Aggregator.t.sol` — `test_aggregator_returns_average_within_divergence_cap`, `test_aggregator_reverts_on_sources_diverge`, `test_aggregator_returns_primary_when_secondary_reverts`, `test_aggregator_reverts_when_both_sources_revert`, `test_aggregator_falls_back_when_source_returns_zero_answer`, `test_aggregator_divergence_exactly_at_cap_passes`, `test_aggregator_reverts_when_both_sources_return_zero`, `test_sourceHealth_reports_degraded`. **No fuzz coverage over arbitrary answer pairs** — suggested target for Spearbit.
 
+> **Audit 2026-05-19 correction (C-5):** The `answeredInRound >= roundId` check
+> is inert under the production aggregator + mock-feed configuration: the
+> aggregator returns hard-coded `roundId = 1` / `answeredInRound = 1`, and both
+> `MockChainlinkFeedV2` and `MockChainlinkFeed` return constant `1` as well. The
+> staleness defense for the deployed system reduces to the `updatedAt` check
+> only. Phase D introduces a monotonic `roundId` so this invariant is restored.
+
 ---
 
 ## INV-8: Swap fee bounds are enforced at all times

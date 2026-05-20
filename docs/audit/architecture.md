@@ -208,6 +208,15 @@ These three parameters measure distinct quantities and are not redundant. All th
 
 *Registry `maxOracleDeviationBps` is per-tier — 50 bps for the USD-pegged stables, 150 bps for EURC, 200 bps for TRYC/BRLC — set at token listing (`DeployArcoraDexV3.s.sol`). TRYC and BRLC were listed at 5 000 bps and are reduced to 200 bps by operations 8–9 of the P3 Timelock batch (scheduled batch id `0x31218725...`, executable ≈ 2026-05-20); the USD-pegged stables and EURC were listed at their final values and are unchanged by that batch.*
 
+> **Audit 2026-05-19 correction (C-8):** The "three knobs" model is incomplete
+> for NAV computation. `_totalReservesUSDMut` (called by `deposit`/`withdraw`)
+> invokes `_readUsdPrice1e18Mut` for *every* active token — which writes
+> `lastValidPrice[token]` for every NAV-loop token. The
+> `lastAcceptedPrice` ratchet (`_readAndGuardPrice`) is applied only to the
+> operated token, so the cache of an *un-traded* token can be advanced via
+> deposits/withdrawals of an unrelated token, bounded only by that token's
+> `maxOracleDeviationBps` cache-deviation guard, not by its ratchet.
+
 ### `_readOracle` internals
 
 `_readOracle(token)` (lines 98–135 of `ArcoraDexPool.sol`) is `internal view` — it reads state but never writes it:

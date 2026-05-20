@@ -122,6 +122,16 @@ to the guard at that time.
   keeper-only at that time (tracked in the P5 deferred-work register,
   `docs/audit/p5-tracking.md`).
 
+**Suppression (added 2026-05-19, finding C-7):** Beyond the documented
+favorable-anchor and spam-trip variants, an unauthenticated attacker can
+*suppress* a genuine `CircuitBreakerTripped` by front-running the legitimate
+keeper's first post-expiry `record` every window and re-anchoring to the
+current drifted price. The compensating control "off-chain monitor
+re-validates" addresses false positives only — not suppression of a true trip.
+Mitigation: the off-chain monitor must compute deviation itself from raw feed
+reads; this contract is redundant breadcrumbs, not the source of truth.
+Moving `record` to keeper-only is tracked as a P5 item.
+
 ---
 
 ## R4 — Tumbling (not rolling) deviation window
@@ -200,6 +210,16 @@ part of the P2 governance spec.
   extract accrued protocol fees in addition to the above. This is a known accepted
   risk (see R7 below).
 
+**No-Timelock asymmetry (added 2026-05-19, finding C-10):** `OracleAggregator`
+and `CumulativeDeviationGuard` are owned by the Governance Safe **directly,
+without the 48h Timelock**, by deliberate design (emergency feed rotation). A
+compromised Governance Safe can therefore call `setMaxDivergenceBps(10_000)`
+and `setConfig(maxCumulativeBps=10_000)` **with zero delay**, disabling both
+the divergence cross-check and the cumulative-deviation breaker, while the
+Pool-side `maxOracleDeviationBps` ratchet that complements them *is* 48h-delayed.
+This asymmetry shrinks the effective window of governance-level defenses
+against a compromised Safe.
+
 ---
 
 ## R6 — Oracle keeper compromise
@@ -241,6 +261,17 @@ testnet deployment is scaffolding.
 - `MIN_HOLD_SECONDS = 1 hours` (`ArcoraDexPool.sol` line 43) means a
   keeper-compromised attacker cannot deposit to an inflated position and exit
   atomically; at least two full keeper cycles must elapse before withdrawal.
+
+**Disable-the-honest-source variant (added 2026-05-19, finding C-1):** The
+aggregator's divergence cross-check runs only in the `pOk && sOk` branch. An
+attacker who controls one feed need not move it — they can **disable the
+feed they do not control** by pushing it to `0` (`MockChainlinkFeedV2.setAnswer`
+accepts zero/negative; `_tryRead` then returns `ok = false` for `a <= 0`),
+demoting the aggregator to single-source mode and bypassing the divergence
+check entirely. On testnet (single keeper writes both feeds, R6 accepted)
+this is already the operative model. On mainnet (with truly independent
+sources) it is a real attack. Phase D adds an explicit `requireBothSources`
+mode and a degraded-mode signal to address this.
 
 ---
 
@@ -311,6 +342,47 @@ outcomes.
   OracleAggregator, and the governance contracts.
 - TVL during the pre-bounty window is expected to be low (founding LP bootstrap
   only), limiting the incentive for exploit-over-disclose.
+
+---
+
+## R9 — Oracle-priced zero-impact swaps (finding C-3, accepted design)
+
+ArcoraDEX prices swaps from oracles with a flat `swapFeeBps`; there is no
+constant-product curve and no utilization-scaled penalty. An actor observing a
+real stablecoin de-peg can convert the mispriced token at the oracle rate with
+zero slippage, bounded only by `reserves[tokenOut]`. **This is by design** —
+the system is an oracle swap desk, not a CFMM. LP value leaks to arbitrageurs
+on every oracle-vs-market basis event.
+
+**Compensating controls:**
+- Tight `maxOracleDeviationBps` (per-token, 50/150/200 bps).
+- Keeper cadence ≤ 30 min keeps the on-chain price close to the live rate.
+- Phase D's aggregator hardening (per-source staleness, degraded-mode signal)
+  reduces the window during which the oracle lags the real market.
+
+**Not mitigated:** the underlying basis exposure during legitimate de-peg
+events. Considered acceptable given the testnet stable mix and the design
+goal of zero-slippage oracle pricing.
+
+## R10 — Single-token full-pool withdrawal (finding C-4, accepted design)
+
+`withdraw(tokenOut, lpAmount, …)` redeems an LP's full proportional NAV share
+but pays it entirely in one chosen token. A large LP can debit
+`reserves[tokenOut]` by the USD value of their whole multi-token claim,
+exiting in whichever token is currently oracle-cheap vs market. **This is by
+design** — the contract supports single-token exit deliberately for UX
+simplicity.
+
+**Compensating controls:**
+- `MIN_HOLD_SECONDS = 1 hour` (R2) slows mass exit.
+- The 0.05% protocol fee + LP-retained fee on withdraw applies regardless of
+  token choice.
+- The `Withdrew` event records the chosen `tokenOut` and `usdNet`, so token-
+  selection bias is auditable post-hoc.
+
+**Not mitigated:** the economic and availability hazard of one LP zeroing
+`reserves[tokenOut]`. A future proportional multi-token withdraw is a possible
+enhancement, deferred to post-audit.
 
 ---
 
