@@ -42,6 +42,13 @@ ArcoraDEX underwent a two-pass security review in May 2026: an external audit pa
 
 **Verify.** Read `ArcoraDexPool.sol` lines 37–38 (constants), 384–390 (first-deposit branch and general formula), 427 (withdraw formula). Run `forge test --match-test test_inflation_attack_fails_after_fix`.
 
+> **Correction (2026-05-19, finding C-16):** `MINIMUM_LIQUIDITY = 1000` is in
+> 1e18-scaled USD-wei (≈ 1e-15 USD), satisfied by any deposit ≥ 1 token-wei.
+> It only seeds the supply denominator (prevents zero-supply division) — it is
+> **not** a meaningful economic floor. The actual first-deposit inflation
+> defense is `VIRTUAL_SHARES` / `VIRTUAL_ASSETS`, applied symmetrically in
+> deposit/withdraw and quotes.
+
 ---
 
 ### #B — JIT/MEV sandwich on deposit/withdraw (HIGH → Fixed, P1)
@@ -53,6 +60,14 @@ ArcoraDEX underwent a two-pass security review in May 2026: an external audit pa
 The deposit→transfer-to-fresh-wallet→withdraw JIT bypass is also **closed** by a transfer hook. `ArcoraDexLP._update` (line 36–41 of `ArcoraDexLP.sol`) calls `IArcoraDexPool(MINTER).notifyLPTransfer(from, to)` on every non-mint/non-burn transfer. `ArcoraDexPool.notifyLPTransfer` (lines 636–644 of `ArcoraDexPool.sol`) propagates the sender's lock to the recipient: `if (fromLock > lastMintAt[to]) { lastMintAt[to] = fromLock; }`. The recipient therefore inherits the sender's unexpired hold — a fresh wallet that has never deposited cannot withdraw until the transferred LP's original lock has elapsed.
 
 **Verify.** `ArcoraDexPool.sol` lines 43–44 (constants), 59 (mapping), 418–422 (withdraw guard), 636–644 (`notifyLPTransfer`). `ArcoraDexLP.sol` lines 36–41 (`_update` hook). Run `forge test --match-test test_jit_mev_blocked_by_min_hold` and `forge test --match-test test_jit_mev_blocked_by_lp_transfer_hook`.
+
+> **Scope clarification (2026-05-19, finding C-17):** The min-hold attaches to
+> *accounts*, not LP units. LP transferred from a long-aged holder carries an
+> already-expired `lastMintAt` (via `notifyLPTransfer` raising only, never
+> lowering) and can be withdrawn immediately by the recipient. The JIT defense
+> therefore covers **freshly-minted LP only**, not LP sourced from an aged
+> holder. If `ADEX-LP` is ever made loanable (e.g. accepted as collateral on a
+> lending market), flash-loaned LP reopens the JIT vector — flagged for P5.
 
 ---
 
