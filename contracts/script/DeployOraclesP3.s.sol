@@ -128,6 +128,7 @@ contract DeployOraclesP3 is Script {
                 IChainlinkAggregator(cfg[i].primaryFeed),
                 IChainlinkAggregator(address(secondary)),
                 cfg[i].divergenceBps,
+                3600, // MAX_STALE_SECONDS: 1h for USD-pegged stables (Phase D4 may tune per-tier)
                 deployer
             );
 
