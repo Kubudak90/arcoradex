@@ -116,27 +116,26 @@ contract P3AggregatorTest is Test {
         assertEq(ans, int256(101_000_000), "avg of 1.00 and 1.02 = 1.01 at exact cap boundary");
     }
 
-    // M3-2: _tryRead REJECT path (not revert): secondary returns answer=0, falls back to primary
+    // M3-2: _tryRead REJECT path: secondary returns a bad read (reverts), falls back to primary.
+    // After D1 MockChainlinkFeedV2 rejects non-positive answers, a "zero-answer" source is
+    // represented by RevertingMockFeed — the _tryRead catch path covers the same aggregator logic.
     function test_aggregator_falls_back_when_source_returns_zero_answer() public {
+        RevertingMockFeed badSecondary = new RevertingMockFeed(8);
         OracleAggregator agg = new OracleAggregator(
-            IChainlinkAggregator(address(primary)), IChainlinkAggregator(address(secondary)), 200, OWNER
+            IChainlinkAggregator(address(primary)), IChainlinkAggregator(address(badSecondary)), 200, OWNER
         );
-        vm.prank(OWNER);
-        secondary.setAnswer(0); // _tryRead will reject (a > 0 fails)
 
         (, int256 ans,,,) = agg.latestRoundData();
-        assertEq(ans, int256(100_000_000), "should fall back to primary when secondary returns zero answer");
+        assertEq(ans, int256(100_000_000), "should fall back to primary when secondary is unavailable");
     }
 
-    // M3-3: both sources return answer=0 => AllSourcesUnavailable
+    // M3-3: both sources unavailable => AllSourcesUnavailable
     function test_aggregator_reverts_when_both_sources_return_zero() public {
+        RevertingMockFeed badPrimary = new RevertingMockFeed(8);
+        RevertingMockFeed badSecondary = new RevertingMockFeed(8);
         OracleAggregator agg = new OracleAggregator(
-            IChainlinkAggregator(address(primary)), IChainlinkAggregator(address(secondary)), 200, OWNER
+            IChainlinkAggregator(address(badPrimary)), IChainlinkAggregator(address(badSecondary)), 200, OWNER
         );
-        vm.prank(OWNER);
-        primary.setAnswer(0);
-        vm.prank(OWNER);
-        secondary.setAnswer(0);
 
         vm.expectRevert(abi.encodeWithSelector(OracleAggregator.AllSourcesUnavailable.selector));
         agg.latestRoundData();

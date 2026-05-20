@@ -17,8 +17,11 @@ contract MockChainlinkFeedV2 is IChainlinkAggregator, Ownable2Step {
 
     error NotWriter();
     error ZeroAddress();
+    error AnswerNotPositive();
     event WriterUpdated(address indexed prev, address indexed next);
     event AnswerUpdated(int256 answer, uint256 updatedAt);
+
+    uint80 private _roundId;
 
     constructor(uint8 _decimals, int256 initialAnswer, address initialWriter, address initialOwner)
         Ownable(initialOwner)
@@ -28,6 +31,7 @@ contract MockChainlinkFeedV2 is IChainlinkAggregator, Ownable2Step {
         latestAnswer = initialAnswer;
         latestUpdatedAt = block.timestamp;
         writer = initialWriter;
+        _roundId = 1;
         emit WriterUpdated(address(0), initialWriter);
         emit AnswerUpdated(initialAnswer, block.timestamp);
     }
@@ -40,6 +44,8 @@ contract MockChainlinkFeedV2 is IChainlinkAggregator, Ownable2Step {
 
     function setAnswer(int256 newAnswer) external {
         if (msg.sender != writer) revert NotWriter();
+        if (newAnswer <= 0) revert AnswerNotPositive();
+        _roundId += 1;
         latestAnswer = newAnswer;
         latestUpdatedAt = block.timestamp;
         emit AnswerUpdated(newAnswer, block.timestamp);
@@ -50,6 +56,6 @@ contract MockChainlinkFeedV2 is IChainlinkAggregator, Ownable2Step {
     }
 
     function latestRoundData() external view returns (uint80, int256, uint256, uint256, uint80) {
-        return (1, latestAnswer, latestUpdatedAt, latestUpdatedAt, 1);
+        return (_roundId, latestAnswer, latestUpdatedAt, latestUpdatedAt, _roundId);
     }
 }
