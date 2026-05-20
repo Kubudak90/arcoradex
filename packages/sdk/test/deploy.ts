@@ -30,12 +30,30 @@ export interface AnvilHandle {
 
 const ANVIL_PRIVATE_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
 
-/** Spawns a local Anvil process on a random port, with chainId 5042002. */
+/** Spawns a local Anvil process on a random port, with chainId 5042002.
+ *
+ * We start the chain 2 hours behind real wall-clock time so that:
+ *   1. The initial LP deposits (in deployContracts) set lastMintAt to T-2h.
+ *   2. The withdraw integration test can advance time by 3601 s to clear the
+ *      1-hour MIN_HOLD_SECONDS window (chain time becomes T-2h+3601s ≈ T-1h)
+ *      while still leaving chain time ~1 hour behind real Date.now(). This
+ *      means the SDK's default deadline (Date.now()+20min) remains far in the
+ *      future from the chain's perspective, so subsequent test transactions
+ *      (deposit, swap, etc.) are not broken by the time warp.
+ */
 export async function spawnAnvil(): Promise<AnvilHandle> {
   const port = 8545 + Math.floor(Math.random() * 1000);
+  // Start the genesis block 2 hours behind real time (see module-level comment).
+  const genesisTimestamp = Math.floor(Date.now() / 1000) - 2 * 3600;
   const proc = spawn(
     "anvil",
-    ["--silent", "--port", String(port), "--chain-id", "5042002", "--hardfork", "cancun"],
+    [
+      "--silent",
+      "--port", String(port),
+      "--chain-id", "5042002",
+      "--hardfork", "cancun",
+      "--timestamp", String(genesisTimestamp),
+    ],
     { stdio: ["ignore", "pipe", "pipe"] },
   );
   // Wait briefly for Anvil to bind. Poll the RPC port until it's responsive.

@@ -23,6 +23,7 @@ export const poolAbi = parseAbi([
   "error SameToken(address token)",
   "error ZeroAmount()",
   "error DeadlinePassed()",
+  "error EarlyWithdraw(uint256 unlockAt, uint256 nowAt)",
   "error InsufficientLiquidity(address token, uint256 requested, uint256 available)",
   "error InsufficientOutput(uint256 amountOut, uint256 minOut)",
   "error PriceDeviation(address token, uint256 newPrice, uint256 lastAccepted, uint16 maxDevBps)",

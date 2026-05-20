@@ -88,6 +88,13 @@ export class DeadlinePassedError extends ArcoraDexError {
   }
 }
 
+export class EarlyWithdrawError extends ArcoraDexError {
+  constructor(public readonly unlockAt: bigint, public readonly nowAt: bigint) {
+    super(`LP min-hold active until ${unlockAt} (now ${nowAt})`);
+    this.name = "EarlyWithdrawError";
+  }
+}
+
 interface RevertedShape {
   data?: { errorName?: string; args?: readonly unknown[] };
   cause?: RevertedShape;
@@ -135,6 +142,8 @@ export function parseContractError(err: unknown): ArcoraDexError {
       return new TokenNotActiveError(args[0] as `0x${string}`);
     case "DeadlinePassed":
       return new DeadlinePassedError();
+    case "EarlyWithdraw":
+      return new EarlyWithdrawError(args[0] as bigint, args[1] as bigint);
     case "PriceDeviation":
       return new OracleDeviationError(
         args[0] as `0x${string}`,

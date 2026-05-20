@@ -28,17 +28,29 @@ const arcTestnet = defineChain({
 
 const GUARD = "0x035447f8d97A23fFfC32aa8bFb8ffDbC7B94E608";
 
-// (token, aggregator) pairs — fixed P3 deployment addresses.
+// Registry address — aggregators are resolved from here at startup so the
+// script automatically tracks whatever oracle the Registry currently points at.
+// This survives any future oracle migration (e.g. V1→V2 aggregators after P3.5)
+// with no code change.
+const REGISTRY = "0x9914436E5245bF3c0d4D4338e0a8b8F5Ab5505aB";
+
+// Token list — aggregator field is resolved from Registry.tokenInfo() at startup.
 const TOKENS = [
-    { symbol: "USDC",  token: "0x3BFa09fF6467639f0981948385bA1018Ac07d22C", aggregator: "0x6c6519cB0C66c2269505833382f23D4e8f915480" },
-    { symbol: "USDT",  token: "0x342B6e4fD6896f0BCc80f8e9799e2bce65b9844B", aggregator: "0x3e58dd7fD2729A27961Ffb11d37BFf42874cAa34" },
-    { symbol: "PYUSD", token: "0xfdB2c86d010698401f0b969348DC58b6659B96a3", aggregator: "0x78cB5F03b420F0CD2E8adcb141069F31a38E07E8" },
-    { symbol: "DAI",   token: "0xFf7d46fe2f672BB6dc1586613303c7b012aCafFE", aggregator: "0x3e542b4d2EdBFC965028eB85140BcFEa6868A37E" },
-    { symbol: "EURC",  token: "0xe08EF7Cb507706D8ff287A41Cf607Fb2d03473BD", aggregator: "0x1357cf421A8c3b732A882e4812AFba6209EBEBbc" },
-    { symbol: "TRYC",  token: "0xD564EBcCFAE91f2E234b3074B0ad75eF7A820e61", aggregator: "0xFE3FE7F2b2693D676E4831283dd1B81665AC9faA" },
-    { symbol: "BRLC",  token: "0xa13c0935A98e2c175b31A4054f698819271a8FfC", aggregator: "0xF5021349E0D6e2ACB00bEb105D7793202ac3Aa46" },
+    { symbol: "USDC",  token: "0x3BFa09fF6467639f0981948385bA1018Ac07d22C" },
+    { symbol: "USDT",  token: "0x342B6e4fD6896f0BCc80f8e9799e2bce65b9844B" },
+    { symbol: "PYUSD", token: "0xfdB2c86d010698401f0b969348DC58b6659B96a3" },
+    { symbol: "DAI",   token: "0xFf7d46fe2f672BB6dc1586613303c7b012aCafFE" },
+    { symbol: "EURC",  token: "0xe08EF7Cb507706D8ff287A41Cf607Fb2d03473BD" },
+    { symbol: "TRYC",  token: "0xD564EBcCFAE91f2E234b3074B0ad75eF7A820e61" },
+    { symbol: "BRLC",  token: "0xa13c0935A98e2c175b31A4054f698819271a8FfC" },
 ];
 
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+
+const REGISTRY_ABI = parseAbi([
+    // tokenInfo(address token) -> (uint8 decimals, bool isActive, address usdOracle, uint16 maxOracleDeviationBps, uint32 maxStaleSeconds)
+    "function tokenInfo(address token) view returns (uint8 decimals, bool isActive, address usdOracle, uint16 maxOracleDeviationBps, uint32 maxStaleSeconds)",
+]);
 const AGG_ABI = parseAbi([
     "function latestRoundData() view returns (uint80,int256,uint256,uint256,uint80)",
 ]);
@@ -62,7 +74,37 @@ async function main() {
     let recorded = 0;
     let errored = 0;
 
+    // Resolve each token's aggregator from the Registry at startup.
+    // This means the script automatically uses whatever oracle the Registry
+    // currently points at — no code change needed after an oracle migration.
+    log("resolving aggregators from Registry…");
+    const tokens = [];
     for (const t of TOKENS) {
+        try {
+            const info = await publicClient.readContract({
+                address: REGISTRY, abi: REGISTRY_ABI, functionName: "tokenInfo",
+                args: [t.token],
+            });
+            const [, isActive, usdOracle] = info;
+            if (!isActive) {
+                log(`${t.symbol}: ERROR token is !isActive in Registry — skipping`);
+                errored++;
+                continue;
+            }
+            if (!usdOracle || usdOracle.toLowerCase() === ZERO_ADDRESS) {
+                log(`${t.symbol}: ERROR usdOracle resolved to address(0) — skipping`);
+                errored++;
+                continue;
+            }
+            log(`${t.symbol}: aggregator=${usdOracle}`);
+            tokens.push({ ...t, aggregator: usdOracle });
+        } catch (err) {
+            log(`${t.symbol}: ERROR resolving tokenInfo — ${err?.message || err}`);
+            errored++;
+        }
+    }
+
+    for (const t of tokens) {
         try {
             // latestRoundData() reverts if the aggregator's sources diverge or
             // are all unavailable — treat that as an errored token, not a hard stop.
