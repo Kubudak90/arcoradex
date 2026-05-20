@@ -3,11 +3,13 @@ pragma solidity ^0.8.26;
 
 import {Script, console2} from "forge-std/Script.sol";
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
+import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {Safe} from "@safe-global/safe-contracts/contracts/Safe.sol";
 import {SafeProxyFactory} from "@safe-global/safe-contracts/contracts/proxies/SafeProxyFactory.sol";
 
 import {ArcoraDexPool} from "../src/ArcoraDexPool.sol";
 import {ArcoraDexRegistry} from "../src/ArcoraDexRegistry.sol";
+import {MockChainlinkFeedV2} from "../src/testnet/MockChainlinkFeedV2.sol";
 import {SafeSigHelpers} from "../test/governance/SafeSigHelpers.sol";
 
 contract DeployGovernanceP2 is Script {
@@ -43,15 +45,20 @@ contract DeployGovernanceP2 is Script {
         (Safe governanceSafe, Safe pauseGuardianSafe, TimelockController timelock, uint256[5] memory govKeys) =
             _deployInfra();
 
-        // Step 6: Pool + Registry: transferOwnership to Timelock
+        // Step 6: Feed ownership → Governance Safe FIRST so a failure here leaves
+        // Pool/Registry still owned by the deployer (recoverable). The Pool/Registry
+        // handoff below is irreversible from the deployer's side once it lands.
+        _transferFeedOwnership(governanceSafe, govKeys);
+
+        // Step 7: Pool + Registry: transferOwnership to Timelock
         pool.transferOwnership(address(timelock));
         reg.transferOwnership(address(timelock));
 
-        // Step 7: Governance Safe schedules + executes Pool/Registry acceptOwnership
+        // Step 8: Governance Safe schedules + executes Pool/Registry acceptOwnership
         _scheduleAndExec(governanceSafe, govKeys, timelock, address(pool), abi.encodeCall(pool.acceptOwnership, ()));
         _scheduleAndExec(governanceSafe, govKeys, timelock, address(reg), abi.encodeCall(reg.acceptOwnership, ()));
 
-        // Step 8: setPauseGuardian
+        // Step 9: setPauseGuardian
         _scheduleAndExec(
             governanceSafe,
             govKeys,
@@ -59,9 +66,6 @@ contract DeployGovernanceP2 is Script {
             address(pool),
             abi.encodeCall(pool.setPauseGuardian, (address(pauseGuardianSafe)))
         );
-
-        // Step 9: Transfer feed ownership to Governance Safe (direct, no timelock)
-        _transferFeedOwnership(governanceSafe, govKeys);
 
         // Step 10: Lockdown: updateDelay(48h)
         _scheduleAndExec(
@@ -163,20 +167,41 @@ contract DeployGovernanceP2 is Script {
     }
 
     /// @dev Transfers all 7 feed ownerships to governanceSafe and accepts them.
+    /// Re-runnable: skips any feed already owned by the Safe (mirrors the
+    /// P3GovernanceActions._accept idempotency pattern). Fails loudly if a feed
+    /// is owned by neither the deployer nor the Safe — that indicates a partial
+    /// or corrupt state that must not silently no-op.
     function _transferFeedOwnership(Safe governanceSafe, uint256[5] memory govKeys) internal {
-        for (uint256 i = 0; i < 7; i++) {
-            (bool ok,) = FEEDS[i].call(abi.encodeWithSignature("transferOwnership(address)", address(governanceSafe)));
-            require(ok, "feed transferOwnership failed");
-        }
+        address safe = address(governanceSafe);
+        address deployer = vm.addr(vm.envUint("DEPLOYER_PRIVATE_KEY"));
+
         uint256[] memory acceptKeys = new uint256[](3);
         acceptKeys[0] = govKeys[0];
         acceptKeys[1] = govKeys[1];
         acceptKeys[2] = govKeys[2];
+
         for (uint256 i = 0; i < 7; i++) {
+            MockChainlinkFeedV2 feed = MockChainlinkFeedV2(FEEDS[i]);
+            address currentOwner = feed.owner();
+
+            if (currentOwner == safe) {
+                console2.log("feed already Safe-owned, skipping:", FEEDS[i]);
+                continue;
+            }
+
+            require(currentOwner == deployer, "feed owner is neither deployer nor Safe");
+
+            // transferOwnership is onlyOwner on Ownable2Step — sets pendingOwner.
+            feed.transferOwnership(safe);
+
+            // The Safe (the pendingOwner) calls acceptOwnership via the standard
+            // execCall helper used elsewhere in this script.
             require(
-                governanceSafe.execCall(FEEDS[i], abi.encodeWithSignature("acceptOwnership()"), acceptKeys),
+                governanceSafe.execCall(FEEDS[i], abi.encodeCall(Ownable2Step.acceptOwnership, ()), acceptKeys),
                 "feed acceptOwnership failed"
             );
+
+            require(feed.owner() == safe, "post-transfer owner check failed");
         }
     }
 
