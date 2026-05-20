@@ -345,6 +345,47 @@ outcomes.
 
 ---
 
+## R9 — Oracle-priced zero-impact swaps (finding C-3, accepted design)
+
+ArcoraDEX prices swaps from oracles with a flat `swapFeeBps`; there is no
+constant-product curve and no utilization-scaled penalty. An actor observing a
+real stablecoin de-peg can convert the mispriced token at the oracle rate with
+zero slippage, bounded only by `reserves[tokenOut]`. **This is by design** —
+the system is an oracle swap desk, not a CFMM. LP value leaks to arbitrageurs
+on every oracle-vs-market basis event.
+
+**Compensating controls:**
+- Tight `maxOracleDeviationBps` (per-token, 50/150/200 bps).
+- Keeper cadence ≤ 30 min keeps the on-chain price close to the live rate.
+- Phase D's aggregator hardening (per-source staleness, degraded-mode signal)
+  reduces the window during which the oracle lags the real market.
+
+**Not mitigated:** the underlying basis exposure during legitimate de-peg
+events. Considered acceptable given the testnet stable mix and the design
+goal of zero-slippage oracle pricing.
+
+## R10 — Single-token full-pool withdrawal (finding C-4, accepted design)
+
+`withdraw(tokenOut, lpAmount, …)` redeems an LP's full proportional NAV share
+but pays it entirely in one chosen token. A large LP can debit
+`reserves[tokenOut]` by the USD value of their whole multi-token claim,
+exiting in whichever token is currently oracle-cheap vs market. **This is by
+design** — the contract supports single-token exit deliberately for UX
+simplicity.
+
+**Compensating controls:**
+- `MIN_HOLD_SECONDS = 1 hour` (R2) slows mass exit.
+- The 0.05% protocol fee + LP-retained fee on withdraw applies regardless of
+  token choice.
+- The `Withdrew` event records the chosen `tokenOut` and `usdNet`, so token-
+  selection bias is auditable post-hoc.
+
+**Not mitigated:** the economic and availability hazard of one LP zeroing
+`reserves[tokenOut]`. A future proportional multi-token withdraw is a possible
+enhancement, deferred to post-audit.
+
+---
+
 *All claims above are verifiable against the contract source files in
 `contracts/src/`, the design specs in `docs/superpowers/specs/`, and the threat
 model in `docs/audit/threat-model.md`.*
