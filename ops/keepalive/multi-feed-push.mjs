@@ -39,13 +39,13 @@ const arcTestnet = defineChain({
 // market drifts faster than one tick: the keeper takes multiple ticks
 // to walk the on-chain answer toward the true price.
 const FEEDS = [
-    { symbol: "USDC",  feed: process.env.FEED_USDC,  secondary: process.env.P3_SECONDARY_USDC,  hardcodedAnswer1e8: 100_000_000n, band: { min: 1.00, max: 1.00 }, maxDevBps: 50 },
-    { symbol: "USDT",  feed: process.env.FEED_USDT,  secondary: process.env.P3_SECONDARY_USDT,  coingeckoId: "tether",          band: { min: 0.95, max: 1.05 }, maxDevBps: 50 },
-    { symbol: "PYUSD", feed: process.env.FEED_PYUSD, secondary: process.env.P3_SECONDARY_PYUSD, coingeckoId: "paypal-usd",      band: { min: 0.95, max: 1.05 }, maxDevBps: 50 },
-    { symbol: "DAI",   feed: process.env.FEED_DAI,   secondary: process.env.P3_SECONDARY_DAI,   coingeckoId: "dai",             band: { min: 0.95, max: 1.05 }, maxDevBps: 50 },
-    { symbol: "EURC",  feed: process.env.FEED_EURC,  secondary: process.env.P3_SECONDARY_EURC,  coingeckoVsCurrency: "eur",     band: { min: 1.00, max: 1.30 }, maxDevBps: 150 },
-    { symbol: "TRYC",  feed: process.env.FEED_TRYC,  secondary: process.env.P3_SECONDARY_TRYC,  coingeckoVsCurrency: "try",     band: { min: 0.01, max: 0.10 }, maxDevBps: 150 },
-    { symbol: "BRLC",  feed: process.env.FEED_BRLC,  secondary: process.env.P3_SECONDARY_BRLC,  coingeckoVsCurrency: "brl",     band: { min: 0.10, max: 0.30 }, maxDevBps: 150 },
+    { symbol: "USDC",  feed: process.env.FEED_USDC,  secondary: process.env.P3_SECONDARY_USDC,  hardcodedAnswer1e8: 100_000_000n, band: { min: 1.00, max: 1.00 }, maxDevBps: 50,  peg: 1.00, maxPegDriftBps: 200 },
+    { symbol: "USDT",  feed: process.env.FEED_USDT,  secondary: process.env.P3_SECONDARY_USDT,  coingeckoId: "tether",          band: { min: 0.95, max: 1.05 }, maxDevBps: 50,  peg: 1.00, maxPegDriftBps: 200 },
+    { symbol: "PYUSD", feed: process.env.FEED_PYUSD, secondary: process.env.P3_SECONDARY_PYUSD, coingeckoId: "paypal-usd",      band: { min: 0.95, max: 1.05 }, maxDevBps: 50,  peg: 1.00, maxPegDriftBps: 200 },
+    { symbol: "DAI",   feed: process.env.FEED_DAI,   secondary: process.env.P3_SECONDARY_DAI,   coingeckoId: "dai",             band: { min: 0.95, max: 1.05 }, maxDevBps: 50,  peg: 1.00, maxPegDriftBps: 200 },
+    { symbol: "EURC",  feed: process.env.FEED_EURC,  secondary: process.env.P3_SECONDARY_EURC,  coingeckoVsCurrency: "eur",     band: { min: 1.00, max: 1.30 }, maxDevBps: 150, peg: null, maxPegDriftBps: null },
+    { symbol: "TRYC",  feed: process.env.FEED_TRYC,  secondary: process.env.P3_SECONDARY_TRYC,  coingeckoVsCurrency: "try",     band: { min: 0.01, max: 0.10 }, maxDevBps: 150, peg: null, maxPegDriftBps: null },
+    { symbol: "BRLC",  feed: process.env.FEED_BRLC,  secondary: process.env.P3_SECONDARY_BRLC,  coingeckoVsCurrency: "brl",     band: { min: 0.10, max: 0.30 }, maxDevBps: 150, peg: null, maxPegDriftBps: null },
 ];
 
 const FEED_ABI = parseAbi([
@@ -159,7 +159,7 @@ async function pushFeedAddress(publicClient, walletClient, label, feedAddr, usd,
             ? `capped@${maxDevBps}bps (target=${targetAnswer})`
             : prev === newAnswer ? "refresh" : "value";
         log(`${label}: ${prev} -> ${newAnswer} (usd=${usd}, ${reason}, age=${ageSeconds}s) tx=${hash}`);
-        return "updated";
+        return capped ? "capped-updated" : "updated";
     } catch (err) {
         log(`${label}: ERROR ${err?.message || err}`);
         return "errored";
@@ -181,6 +181,8 @@ async function main() {
     let updated = 0;
     let skipped = 0;
     let errored = 0;
+    let capped = 0;
+    const cappedFeedsThisRun = new Map(); // symbol -> { primary: bool, secondary: bool }
 
     const prices = await fetchAllPrices(FEEDS, apiKey);
 
@@ -196,21 +198,46 @@ async function main() {
             skipped += 2;
             continue;
         }
-        for (const [label, addr] of [[`${f.symbol} primary`, f.feed], [`${f.symbol} secondary`, f.secondary]]) {
+        if (f.peg !== null && f.peg > 0 && f.maxPegDriftBps !== null) {
+            const driftBps = Math.abs(usd - f.peg) * 10_000 / f.peg;
+            if (driftBps > f.maxPegDriftBps) {
+                log(`${f.symbol}: usd=${usd} drifts ${driftBps.toFixed(1)} bps from peg=${f.peg} (cap=${f.maxPegDriftBps} bps) — skip both feeds`);
+                errored += 2;
+                continue;
+            }
+        }
+        for (const [role, addr] of [["primary", f.feed], ["secondary", f.secondary]]) {
+            const label = `${f.symbol} ${role}`;
             if (!addr) {
                 log(`${label}: feed address env missing — skip`);
                 errored++;
                 continue;
             }
             const outcome = await pushFeedAddress(publicClient, walletClient, label, addr, usd, f.maxDevBps);
-            if (outcome === "updated") updated++;
-            else if (outcome === "skipped") skipped++;
-            else errored++;
+            if (outcome === "updated") {
+                updated++;
+            } else if (outcome === "skipped") {
+                skipped++;
+            } else if (outcome === "capped-updated") {
+                updated++;
+                capped++;
+                const entry = cappedFeedsThisRun.get(f.symbol) ?? { primary: false, secondary: false };
+                entry[role] = true;
+                cappedFeedsThisRun.set(f.symbol, entry);
+            } else {
+                errored++;
+            }
         }
     }
 
-    log(`done updated=${updated} skipped=${skipped} errored=${errored}`);
-    if (errored > 0) process.exit(1);
+    const bothCapped = [...cappedFeedsThisRun.entries()]
+        .filter(([, v]) => v.primary && v.secondary)
+        .map(([s]) => s);
+    if (bothCapped.length > 0) {
+        log(`WARN: both primary and secondary capped this run for: ${bothCapped.join(", ")} — sustained live drift > maxDevBps`);
+    }
+    log(`done updated=${updated} skipped=${skipped} errored=${errored} capped=${capped}`);
+    if (errored > 0 || bothCapped.length > 0) process.exit(1);
 }
 
 main().catch((err) => {
