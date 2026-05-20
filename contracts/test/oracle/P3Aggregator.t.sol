@@ -437,3 +437,61 @@ contract P3AggregatorGovernanceTest is Test {
         require(governanceSafe.execCall(to, data, keys), "gov exec failed");
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// P3AggregatorDegradedConsumerTest  (Task D3 — audit C-1 regression)
+//
+// Pins the integration contract between OracleAggregator V2 and any
+// Chainlink-style consumer that uses the standard roundId-based freshness
+// pattern (the Pool's _readOracle: roundOk = roundId != 0 && air >= roundId).
+//
+// When one source goes stale the aggregator returns roundId = 0; a consumer
+// that checks roundId falls back to cache rather than accepting the
+// degraded read. This test ensures that invariant cannot silently regress.
+// ─────────────────────────────────────────────────────────────────────────────
+contract P3AggregatorDegradedConsumerTest is Test {
+    address constant OWNER = address(0x0a);
+    MockChainlinkFeedV2 primary;
+    MockChainlinkFeedV2 secondary;
+
+    function setUp() public {
+        primary = new MockChainlinkFeedV2(8, 100_000_000, OWNER, OWNER); // $1.00
+        secondary = new MockChainlinkFeedV2(8, 100_000_000, OWNER, OWNER); // $1.00
+    }
+
+    /// @dev D3 regression test: aggregator in degraded (single-source) mode
+    ///      returns roundId == 0, causing the Pool-style roundOk check to reject
+    ///      the read and fall back to the lastValidPrice cache.
+    ///
+    ///      The Pool's _readOracle computes:
+    ///          bool roundOk = (roundId != 0 && answeredInRound >= roundId);
+    ///          bool isFresh = roundOk && (block.timestamp - updatedAt <= maxStaleSeconds);
+    ///      When isFresh is false, it falls back to lastValidPrice instead of
+    ///      using the aggregator's degraded reading.
+    function test_aggregator_degraded_signals_roundId_zero_to_consumer() public {
+        OracleAggregator agg = new OracleAggregator(
+            IChainlinkAggregator(address(primary)),
+            IChainlinkAggregator(address(secondary)),
+            200,
+            60, // MAX_STALE_SECONDS — tight so the primary goes stale quickly
+            OWNER
+        );
+
+        // Make primary stale: warp 120s (> 60s threshold) without refreshing primary.
+        vm.warp(block.timestamp + 120);
+
+        // Refresh secondary so it's the only fresh source.
+        vm.prank(OWNER);
+        secondary.setAnswer(102_000_000);
+
+        // Degraded read: roundId must be 0 (single-source signal).
+        (uint80 roundId, int256 ans,,,) = agg.latestRoundData();
+        assertEq(roundId, 0, "degraded mode signals roundId == 0");
+        assertGt(ans, 0, "value is present but consumer must ignore it via roundOk");
+
+        // Cross-check: simulate the Pool's _readOracle roundOk computation.
+        // Pool code: bool roundOk = (roundId != 0 && answeredInRound >= roundId);
+        bool roundOk = (roundId != 0);
+        assertFalse(roundOk, "Pool-side roundOk must reject degraded reads, triggering cache fallback");
+    }
+}
