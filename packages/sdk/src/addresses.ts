@@ -6,13 +6,20 @@ export interface ArcoraDexAddresses {
   lp:       `0x${string}`;
 }
 
-/** v1.0-testnet addresses, recorded in docs/rollouts/2026-05-06-arcoradex-deploy.md. */
-const ARC_TESTNET_V1: ArcoraDexAddresses = {
-  registry: "0x920E3E59DD37Be3D9D3750D7B912A9dd08db0D29",
-  pool:     "0x3051d24D771bAF44031571544a9159578035D0c5",
-  lp:       "0x7CEAbF411806A29ffaEbCAB2BF3Dc8a9ECBD110C",
+/**
+ * Live V3-testnet addresses on Arc (chainId 5042002).
+ * Recorded in:
+ *   - docs/rollouts/2026-05-14-phase3-oracle.md     (P3 oracle layer)
+ *   - docs/rollouts/2026-05-14-phase2-governance.md (Timelock/Safe owners)
+ * V1 addresses (paused) are kept only in git history; see commit dae32d1 for
+ * the original.
+ */
+const ARC_TESTNET_V3: ArcoraDexAddresses = {
+  registry: "0x9914436E5245bF3c0d4D4338e0a8b8F5Ab5505aB",
+  pool:     "0x1ce1Ef94e7ebe70727BD69003d61A3F0c9A331bc",
+  lp:       "0x17B47173C457069E53B3B75Ef42773041B79523e",
 };
 
 export const DEFAULT_ADDRESSES: Record<number, ArcoraDexAddresses> = {
-  [arcTestnet.id]: ARC_TESTNET_V1,
+  [arcTestnet.id]: ARC_TESTNET_V3,
 };
