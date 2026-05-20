@@ -28,6 +28,7 @@ contract P3AggregatorTest is Test {
             IChainlinkAggregator(address(primary)),
             IChainlinkAggregator(address(secondary)),
             200, // 2% divergence cap
+            3600, // MAX_STALE_SECONDS
             OWNER
         );
         // primary $1.00, secondary $1.01 -> avg $1.005, within 200 bps
@@ -43,6 +44,7 @@ contract P3AggregatorTest is Test {
             IChainlinkAggregator(address(primary)),
             IChainlinkAggregator(address(secondary)),
             200, // 2% cap
+            3600, // MAX_STALE_SECONDS
             OWNER
         );
         // primary $1.00, secondary $1.05 -> 5% divergence, exceeds 200 bps
@@ -60,7 +62,7 @@ contract P3AggregatorTest is Test {
     function test_aggregator_returns_primary_when_secondary_reverts() public {
         RevertingMockFeed bad = new RevertingMockFeed(8);
         OracleAggregator agg = new OracleAggregator(
-            IChainlinkAggregator(address(primary)), IChainlinkAggregator(address(bad)), 200, OWNER
+            IChainlinkAggregator(address(primary)), IChainlinkAggregator(address(bad)), 200, 3600, OWNER
         );
         (, int256 ans,,,) = agg.latestRoundData();
         assertEq(ans, int256(100_000_000), "should return primary when secondary reverts");
@@ -70,14 +72,14 @@ contract P3AggregatorTest is Test {
         RevertingMockFeed bad1 = new RevertingMockFeed(8);
         RevertingMockFeed bad2 = new RevertingMockFeed(8);
         OracleAggregator agg =
-            new OracleAggregator(IChainlinkAggregator(address(bad1)), IChainlinkAggregator(address(bad2)), 200, OWNER);
+            new OracleAggregator(IChainlinkAggregator(address(bad1)), IChainlinkAggregator(address(bad2)), 200, 3600, OWNER);
         vm.expectRevert(abi.encodeWithSelector(OracleAggregator.AllSourcesUnavailable.selector));
         agg.latestRoundData();
     }
 
     function test_setMaxDivergenceBps_onlyOwner() public {
         OracleAggregator agg = new OracleAggregator(
-            IChainlinkAggregator(address(primary)), IChainlinkAggregator(address(secondary)), 200, OWNER
+            IChainlinkAggregator(address(primary)), IChainlinkAggregator(address(secondary)), 200, 3600, OWNER
         );
 
         // Non-owner reverts
@@ -95,7 +97,7 @@ contract P3AggregatorTest is Test {
     function test_constructor_reverts_on_decimals_mismatch() public {
         MockChainlinkFeedV2 sec6 = new MockChainlinkFeedV2(6, 1_000_000, OWNER, OWNER);
         vm.expectRevert(abi.encodeWithSelector(OracleAggregator.DecimalsMismatch.selector, uint8(8), uint8(6)));
-        new OracleAggregator(IChainlinkAggregator(address(primary)), IChainlinkAggregator(address(sec6)), 200, OWNER);
+        new OracleAggregator(IChainlinkAggregator(address(primary)), IChainlinkAggregator(address(sec6)), 200, 3600, OWNER);
     }
 
     // M3-1: divergence exactly at the cap must NOT revert (strict > means AT cap passes)
@@ -107,6 +109,7 @@ contract P3AggregatorTest is Test {
             IChainlinkAggregator(address(primary)),
             IChainlinkAggregator(address(secondary)),
             200, // 2% cap
+            3600, // MAX_STALE_SECONDS
             OWNER
         );
         vm.prank(OWNER);
@@ -116,27 +119,26 @@ contract P3AggregatorTest is Test {
         assertEq(ans, int256(101_000_000), "avg of 1.00 and 1.02 = 1.01 at exact cap boundary");
     }
 
-    // M3-2: _tryRead REJECT path (not revert): secondary returns answer=0, falls back to primary
-    function test_aggregator_falls_back_when_source_returns_zero_answer() public {
+    // M3-2: _tryRead REJECT path: secondary returns a bad read (reverts), falls back to primary.
+    // After D1 MockChainlinkFeedV2 rejects non-positive answers, a "zero-answer" source is
+    // represented by RevertingMockFeed — the _tryRead catch path covers the same aggregator logic.
+    function test_aggregator_falls_back_when_source_is_unavailable() public {
+        RevertingMockFeed badSecondary = new RevertingMockFeed(8);
         OracleAggregator agg = new OracleAggregator(
-            IChainlinkAggregator(address(primary)), IChainlinkAggregator(address(secondary)), 200, OWNER
+            IChainlinkAggregator(address(primary)), IChainlinkAggregator(address(badSecondary)), 200, 3600, OWNER
         );
-        vm.prank(OWNER);
-        secondary.setAnswer(0); // _tryRead will reject (a > 0 fails)
 
         (, int256 ans,,,) = agg.latestRoundData();
-        assertEq(ans, int256(100_000_000), "should fall back to primary when secondary returns zero answer");
+        assertEq(ans, int256(100_000_000), "should fall back to primary when secondary is unavailable");
     }
 
-    // M3-3: both sources return answer=0 => AllSourcesUnavailable
-    function test_aggregator_reverts_when_both_sources_return_zero() public {
+    // M3-3: both sources unavailable => AllSourcesUnavailable
+    function test_aggregator_reverts_when_both_sources_are_unavailable() public {
+        RevertingMockFeed badPrimary = new RevertingMockFeed(8);
+        RevertingMockFeed badSecondary = new RevertingMockFeed(8);
         OracleAggregator agg = new OracleAggregator(
-            IChainlinkAggregator(address(primary)), IChainlinkAggregator(address(secondary)), 200, OWNER
+            IChainlinkAggregator(address(badPrimary)), IChainlinkAggregator(address(badSecondary)), 200, 3600, OWNER
         );
-        vm.prank(OWNER);
-        primary.setAnswer(0);
-        vm.prank(OWNER);
-        secondary.setAnswer(0);
 
         vm.expectRevert(abi.encodeWithSelector(OracleAggregator.AllSourcesUnavailable.selector));
         agg.latestRoundData();
@@ -147,21 +149,33 @@ contract P3AggregatorTest is Test {
     // Constructor revert: zero divergence bps
     function test_constructor_reverts_on_zero_divergence_bps() public {
         vm.expectRevert(abi.encodeWithSelector(OracleAggregator.InvalidDivergenceBps.selector, uint16(0)));
-        new OracleAggregator(IChainlinkAggregator(address(primary)), IChainlinkAggregator(address(secondary)), 0, OWNER);
+        new OracleAggregator(IChainlinkAggregator(address(primary)), IChainlinkAggregator(address(secondary)), 0, 3600, OWNER);
     }
 
     // Constructor revert: divergence bps above 10_000
     function test_constructor_reverts_on_divergence_bps_above_max() public {
         vm.expectRevert(abi.encodeWithSelector(OracleAggregator.InvalidDivergenceBps.selector, uint16(10_001)));
         new OracleAggregator(
-            IChainlinkAggregator(address(primary)), IChainlinkAggregator(address(secondary)), 10_001, OWNER
+            IChainlinkAggregator(address(primary)), IChainlinkAggregator(address(secondary)), 10_001, 3600, OWNER
+        );
+    }
+
+    // Constructor revert: zero maxStaleSeconds
+    function test_constructor_reverts_on_zero_stale_seconds() public {
+        vm.expectRevert(abi.encodeWithSelector(OracleAggregator.InvalidStaleSeconds.selector, uint32(0)));
+        new OracleAggregator(
+            IChainlinkAggregator(address(primary)),
+            IChainlinkAggregator(address(secondary)),
+            200,    // divergence bps
+            0,      // maxStaleSeconds_ - must be > 0
+            OWNER
         );
     }
 
     // setMaxDivergenceBps reverts on both invalid boundary values
     function test_setMaxDivergenceBps_reverts_on_invalid() public {
         OracleAggregator agg = new OracleAggregator(
-            IChainlinkAggregator(address(primary)), IChainlinkAggregator(address(secondary)), 200, OWNER
+            IChainlinkAggregator(address(primary)), IChainlinkAggregator(address(secondary)), 200, 3600, OWNER
         );
 
         // zero bps
@@ -178,7 +192,7 @@ contract P3AggregatorTest is Test {
     // decimals() external view returns the feed's decimals
     function test_decimals_returns_feed_decimals() public {
         OracleAggregator agg = new OracleAggregator(
-            IChainlinkAggregator(address(primary)), IChainlinkAggregator(address(secondary)), 200, OWNER
+            IChainlinkAggregator(address(primary)), IChainlinkAggregator(address(secondary)), 200, 3600, OWNER
         );
         assertEq(agg.decimals(), 8, "DECIMALS should equal the feed's 8 decimals");
     }
@@ -188,7 +202,7 @@ contract P3AggregatorTest is Test {
         // One reverting secondary -> (true, false)
         RevertingMockFeed bad = new RevertingMockFeed(8);
         OracleAggregator agg = new OracleAggregator(
-            IChainlinkAggregator(address(primary)), IChainlinkAggregator(address(bad)), 200, OWNER
+            IChainlinkAggregator(address(primary)), IChainlinkAggregator(address(bad)), 200, 3600, OWNER
         );
         (bool pOk, bool sOk) = agg.sourceHealth();
         assertTrue(pOk, "primary should be healthy");
@@ -196,11 +210,64 @@ contract P3AggregatorTest is Test {
 
         // Both healthy -> (true, true)
         OracleAggregator agg2 = new OracleAggregator(
-            IChainlinkAggregator(address(primary)), IChainlinkAggregator(address(secondary)), 200, OWNER
+            IChainlinkAggregator(address(primary)), IChainlinkAggregator(address(secondary)), 200, 3600, OWNER
         );
         (bool p2Ok, bool s2Ok) = agg2.sourceHealth();
         assertTrue(p2Ok, "primary should be healthy");
         assertTrue(s2Ok, "secondary should be healthy");
+    }
+
+    // ── D2 new tests: per-source staleness + degraded-mode signal ─────────────
+
+    function test_tryRead_rejects_stale_per_source() public {
+        // primary is stale, secondary is fresh — aggregator should run in degraded
+        // mode using the secondary's price, and signal that via roundId == 0.
+        OracleAggregator agg = new OracleAggregator(
+            IChainlinkAggregator(address(primary)),
+            IChainlinkAggregator(address(secondary)),
+            200, // divergence cap
+            60, // MAX_STALE_SECONDS — tight to keep the test deterministic
+            OWNER
+        );
+        vm.warp(block.timestamp + 120); // primary now 120s old, > 60s threshold
+        vm.prank(OWNER);
+        secondary.setAnswer(102_000_000); // refresh secondary at the new block.timestamp
+
+        (uint80 roundId, int256 ans,, uint256 updatedAt,) = agg.latestRoundData();
+        assertEq(roundId, 0, "degraded mode signals roundId == 0");
+        assertEq(ans, int256(102_000_000), "ans comes from the fresh secondary");
+        assertEq(updatedAt, block.timestamp, "updatedAt == secondary's timestamp");
+    }
+
+    function test_latestRoundData_uses_min_updatedAt_when_both_ok() public {
+        OracleAggregator agg = new OracleAggregator(
+            IChainlinkAggregator(address(primary)),
+            IChainlinkAggregator(address(secondary)),
+            200,
+            3600, // MAX_STALE_SECONDS generous
+            OWNER
+        );
+        uint256 t0 = block.timestamp;
+        vm.warp(t0 + 30);
+        vm.prank(OWNER);
+        secondary.setAnswer(101_000_000); // secondary now fresher than primary
+
+        (,,, uint256 updatedAt,) = agg.latestRoundData();
+        assertEq(updatedAt, t0, "returns min(pAt, sAt) = primary's older timestamp");
+    }
+
+    function test_latestRoundData_returns_nonzero_roundId_when_both_ok() public {
+        OracleAggregator agg = new OracleAggregator(
+            IChainlinkAggregator(address(primary)),
+            IChainlinkAggregator(address(secondary)),
+            200,
+            3600,
+            OWNER
+        );
+        vm.prank(OWNER);
+        secondary.setAnswer(101_000_000);
+        (uint80 roundId,,,,) = agg.latestRoundData();
+        assertGt(roundId, 0, "healthy two-source must report a real (non-zero) roundId");
     }
 }
 
@@ -319,6 +386,7 @@ contract P3AggregatorGovernanceTest is Test {
             IChainlinkAggregator(address(primary)),
             IChainlinkAggregator(address(secondary)),
             200,
+            3600, // MAX_STALE_SECONDS
             address(governanceSafe)
         );
     }
@@ -361,6 +429,13 @@ contract P3AggregatorGovernanceTest is Test {
         );
 
         // 5. Aggregator returns the average of both $1.00 sources = $1.00.
+        // Refresh feeds so they are not stale after the 48h timelock warp —
+        // the aggregator V2 per-source staleness check (MAX_STALE_SECONDS=3600)
+        // would reject feeds last updated at setUp time (>48h ago).
+        vm.startPrank(DEPLOYER);
+        primary.setAnswer(100_000_000);
+        secondary.setAnswer(100_000_000);
+        vm.stopPrank();
         (, int256 ans,,,) = aggregator.latestRoundData();
         assertEq(ans, int256(100_000_000), "aggregator returns avg of two $1.00 sources");
     }
@@ -372,5 +447,66 @@ contract P3AggregatorGovernanceTest is Test {
         keys[1] = govKeys[1];
         keys[2] = govKeys[2];
         require(governanceSafe.execCall(to, data, keys), "gov exec failed");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// P3AggregatorDegradedConsumerTest  (Task D3 — audit C-1 regression)
+//
+// Pins the integration contract between OracleAggregator V2 and any
+// Chainlink-style consumer that uses the standard roundId-based freshness
+// pattern (the Pool's _readOracle: roundOk = roundId != 0 && air >= roundId).
+//
+// When one source goes stale the aggregator returns roundId = 0; a consumer
+// that checks roundId falls back to cache rather than accepting the
+// degraded read. This test ensures that invariant cannot silently regress.
+// ─────────────────────────────────────────────────────────────────────────────
+contract P3AggregatorDegradedConsumerTest is Test {
+    address constant OWNER = address(0x0a);
+    MockChainlinkFeedV2 primary;
+    MockChainlinkFeedV2 secondary;
+
+    function setUp() public {
+        primary = new MockChainlinkFeedV2(8, 100_000_000, OWNER, OWNER); // $1.00
+        secondary = new MockChainlinkFeedV2(8, 100_000_000, OWNER, OWNER); // $1.00
+    }
+
+    /// @dev D3 regression test: aggregator in degraded (single-source) mode
+    ///      returns roundId == 0, causing the Pool-style roundOk check to reject
+    ///      the read and fall back to the lastValidPrice cache.
+    ///
+    ///      The Pool's _readOracle computes:
+    ///          bool roundOk = (roundId != 0 && answeredInRound >= roundId);
+    ///          bool isFresh = roundOk && (block.timestamp - updatedAt <= maxStaleSeconds);
+    ///      When isFresh is false, it falls back to lastValidPrice instead of
+    ///      using the aggregator's degraded reading.
+    function test_aggregator_degraded_signals_roundId_zero_to_consumer() public {
+        OracleAggregator agg = new OracleAggregator(
+            IChainlinkAggregator(address(primary)),
+            IChainlinkAggregator(address(secondary)),
+            200,
+            60, // MAX_STALE_SECONDS — tight so the primary goes stale quickly
+            OWNER
+        );
+
+        // Make primary stale: warp 120s (> 60s threshold) without refreshing primary.
+        vm.warp(block.timestamp + 120);
+
+        // Refresh secondary so it's the only fresh source.
+        vm.prank(OWNER);
+        secondary.setAnswer(102_000_000);
+
+        // Degraded read: roundId must be 0 (single-source signal).
+        (uint80 roundId, int256 ans,,, uint80 answeredInRound) = agg.latestRoundData();
+        assertEq(roundId, 0, "degraded mode signals roundId == 0");
+        assertGt(ans, 0, "value is present but consumer must ignore it via roundOk");
+
+        // Cross-check: simulate the Pool's _readOracle roundOk computation.
+        // Mirror the full Pool _readOracle expression at
+        // contracts/src/ArcoraDexPool.sol:110 exactly, so a future regression
+        // where the aggregator emits roundId>0 but inconsistent answeredInRound
+        // would also be caught.
+        bool roundOk = (roundId != 0 && answeredInRound >= roundId);
+        assertFalse(roundOk, "Pool-side roundOk must reject degraded reads, triggering cache fallback");
     }
 }

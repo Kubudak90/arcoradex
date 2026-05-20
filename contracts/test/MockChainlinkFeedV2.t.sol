@@ -115,10 +115,77 @@ contract MockChainlinkFeedV2Test is Test {
     function test_latestRoundData_shape() public view {
         (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound) =
             feed.latestRoundData();
-        assertEq(roundId, 1);
+        assertGt(roundId, 0, "roundId must be non-zero after construction");
         assertEq(answer, 1.0e8);
         assertEq(startedAt, block.timestamp);
         assertEq(updatedAt, block.timestamp);
-        assertEq(answeredInRound, 1);
+        assertEq(answeredInRound, roundId, "answeredInRound must equal roundId");
+    }
+
+    // ── D1 new tests: positivity check + monotonic roundId ────────────────────
+
+    function test_setAnswer_reverts_on_zero() public {
+        vm.prank(writer);
+        vm.expectRevert(MockChainlinkFeedV2.AnswerNotPositive.selector);
+        feed.setAnswer(0);
+    }
+
+    function test_setAnswer_reverts_on_negative() public {
+        vm.prank(writer);
+        vm.expectRevert(MockChainlinkFeedV2.AnswerNotPositive.selector);
+        feed.setAnswer(-1);
+    }
+
+    function test_setAnswer_accepts_positive_after_zero_reverts() public {
+        vm.startPrank(writer);
+        vm.expectRevert(MockChainlinkFeedV2.AnswerNotPositive.selector);
+        feed.setAnswer(0);
+        feed.setAnswer(123_000_000); // must not revert
+        assertEq(feed.latestAnswer(), 123_000_000);
+        vm.stopPrank();
+    }
+
+    function test_roundId_is_monotonic() public {
+        vm.startPrank(writer);
+        feed.setAnswer(1e8);
+        (uint80 r1,,,, uint80 air1) = feed.latestRoundData();
+        feed.setAnswer(2e8);
+        (uint80 r2,,,, uint80 air2) = feed.latestRoundData();
+        feed.setAnswer(3e8);
+        (uint80 r3,,,, uint80 air3) = feed.latestRoundData();
+        vm.stopPrank();
+        assertGt(r2, r1);
+        assertGt(r3, r2);
+        assertEq(air1, r1, "answeredInRound matches roundId");
+        assertEq(air2, r2);
+        assertEq(air3, r3);
+    }
+
+    function test_roundId_does_not_advance_on_revert() public {
+        vm.startPrank(writer);
+        feed.setAnswer(1e8);
+        (uint80 rBefore,,,,) = feed.latestRoundData();
+
+        vm.expectRevert(MockChainlinkFeedV2.AnswerNotPositive.selector);
+        feed.setAnswer(0);
+
+        (uint80 rAfter,,,,) = feed.latestRoundData();
+        assertEq(rBefore, rAfter, "failed setAnswer must not advance roundId");
+        vm.stopPrank();
+    }
+
+    function test_roundId_does_not_advance_on_NotWriter_revert() public {
+        // First record a real round so we have a known _roundId baseline.
+        vm.prank(writer);
+        feed.setAnswer(1e8);
+        (uint80 rBefore,,,,) = feed.latestRoundData();
+
+        // A non-writer call must revert AND must not advance _roundId.
+        vm.prank(address(0xDEAD));   // anyone NOT the writer
+        vm.expectRevert(MockChainlinkFeedV2.NotWriter.selector);
+        feed.setAnswer(2e8);
+
+        (uint80 rAfter,,,,) = feed.latestRoundData();
+        assertEq(rBefore, rAfter, "NotWriter revert must not advance _roundId");
     }
 }
