@@ -122,7 +122,7 @@ contract P3AggregatorTest is Test {
     // M3-2: _tryRead REJECT path: secondary returns a bad read (reverts), falls back to primary.
     // After D1 MockChainlinkFeedV2 rejects non-positive answers, a "zero-answer" source is
     // represented by RevertingMockFeed — the _tryRead catch path covers the same aggregator logic.
-    function test_aggregator_falls_back_when_source_returns_zero_answer() public {
+    function test_aggregator_falls_back_when_source_is_unavailable() public {
         RevertingMockFeed badSecondary = new RevertingMockFeed(8);
         OracleAggregator agg = new OracleAggregator(
             IChainlinkAggregator(address(primary)), IChainlinkAggregator(address(badSecondary)), 200, 3600, OWNER
@@ -133,7 +133,7 @@ contract P3AggregatorTest is Test {
     }
 
     // M3-3: both sources unavailable => AllSourcesUnavailable
-    function test_aggregator_reverts_when_both_sources_return_zero() public {
+    function test_aggregator_reverts_when_both_sources_are_unavailable() public {
         RevertingMockFeed badPrimary = new RevertingMockFeed(8);
         RevertingMockFeed badSecondary = new RevertingMockFeed(8);
         OracleAggregator agg = new OracleAggregator(
@@ -157,6 +157,18 @@ contract P3AggregatorTest is Test {
         vm.expectRevert(abi.encodeWithSelector(OracleAggregator.InvalidDivergenceBps.selector, uint16(10_001)));
         new OracleAggregator(
             IChainlinkAggregator(address(primary)), IChainlinkAggregator(address(secondary)), 10_001, 3600, OWNER
+        );
+    }
+
+    // Constructor revert: zero maxStaleSeconds
+    function test_constructor_reverts_on_zero_stale_seconds() public {
+        vm.expectRevert(abi.encodeWithSelector(OracleAggregator.InvalidStaleSeconds.selector, uint32(0)));
+        new OracleAggregator(
+            IChainlinkAggregator(address(primary)),
+            IChainlinkAggregator(address(secondary)),
+            200,    // divergence bps
+            0,      // maxStaleSeconds_ - must be > 0
+            OWNER
         );
     }
 
@@ -485,13 +497,16 @@ contract P3AggregatorDegradedConsumerTest is Test {
         secondary.setAnswer(102_000_000);
 
         // Degraded read: roundId must be 0 (single-source signal).
-        (uint80 roundId, int256 ans,,,) = agg.latestRoundData();
+        (uint80 roundId, int256 ans,,, uint80 answeredInRound) = agg.latestRoundData();
         assertEq(roundId, 0, "degraded mode signals roundId == 0");
         assertGt(ans, 0, "value is present but consumer must ignore it via roundOk");
 
         // Cross-check: simulate the Pool's _readOracle roundOk computation.
-        // Pool code: bool roundOk = (roundId != 0 && answeredInRound >= roundId);
-        bool roundOk = (roundId != 0);
+        // Mirror the full Pool _readOracle expression at
+        // contracts/src/ArcoraDexPool.sol:110 exactly, so a future regression
+        // where the aggregator emits roundId>0 but inconsistent answeredInRound
+        // would also be caught.
+        bool roundOk = (roundId != 0 && answeredInRound >= roundId);
         assertFalse(roundOk, "Pool-side roundOk must reject degraded reads, triggering cache fallback");
     }
 }

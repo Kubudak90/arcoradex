@@ -173,4 +173,19 @@ contract MockChainlinkFeedV2Test is Test {
         assertEq(rBefore, rAfter, "failed setAnswer must not advance roundId");
         vm.stopPrank();
     }
+
+    function test_roundId_does_not_advance_on_NotWriter_revert() public {
+        // First record a real round so we have a known _roundId baseline.
+        vm.prank(writer);
+        feed.setAnswer(1e8);
+        (uint80 rBefore,,,,) = feed.latestRoundData();
+
+        // A non-writer call must revert AND must not advance _roundId.
+        vm.prank(address(0xDEAD));   // anyone NOT the writer
+        vm.expectRevert(MockChainlinkFeedV2.NotWriter.selector);
+        feed.setAnswer(2e8);
+
+        (uint80 rAfter,,,,) = feed.latestRoundData();
+        assertEq(rBefore, rAfter, "NotWriter revert must not advance _roundId");
+    }
 }
