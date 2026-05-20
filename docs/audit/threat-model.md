@@ -43,10 +43,13 @@ ArcoraDEX underwent a two-pass security review in May 2026: an external audit pa
 **Verify.** Read `ArcoraDexPool.sol` lines 37–38 (constants), 384–390 (first-deposit branch and general formula), 427 (withdraw formula). Run `forge test --match-test test_inflation_attack_fails_after_fix`.
 
 > **Correction (2026-05-19, finding C-16):** `MINIMUM_LIQUIDITY = 1000` is in
-> 1e18-scaled USD-wei (≈ 1e-15 USD), satisfied by any deposit ≥ 1 token-wei.
-> It only seeds the supply denominator (prevents zero-supply division) — it is
-> **not** a meaningful economic floor. The actual first-deposit inflation
-> defense is `VIRTUAL_SHARES` / `VIRTUAL_ASSETS`, applied symmetrically in
+> 1e18-scaled USD-wei (≈ 1e-15 USD). For the listed 6-decimal stables at ~$1,
+> `usdIn = amount * 1e12`, so even a single token-wei deposit satisfies the
+> floor; for hypothetical 18-decimal listings the floor needs only ~1000 wei
+> (≈ 1e-15 USD). Either way, `MINIMUM_LIQUIDITY` only seeds the supply
+> denominator (prevents zero-supply division) — it is **not** a meaningful
+> economic floor. The actual first-deposit inflation defense is
+> `VIRTUAL_SHARES` / `VIRTUAL_ASSETS`, applied symmetrically in
 > deposit/withdraw and quotes.
 
 ---
