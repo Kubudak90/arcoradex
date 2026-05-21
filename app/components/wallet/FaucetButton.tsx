@@ -10,6 +10,33 @@ interface ClaimResult {
   txHashes: Record<string, `0x${string}`>;
 }
 
+// Three user-visible failure classes. The server already returns sensible
+// error strings; we use these to attach a distinct icon + tone so 403 (bot)
+// doesn't read the same as 429 (rate-limit) or 502 (mint failure).
+type FaucetFailure =
+  | { kind: "bot"; message: string }
+  | { kind: "rate-limit"; message: string; retryAfterSec?: number }
+  | { kind: "generic"; message: string };
+
+interface ServerError {
+  ok: false;
+  error: string;
+  retryAfterSec?: number;
+}
+
+function classifyFailure(status: number, data: ServerError): FaucetFailure {
+  if (status === 403) return { kind: "bot", message: data.error };
+  if (status === 429) return { kind: "rate-limit", message: data.error, retryAfterSec: data.retryAfterSec };
+  return { kind: "generic", message: data.error };
+}
+
+function formatRetryAfter(sec: number | undefined): string | null {
+  if (!sec || sec <= 0) return null;
+  if (sec < 60) return `${sec}s`;
+  if (sec < 3600) return `${Math.ceil(sec / 60)}m`;
+  return `${Math.ceil(sec / 3600)}h`;
+}
+
 const TOKEN_LIST = [
   { sym: "USDC", amt: "1,000" },
   { sym: "USDT", amt: "1,000" },
@@ -26,7 +53,7 @@ export function FaucetButton() {
   const [open, setOpen] = useState(false);
   const [pending, setPending] = useState(false);
   const [result, setResult] = useState<ClaimResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [failure, setFailure] = useState<FaucetFailure | null>(null);
 
   const wrongChain = isConnected && chainId !== arcTestnet.id;
   const explorer = process.env.NEXT_PUBLIC_BLOCK_EXPLORER || "https://testnet.arcscan.app";
@@ -34,7 +61,7 @@ export function FaucetButton() {
   async function claim() {
     if (!address) return;
     setPending(true);
-    setError(null);
+    setFailure(null);
     setResult(null);
     try {
       const res = await fetch("/api/faucet", {
@@ -42,16 +69,14 @@ export function FaucetButton() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ address }),
       });
-      const data = (await res.json()) as
-        | ClaimResult
-        | { ok: false; error: string };
+      const data = (await res.json()) as ClaimResult | ServerError;
       if (!data.ok) {
-        setError(data.error);
+        setFailure(classifyFailure(res.status, data));
       } else {
         setResult(data);
       }
     } catch (e) {
-      setError(`Network error: ${(e as Error).message}`);
+      setFailure({ kind: "generic", message: `Network error: ${(e as Error).message}` });
     } finally {
       setPending(false);
     }
@@ -127,12 +152,55 @@ export function FaucetButton() {
           </button>
         )}
 
-        {error ? (
-          <p className="mt-3 text-xs text-center" style={{ color: "var(--color-danger)" }}>
-            {error}
-          </p>
-        ) : null}
+        {failure ? <FailureNotice failure={failure} /> : null}
       </Modal>
     </>
+  );
+}
+
+function FailureNotice({ failure }: { failure: FaucetFailure }) {
+  if (failure.kind === "bot") {
+    return (
+      <div
+        className="mt-3 rounded-xl border px-3 py-2.5 flex items-start gap-2 text-xs"
+        // Soft amber tone using the existing --color-warn token at low opacity.
+        style={{ borderColor: "color-mix(in srgb, var(--color-warn) 50%, transparent)", background: "color-mix(in srgb, var(--color-warn) 10%, var(--surface))" }}
+      >
+        <span className="ms" style={{ fontSize: 18, color: "var(--color-warn)" }}>
+          shield_person
+        </span>
+        <div className="text-left text-arc-ink-700">
+          <div className="font-medium text-arc-ink-900 mb-0.5">Request flagged as automated</div>
+          <div>
+            If you&apos;re on a VPN, headless browser, or a private window with strict
+            anti-fingerprinting, switch to a normal browser and try again.
+          </div>
+        </div>
+      </div>
+    );
+  }
+  if (failure.kind === "rate-limit") {
+    const remaining = formatRetryAfter(failure.retryAfterSec);
+    return (
+      <div
+        className="mt-3 rounded-xl border px-3 py-2.5 flex items-start gap-2 text-xs"
+        style={{ borderColor: "var(--arc-ink-200)", background: "var(--surface-tint)" }}
+      >
+        <span className="ms" style={{ fontSize: 18, color: "var(--arc-ink-500)" }}>
+          schedule
+        </span>
+        <div className="text-left text-arc-ink-700">
+          <div className="font-medium text-arc-ink-900 mb-0.5">
+            Cooldown active{remaining ? ` — try again in ${remaining}` : ""}
+          </div>
+          <div>{failure.message}</div>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <p className="mt-3 text-xs text-center" style={{ color: "var(--color-danger)" }}>
+      {failure.message}
+    </p>
   );
 }
