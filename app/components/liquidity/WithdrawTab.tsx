@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useAccount, useReadContract } from "wagmi";
 import { parseAbi } from "viem";
 import {
@@ -25,11 +25,10 @@ export function WithdrawTab() {
   const [lpStr, setLpStr] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
 
-  useEffect(() => {
-    if (!tokenOut && activeTokens[0]) setTokenOut(activeTokens[0].address);
-  }, [activeTokens, tokenOut]);
+  // Derive default at render time; explicit picker selection takes over via setTokenOut.
+  const effectiveTokenOut = tokenOut ?? activeTokens[0]?.address;
 
-  const meta = activeTokens.find((t) => t.address === tokenOut);
+  const meta = activeTokens.find((t) => t.address === effectiveTokenOut);
   const lpAmount = useMemo(() => (lpStr ? tryParseUnits(lpStr, 18) : null), [lpStr]);
 
   const { data: lpBalance, refetch: refetchLp } = useReadContract({
@@ -41,7 +40,7 @@ export function WithdrawTab() {
   });
 
   const { data: withdrawQuote } = useQuoteWithdraw({
-    tokenOut,
+    tokenOut: effectiveTokenOut,
     lpAmount: lpAmount ?? undefined,
   });
 
@@ -49,21 +48,22 @@ export function WithdrawTab() {
     lpAmount != null && lpBalance != null && lpAmount > (lpBalance as bigint);
   const { mutate: withdraw, isPending, error, data: result } = useWithdraw();
 
-  useEffect(() => {
-    if (result) {
-      setLpStr("");
-      refetchLp();
-    }
-  }, [result, refetchLp]);
-
   function setFromPct(pct: number) {
     if (!lpBalance) return;
     setLpStr(fmtUnits(((lpBalance as bigint) * BigInt(pct)) / 100n, 18, 18));
   }
 
   function onWithdraw() {
-    if (!tokenOut || !lpAmount) return;
-    withdraw({ tokenOut, lpAmount, slippageBps: SLIPPAGE_BPS });
+    if (!effectiveTokenOut || !lpAmount) return;
+    withdraw(
+      { tokenOut: effectiveTokenOut, lpAmount, slippageBps: SLIPPAGE_BPS },
+      {
+        onSuccess: () => {
+          setLpStr("");
+          refetchLp();
+        },
+      },
+    );
   }
 
   const ctaDisabled =

@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useAccount, useReadContract } from "wagmi";
 import { erc20Abi } from "viem";
 import { useTokens, useQuoteDeposit, useDeposit } from "@arcoralabs/dex-sdk/react";
@@ -17,34 +17,29 @@ export function DepositTab() {
   const [amountStr, setAmountStr] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
 
-  useEffect(() => {
-    if (!token && activeTokens[0]) setToken(activeTokens[0].address);
-  }, [activeTokens, token]);
+  // Derive default at render time; explicit picker selection takes over via setToken.
+  const effectiveToken = token ?? activeTokens[0]?.address;
 
-  const meta = activeTokens.find((t) => t.address === token);
+  const meta = activeTokens.find((t) => t.address === effectiveToken);
   const amount = useMemo(
     () => (meta && amountStr ? tryParseUnits(amountStr, meta.decimals) : null),
     [amountStr, meta],
   );
 
   const { data: balance } = useReadContract({
-    address: token,
+    address: effectiveToken,
     abi: erc20Abi,
     functionName: "balanceOf",
     args: account ? [account] : undefined,
-    query: { enabled: !!account && !!token },
+    query: { enabled: !!account && !!effectiveToken },
   });
 
   const { data: lpQuote } = useQuoteDeposit({
-    token,
+    token: effectiveToken,
     amount: amount ?? undefined,
   });
 
   const { mutate: deposit, isPending, error, data: result } = useDeposit();
-
-  useEffect(() => {
-    if (result) setAmountStr("");
-  }, [result]);
 
   function setFromPct(pct: number) {
     if (!balance || !meta) return;
@@ -52,8 +47,11 @@ export function DepositTab() {
   }
 
   function onDeposit() {
-    if (!token || !amount) return;
-    deposit({ token, amount, slippageBps: SLIPPAGE_BPS });
+    if (!effectiveToken || !amount) return;
+    deposit(
+      { token: effectiveToken, amount, slippageBps: SLIPPAGE_BPS },
+      { onSuccess: () => setAmountStr("") },
+    );
   }
 
   const insufficient = !!amount && !!balance && amount > (balance as bigint);
