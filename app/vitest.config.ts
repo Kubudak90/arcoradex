@@ -1,9 +1,10 @@
 import { defineConfig } from "vitest/config";
 import path from "node:path";
 
-// All non-trivial logic moved into @arcoralabs/dex-sdk; this app currently
-// has no Vitest specs. The config remains so `pnpm -r test` and contributors
-// can drop new specs under `lib/__tests__/` without re-adding boilerplate.
+// App-level Vitest specs live under `lib/__tests__/`. Most non-trivial
+// protocol logic still lives in @arcoralabs/dex-sdk and is tested there;
+// this config covers app-only modules (faucet rate-limit, faucet token list).
+// `passWithNoTests` left on so deleting a spec doesn't break CI.
 export default defineConfig({
   test: {
     environment: "node",

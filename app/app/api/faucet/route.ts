@@ -9,26 +9,24 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { arcTestnet } from "@arcoralabs/dex-sdk";
+import { checkBotId } from "botid/server";
+import {
+  MemoryCooldownStore,
+  checkRateLimit,
+  recordClaim,
+  extractClientIp,
+} from "@/lib/faucet-rate-limit";
+import { FAUCET_TOKENS } from "@/lib/faucet-tokens";
 
 export const runtime = "nodejs";
 
-// 7 stables + how much each claim mints. Decimals locked to live deploy.
-// Amount choices: ~$1000 USD-equivalent each, rounded.
-const TOKENS = [
-  { symbol: "USDC",  address: "0x3BFa09fF6467639f0981948385bA1018Ac07d22C" as `0x${string}`, decimals: 6,  amount: 1_000n },
-  { symbol: "USDT",  address: "0x342B6e4fD6896f0BCc80f8e9799e2bce65b9844B" as `0x${string}`, decimals: 6,  amount: 1_000n },
-  { symbol: "PYUSD", address: "0xfdB2c86d010698401f0b969348DC58b6659B96a3" as `0x${string}`, decimals: 6,  amount: 1_000n },
-  { symbol: "DAI",   address: "0xFf7d46fe2f672BB6dc1586613303c7b012aCafFE" as `0x${string}`, decimals: 18, amount: 1_000n },
-  { symbol: "EURC",  address: "0xe08EF7Cb507706D8ff287A41Cf607Fb2d03473BD" as `0x${string}`, decimals: 6,  amount: 925n }, // ≈ $1000 at 1.08
-  { symbol: "TRYC",  address: "0xD564EBcCFAE91f2E234b3074B0ad75eF7A820e61" as `0x${string}`, decimals: 6,  amount: 34_500n }, // ≈ $1000 at 0.029
-  { symbol: "BRLC",  address: "0xa13c0935A98e2c175b31A4054f698819271a8FfC" as `0x${string}`, decimals: 6,  amount: 5_000n }, // ≈ $1000 at 0.20
-];
-
 const MINT_ABI = parseAbi(["function mint(address to, uint256 amount)"]);
 
-// Per-address rate limit (in-memory, resets on cold start — fine for testnet).
-const COOLDOWN_MS = 24 * 60 * 60 * 1000;
-const lastClaim = new Map<string, number>();
+// Cooldown is keyed by both recipient address AND client IP — fresh-wallet
+// spam from a single client gets caught by the per-IP key. In-memory store is
+// per-instance and resets on cold start; acceptable for testnet (Vercel BotID
+// is the real defense vs. botnets, the cooldown is best-effort UX bound).
+const cooldownStore = new MemoryCooldownStore();
 
 interface FaucetSuccess {
   ok: true;
@@ -42,6 +40,17 @@ interface FaucetError {
 }
 
 export async function POST(req: Request): Promise<NextResponse<FaucetSuccess | FaucetError>> {
+  // Vercel BotID — server check first. The matching <BotIdClient> in
+  // app/layout.tsx attaches the signed signal on the client side; bots that
+  // hit /api/faucet directly (curl, fresh headless browsers) are caught here.
+  const { isBot } = await checkBotId();
+  if (isBot) {
+    return NextResponse.json(
+      { ok: false, error: "Request flagged as automated. Open the page in a normal browser and try again." },
+      { status: 403 },
+    );
+  }
+
   const key = process.env.FAUCET_PRIVATE_KEY;
   if (!key || !key.startsWith("0x")) {
     return NextResponse.json(
@@ -62,17 +71,17 @@ export async function POST(req: Request): Promise<NextResponse<FaucetSuccess | F
   }
   const recipient = getAddress(body.address);
 
-  // Rate limit
-  const now = Date.now();
-  const last = lastClaim.get(recipient.toLowerCase());
-  if (last && now - last < COOLDOWN_MS) {
-    const retryAfterSec = Math.ceil((COOLDOWN_MS - (now - last)) / 1000);
+  // Rate limit: per-recipient AND per-IP (best-effort, in-memory).
+  const ip = extractClientIp(req);
+  const rl = checkRateLimit(cooldownStore, recipient, ip);
+  if (!rl.ok) {
+    const hours = Math.max(1, Math.ceil(rl.retryAfterSec / 3600));
+    const error =
+      rl.blockedBy === "ip"
+        ? `An address from your network already claimed in the last 24 hours. Try again in ${hours}h.`
+        : `You already claimed in the last 24 hours. Try again in ${hours}h.`;
     return NextResponse.json(
-      {
-        ok: false,
-        error: `You already claimed in the last 24 hours. Try again in ${Math.ceil(retryAfterSec / 3600)}h.`,
-        retryAfterSec,
-      },
+      { ok: false, error, retryAfterSec: rl.retryAfterSec },
       { status: 429 },
     );
   }
@@ -92,7 +101,7 @@ export async function POST(req: Request): Promise<NextResponse<FaucetSuccess | F
       address: account.address,
       blockTag: "pending",
     });
-    for (const t of TOKENS) {
+    for (const t of FAUCET_TOKENS) {
       const value = t.amount * 10n ** BigInt(t.decimals);
       const hash = await walletClient.writeContract({
         chain: arcTestnet,
@@ -120,14 +129,17 @@ export async function POST(req: Request): Promise<NextResponse<FaucetSuccess | F
   // immediately. Keep this short-circuit so the response isn't held open
   // for the full 7-tx batch on slow networks.
   try {
-    const lastSym = TOKENS[TOKENS.length - 1].symbol;
+    const lastSym = FAUCET_TOKENS[FAUCET_TOKENS.length - 1]!.symbol;
     const lastHash = txHashes[lastSym]!;
     await publicClient.waitForTransactionReceipt({ hash: lastHash, timeout: 8_000 });
   } catch {
     // Don't fail the response — txs were broadcast; client can poll the explorer.
   }
 
-  lastClaim.set(recipient.toLowerCase(), now);
+  // Record the claim only after a successful broadcast so a mid-flight revert
+  // doesn't lock out the user (txs are atomic per-token but the mint loop can
+  // partially fail; in that case the catch above already returned 502).
+  recordClaim(cooldownStore, recipient, ip);
 
   return NextResponse.json({ ok: true, recipient, txHashes }, { status: 200 });
 }

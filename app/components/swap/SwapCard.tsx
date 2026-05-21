@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useAccount, useReadContract } from "wagmi";
 import { erc20Abi } from "viem";
 import {
@@ -30,41 +30,36 @@ export function SwapCard() {
   const [slippageOpen, setSlippageOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
 
-  // Default tokens on first load
-  useEffect(() => {
-    if (!tokenIn && activeTokens[0]) setTokenIn(activeTokens[0].address);
-    if (!tokenOut && activeTokens[1]) setTokenOut(activeTokens[1].address);
-  }, [activeTokens, tokenIn, tokenOut]);
+  // Default tokens derived at render time so we don't violate
+  // react-hooks/set-state-in-effect. Once the user picks via the modal
+  // (setTokenIn/setTokenOut) the explicit state takes over.
+  const effectiveTokenIn = tokenIn ?? activeTokens[0]?.address;
+  const effectiveTokenOut = tokenOut ?? activeTokens[1]?.address;
 
-  const inMeta = activeTokens.find((t) => t.address === tokenIn);
-  const outMeta = activeTokens.find((t) => t.address === tokenOut);
+  const inMeta = activeTokens.find((t) => t.address === effectiveTokenIn);
+  const outMeta = activeTokens.find((t) => t.address === effectiveTokenOut);
 
   const amountIn = useMemo(
     () => (inMeta && amountStr ? tryParseUnits(amountStr, inMeta.decimals) : null),
     [amountStr, inMeta],
   );
 
-  // Balance of tokenIn for the connected user
+  // Balance of effectiveTokenIn for the connected user
   const { data: balanceIn } = useReadContract({
-    address: tokenIn,
+    address: effectiveTokenIn,
     abi: erc20Abi,
     functionName: "balanceOf",
     args: account ? [account] : undefined,
-    query: { enabled: !!account && !!tokenIn },
+    query: { enabled: !!account && !!effectiveTokenIn },
   });
 
   const { data: quoted, isFetching } = useQuoteSwap({
-    tokenIn,
-    tokenOut,
+    tokenIn: effectiveTokenIn,
+    tokenOut: effectiveTokenOut,
     amountIn: amountIn ?? undefined,
   });
 
   const { mutateAsync: swapAsync, isPending, error, data: result, reset } = useSwap();
-
-  // Clear input on success
-  useEffect(() => {
-    if (result) setAmountStr("");
-  }, [result]);
 
   // Rate label
   const rate = useMemo(() => {
@@ -82,20 +77,25 @@ export function SwapCard() {
   }
 
   function flipTokens() {
-    setTokenIn(tokenOut);
-    setTokenOut(tokenIn);
+    // Once flipped we want explicit state, not the derived defaults, so the
+    // user's intent survives subsequent re-renders.
+    setTokenIn(effectiveTokenOut);
+    setTokenOut(effectiveTokenIn);
   }
 
   async function onConfirm() {
-    if (!tokenIn || !tokenOut || !amountIn) return;
+    if (!effectiveTokenIn || !effectiveTokenOut || !amountIn) return;
     try {
       await swapAsync({
-        tokenIn,
-        tokenOut,
+        tokenIn: effectiveTokenIn,
+        tokenOut: effectiveTokenOut,
         amountIn,
         slippageBps,
         deadline: BigInt(Math.floor(Date.now() / 1000) + deadlineMin * 60),
       });
+      // Reset the input here (on confirmed success) rather than in an effect
+      // watching `result` — keeps the state update in an event handler.
+      setAmountStr("");
       setConfirmOpen(false);
     } catch {
       // error surfaced via `error` from useSwap; modal stays open so user can retry
@@ -315,7 +315,7 @@ export function SwapCard() {
         open={picker !== null}
         onOpenChange={(o) => !o && setPicker(null)}
         tokens={activeTokens}
-        exclude={picker === "in" ? tokenOut : tokenIn}
+        exclude={picker === "in" ? effectiveTokenOut : effectiveTokenIn}
         onSelect={(addr) => {
           if (picker === "in") setTokenIn(addr);
           else if (picker === "out") setTokenOut(addr);

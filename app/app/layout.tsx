@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { BotIdClient } from "botid/client";
 import { Providers } from "@/components/wallet/Providers";
 import { Header } from "@/components/layout/Header";
 import { Footer } from "@/components/layout/Footer";
@@ -21,6 +22,8 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
   return (
     <html lang="en" className="h-full">
       <head>
+        {/* Vercel BotID signal collection — protects /api/faucet from automated abuse. */}
+        <BotIdClient protect={[{ path: "/api/faucet", method: "POST" }]} />
         {/* Load fonts in <head> so Material Symbols ligatures resolve before first paint. */}
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
