@@ -1,0 +1,45 @@
+name: sdk
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'packages/sdk/**'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/sdk.yml'
+  pull_request:
+    paths:
+      - 'packages/sdk/**'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/sdk.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v3
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      # Integration tests spawn anvil + deploy contracts; needs foundry on PATH.
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: nightly
+
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
+
+      - name: SDK typecheck
+        run: pnpm --filter @arcoralabs/dex-sdk typecheck
+
+      - name: SDK build
+        run: pnpm --filter @arcoralabs/dex-sdk build
+
+      - name: SDK test (unit + integration + react hooks)
+        run: pnpm --filter @arcoralabs/dex-sdk test
