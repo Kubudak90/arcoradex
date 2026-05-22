@@ -95,19 +95,41 @@ Auto-execute scheduled via claude.ai remote routine `trig_01QAuvuCdLmwWQs41xJYCQ
 
 Manual fallback (if the routine fails or is delayed): operator runs the same `forge script` locally with the same env vars (in `contracts/.env`).
 
-## 7. Verification (post-execute, TODO when routine fires)
+## 7. Verification (post-execute — verified 2026-05-22)
 
-A follow-up doc update will record:
-- `executeBatch` tx hash from the routine output.
-- `isOperationDone` true.
-- Each of 7 tokens' `Registry.tokenInfo(token).usdOracle` matching its `P3_5_AGG_<SYMBOL>`.
-- A sanity swap (`cast send` ~10 USDC→USDT through the Pool) confirming the new aggregator path is healthy end-to-end.
+**Routine:** `trig_01QAuvuCdLmwWQs41xJYCQAj` fired at 2026-05-22T15:55:00Z.
 
-## 8. Auto-memory updates (pending)
+**executeBatch tx:** `0x6b65230972baab17f256b9fd62643d7af370617ec8b6077fa30d7e852045d314`
+**Block:** `43528310` (Arc testnet chainId 5042002)
 
-After execute, update:
-- `MEMORY.md` — add a pointer to this rollout doc.
-- `memory/arcoradex_role_eoas.md` — replace the 7 V1 aggregator addresses with the V2 ones.
+**`isOperationDone(0xe2e130fb…58354c)`:** `true` ✓
+
+**Registry oracle pointer verification (all 7 tokens):**
+
+| Token | Expected V2 Aggregator | Registry.tokenInfo usdOracle | Match |
+|---|---|---|---|
+| USDC  | `0x2a326377726748Be85d951A8356a944D9c76b7b8` | `0x2a326377726748Be85d951A8356a944D9c76b7b8` | ✓ |
+| USDT  | `0x797e4a1611F544B321802D38d234D36DDE3Bd900` | `0x797e4a1611F544B321802D38d234D36DDE3Bd900` | ✓ |
+| PYUSD | `0x4C101C0d607409ddC2D1045548582b522b285033` | `0x4C101C0d607409ddC2D1045548582b522b285033` | ✓ |
+| DAI   | `0x98ed4909168051BFb39ff527ad0a8F1F381c21a8` | `0x98ed4909168051BFb39ff527ad0a8F1F381c21a8` | ✓ |
+| EURC  | `0x862E1CBD0f767da4aa87527a29240AfD06Cda261` | `0x862E1CBD0f767da4aa87527a29240AfD06Cda261` | ✓ |
+| TRYC  | `0x41255684f22D1bD80455B4c73814e5743f0cf7c8` | `0x41255684f22D1bD80455B4c73814e5743f0cf7c8` | ✓ |
+| BRLC  | `0x7b887B5D570221a7b276B301Ca6c74AFf9fA9169` | `0x7b887B5D570221a7b276B301Ca6c74AFf9fA9169` | ✓ |
+
+**Sanity swap (10 USDC → USDT via Pool V3):**
+- Deployer USDC balance pre-swap: 1,153,502,716 (≈1153 USDC) — sufficient.
+- Quote: 10,006,438 USDT out for 10,000,000 USDC in.
+- minOut (1% slippage): 9,906,373.
+- **Swap tx:** `0xd4c1510b4000930c7d8498fdfadf26e1a31594443231b0ed7ea199c0626d5475` — status: success.
+- **USDT received:** 10,006,438 (10.006438 USDT) — within expected range, no revert.
+
+End-to-end path (deployer → Pool V3 → V2 aggregator pricing) confirmed healthy.
+
+## 8. Auto-memory updates (completed 2026-05-22)
+
+Updated:
+- `MEMORY.md` — added pointer to this rollout doc.
+- `memory/arcoradex_role_eoas.md` — replaced the 7 V1 aggregator addresses with the V2 ones.
 
 ## 9. Audit findings closed by this rollout
 
