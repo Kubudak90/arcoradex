@@ -12,11 +12,14 @@ RuntimeDirectory=arcora
 RuntimeDirectoryMode=0700
 WorkingDirectory=/home/arcora/arcoradex-feeds
 Environment=KEEPER_TENANT=arcoradex
+# H-8 (audit 2026-05-24): per-service env path so co-scheduled units don't race
+# each other's ExecStopPost cleanup of a shared file.
+Environment=KEEPER_ENV_PATH=/run/arcora/keeper-feeds.env
 ExecStartPre=/home/arcora/bin/fetch-keeper-secret.sh
-EnvironmentFile=-/run/arcora/keeper.env
+EnvironmentFile=-/run/arcora/keeper-feeds.env
 EnvironmentFile=/home/arcora/arcoradex-feeds/.env
 ExecStart=/usr/bin/node /home/arcora/arcoradex-feeds/multi-feed-push.mjs
-ExecStopPost=/bin/rm -f /run/arcora/keeper.env
+ExecStopPost=/bin/rm -f /run/arcora/keeper-feeds.env
 Nice=10
 StandardOutput=journal
 StandardError=journal

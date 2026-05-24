@@ -7,9 +7,14 @@
 #   /home/arcora/.vault-creds/role_id     (chmod 400)
 #   /home/arcora/.vault-creds/secret_id   (chmod 400)
 # Env:
-#   KEEPER_TENANT  — "arcoradex" (set per systemd unit via Environment=)
+#   KEEPER_TENANT    — "arcoradex" (set per systemd unit via Environment=)
+#   KEEPER_ENV_PATH  — destination env file (set per systemd unit via Environment=);
+#                      defaults to /run/arcora/keeper.env for backwards compatibility.
+#                      H-8 (audit 2026-05-24): each service must use a distinct path
+#                      so co-scheduled units do not race each other's ExecStopPost
+#                      cleanup of a shared file.
 # Output:
-#   /run/arcora/keeper.env  (mode 600, owned arcora:arcora)
+#   $KEEPER_ENV_PATH  (mode 600, owned arcora:arcora)
 #     containing: KEEPER_PRIVATE_KEY=0x...
 
 set -euo pipefail
@@ -28,6 +33,7 @@ export VAULT_TOKEN
 unset SECRET_ID   # cleared from env once exchanged for a token
 
 TENANT="${KEEPER_TENANT:-arcoradex}"
+ENV_PATH="${KEEPER_ENV_PATH:-/run/arcora/keeper.env}"
 KEEPER_KEY="$(vault kv get -field=KEEPER_PRIVATE_KEY "kv/arcora/keeper-${TENANT}")"
 
 # Validate the fetched key shape. A silent Vault failure that returns an empty
@@ -41,11 +47,11 @@ fi
 # When this script is invoked manually, the operator must pre-create /run/arcora.
 
 umask 077
-cat > /run/arcora/keeper.env <<EOF
+cat > "$ENV_PATH" <<EOF
 KEEPER_PRIVATE_KEY=$KEEPER_KEY
 EOF
-chown arcora:arcora /run/arcora/keeper.env
-chmod 600 /run/arcora/keeper.env
+chown arcora:arcora "$ENV_PATH"
+chmod 600 "$ENV_PATH"
 
 # Revoke the short-lived AppRole token; ignore failures (cleanup is best-effort
 # and must not block the systemd unit on a transient Vault hiccup).
