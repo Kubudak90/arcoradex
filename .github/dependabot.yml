@@ -1,0 +1,62 @@
+# Dependabot — automated dependency updates with security alerts.
+#
+# M-13 (audit 2026-05-24): pragmatic supply-chain hardening for GitHub
+# Actions. Full SHA-pinning would freeze every action at a specific commit
+# but block automatic security updates without a manual PR per bump. This
+# config keeps tag-pinned versions but lets Dependabot raise PRs for every
+# action update (security advisories surface as `security-update` PRs that
+# Dependabot opens immediately, regardless of the weekly cadence below).
+#
+# References:
+# https://docs.github.com/en/code-security/dependabot/dependabot-security-updates/about-dependabot-security-updates
+# https://docs.github.com/en/code-security/dependabot/working-with-dependabot/keeping-your-actions-up-to-date-with-dependabot
+
+version: 2
+updates:
+  # GitHub Actions — bumps `uses:` lines in .github/workflows/**.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: Europe/Istanbul
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci(deps)"
+    labels:
+      - dependencies
+      - github-actions
+
+  # npm / pnpm — workspace-aware; one config per workspace.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: Europe/Istanbul
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "chore(deps)"
+    labels:
+      - dependencies
+      - npm
+    groups:
+      # Bundle minor/patch viem + wagmi together — they share types so
+      # split PRs would constantly conflict on package.json + lockfile.
+      viem-wagmi:
+        patterns:
+          - "viem"
+          - "wagmi"
+          - "@wagmi/*"
+        update-types:
+          - minor
+          - patch
+      # Group tanstack ecosystem similarly.
+      tanstack:
+        patterns:
+          - "@tanstack/*"
+        update-types:
+          - minor
+          - patch

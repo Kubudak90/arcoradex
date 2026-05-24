@@ -5,10 +5,18 @@ on:
     branches: [main]
     paths:
       - 'app/**'
+      - 'packages/sdk/**'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - 'tsconfig*.json'
       - '.github/workflows/app.yml'
   pull_request:
     paths:
       - 'app/**'
+      - 'packages/sdk/**'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - 'tsconfig*.json'
       - '.github/workflows/app.yml'
 
 jobs:
@@ -26,7 +34,9 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          cache-dependency-path: app/pnpm-lock.yaml
+          # Root lockfile governs workspace resolution; keying the cache on
+          # app/pnpm-lock.yaml alone would miss SDK transitive changes.
+          cache-dependency-path: pnpm-lock.yaml
       - name: pnpm install
         run: pnpm install --frozen-lockfile
       - name: typecheck
