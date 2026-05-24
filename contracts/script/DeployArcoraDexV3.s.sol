@@ -87,8 +87,13 @@ contract DeployArcoraDexV3 is Script {
         _list(reg, PYUSD, 6, FEED_PYUSD, 50, 3600, "PYUSD");
         _list(reg, DAI, 18, FEED_DAI, 50, 3600, "DAI");
         _list(reg, EURC, 6, FEED_EURC, 150, 14400, "EURC");
-        _list(reg, TRYC, 6, FEED_TRYC, 5000, 86400, "TRYC");
-        _list(reg, BRLC, 6, FEED_BRLC, 5000, 86400, "BRLC");
+        // M-2 (audit 2026-05-24): list TRYC/BRLC at the tighter 200 bps cap
+        // directly. Previously listed at 5000 bps (50%) and tightened to 200
+        // via a P3 governance batch 48 h later — leaving a 48 h attack window
+        // where a compromised single feed could move price up to 50% before
+        // tripping PriceDeviation. Listing-time tightening closes that window.
+        _list(reg, TRYC, 6, FEED_TRYC, 200, 86400, "TRYC");
+        _list(reg, BRLC, 6, FEED_BRLC, 200, 86400, "BRLC");
         console2.log("");
 
         // 4. Bootstrap initial liquidity

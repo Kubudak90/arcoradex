@@ -59,6 +59,21 @@ contract CumulativeDeviationGuard is Ownable2Step {
         emit ConfigUpdated(token, maxCumulativeBps_, windowSeconds_);
     }
 
+    /// @notice Record an observed price for `token`. Permissionless by design;
+    /// see the contract-level "Permissionless-record trust boundary" comment for
+    /// the full rationale. The first caller in each window anchors
+    /// `startPrice1e18`, so an adversary can:
+    ///   1. anchor the window at an extreme price to suppress a real
+    ///      deviation from tripping `CircuitBreakerTripped`, or
+    ///   2. spam observations to repeatedly reset the window.
+    ///
+    /// Both are tolerable in P3 because the contract is event-only — no
+    /// on-chain action is gated on these events. M-4 (audit 2026-05-24):
+    /// off-chain monitor consumers MUST re-validate the observed price
+    /// against an independent trusted feed before paging the Pause
+    /// Guardian. If a future phase wires on-chain auto-pause to this
+    /// contract, this function MUST first be gated by a secondaryWriter
+    /// role (analogous to MockChainlinkFeedV2's writer/owner split).
     function record(address token, uint256 price1e18) external {
         if (price1e18 == 0) revert PriceMustBePositive();
 

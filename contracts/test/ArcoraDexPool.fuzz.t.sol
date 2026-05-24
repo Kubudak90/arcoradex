@@ -8,16 +8,20 @@ import {ArcoraDexLP} from "../src/ArcoraDexLP.sol";
 import {IArcoraDexPool} from "../src/interfaces/IArcoraDexPool.sol";
 import {IChainlinkAggregator} from "../src/interfaces/IChainlinkAggregator.sol";
 import {MintableERC20} from "../src/testnet/MintableERC20.sol";
-import {MockChainlinkFeed} from "../src/testnet/MockChainlinkFeed.sol";
+// M-3 (audit 2026-05-24): switched to V2 mock — V1 pinned roundId to 1,
+// which masked the round-id branch of the staleness check from the fuzz
+// runner. V2 advances roundId on each setAnswer so the real path is
+// exercised under fuzz.
+import {MockChainlinkFeedV2} from "../src/testnet/MockChainlinkFeedV2.sol";
 
 contract ArcoraDexPoolFuzz is Test {
     ArcoraDexPool pool;
     ArcoraDexRegistry reg;
     ArcoraDexLP lp;
     MintableERC20 usdc;
-    MockChainlinkFeed fUsdc;
+    MockChainlinkFeedV2 fUsdc;
     MintableERC20 eurc;
-    MockChainlinkFeed fEurc;
+    MockChainlinkFeedV2 fEurc;
     address owner = makeAddr("owner");
     address alice = makeAddr("alice");
     address bob = makeAddr("bob");
@@ -25,8 +29,8 @@ contract ArcoraDexPoolFuzz is Test {
     function setUp() public {
         usdc = new MintableERC20("USD Coin", "USDC", 6, owner);
         eurc = new MintableERC20("Euro Coin", "EURC", 6, owner);
-        fUsdc = new MockChainlinkFeed(8, int256(1e8));
-        fEurc = new MockChainlinkFeed(8, int256(11e7));
+        fUsdc = new MockChainlinkFeedV2(8, int256(1e8), address(this), address(this));
+        fEurc = new MockChainlinkFeedV2(8, int256(11e7), address(this), address(this));
 
         reg = new ArcoraDexRegistry(owner);
         pool = new ArcoraDexPool(address(reg), 30, 1000, owner);
