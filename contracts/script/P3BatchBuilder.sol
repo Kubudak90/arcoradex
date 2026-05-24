@@ -10,6 +10,13 @@ import {IChainlinkAggregator} from "../src/interfaces/IChainlinkAggregator.sol";
 /// Both scripts MUST build the batch identically or the operation id
 /// (hashOperationBatch) will not match and executeBatch will revert —
 /// hence the single shared builder.
+///
+/// @dev DEAD CODE — superseded by P3_5BatchBuilder. M-1 (audit 2026-05-24):
+/// this batch uses SALT = bytes32(0), which makes a rescheduled call
+/// collide on the same operation id and revert. The post-P3.5 batches
+/// (P3_5BatchBuilder) use a non-zero salt and are the canonical scripts
+/// for any future Timelock work. Retained for git history of the
+/// 2026-05-17 deployment trail; do NOT extend or invoke this batch.
 abstract contract P3BatchBuilder is Script {
     ArcoraDexRegistry constant REGISTRY = ArcoraDexRegistry(0x9914436E5245bF3c0d4D4338e0a8b8F5Ab5505aB);
 

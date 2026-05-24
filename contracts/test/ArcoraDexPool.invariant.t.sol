@@ -8,7 +8,11 @@ import {ArcoraDexRegistry} from "../src/ArcoraDexRegistry.sol";
 import {ArcoraDexLP} from "../src/ArcoraDexLP.sol";
 import {IChainlinkAggregator} from "../src/interfaces/IChainlinkAggregator.sol";
 import {MintableERC20} from "../src/testnet/MintableERC20.sol";
-import {MockChainlinkFeed} from "../src/testnet/MockChainlinkFeed.sol";
+// M-3 (audit 2026-05-24): switched to V2 mock so the invariant suite can
+// exercise the round-id / writer-permissioned code paths the live
+// deployment relies on. The V1 mock pinned roundId to 1 unconditionally,
+// which made `answeredInRound >= roundId` always pass.
+import {MockChainlinkFeedV2} from "../src/testnet/MockChainlinkFeedV2.sol";
 import {PoolHandler} from "./handlers/PoolHandler.sol";
 
 contract ArcoraDexPoolInvariant is StdInvariant, Test {
@@ -16,11 +20,11 @@ contract ArcoraDexPoolInvariant is StdInvariant, Test {
     ArcoraDexRegistry reg;
     ArcoraDexLP lp;
     MintableERC20 usdc;
-    MockChainlinkFeed fUsdc;
+    MockChainlinkFeedV2 fUsdc;
     MintableERC20 eurc;
-    MockChainlinkFeed fEurc;
+    MockChainlinkFeedV2 fEurc;
     MintableERC20 dai;
-    MockChainlinkFeed fDai;
+    MockChainlinkFeedV2 fDai;
     address owner = makeAddr("owner");
     PoolHandler handler;
 
@@ -32,9 +36,11 @@ contract ArcoraDexPoolInvariant is StdInvariant, Test {
         usdc = new MintableERC20("USDC", "USDC", 6, owner);
         eurc = new MintableERC20("EURC", "EURC", 6, owner);
         dai = new MintableERC20("DAI", "DAI", 18, owner);
-        fUsdc = new MockChainlinkFeed(8, int256(1e8));
-        fEurc = new MockChainlinkFeed(8, int256(11e7));
-        fDai = new MockChainlinkFeed(8, int256(1e8));
+        // Test contract acts as both the writer (price-pusher) and owner so
+        // setAnswer / setWriter can be called inline without prank gymnastics.
+        fUsdc = new MockChainlinkFeedV2(8, int256(1e8), address(this), address(this));
+        fEurc = new MockChainlinkFeedV2(8, int256(11e7), address(this), address(this));
+        fDai = new MockChainlinkFeedV2(8, int256(1e8), address(this), address(this));
 
         reg = new ArcoraDexRegistry(owner);
         pool = new ArcoraDexPool(address(reg), 30, 1000, owner);
