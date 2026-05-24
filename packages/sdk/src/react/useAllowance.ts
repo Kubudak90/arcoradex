@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
-import { useReadContract } from "wagmi";
+import { useAccount, useReadContract } from "wagmi";
 import { useArcoraDex } from "./useArcoraDex";
 import { erc20Abi } from "../abi/erc20";
 import { ensureAllowance } from "../allowance";
@@ -19,8 +19,14 @@ export interface UseAllowanceResult {
 }
 
 export function useAllowance(args: UseAllowanceArgs): UseAllowanceResult {
+  // M-5 (audit 2026-05-24): pull the owner address directly from wagmi rather
+  // than via `sdk.account?.address`. The provider's `sdk` object only resolves
+  // `account` once `connectorClient` lands, which lags behind `useAccount()`.
+  // Reading from wagmi directly means the allowance query enables the moment
+  // the wallet connects and re-runs naturally on reconnect — no reliance on
+  // the provider re-memoising a new `sdk` reference.
   const sdk = useArcoraDex();
-  const owner = sdk.account?.address;
+  const { address: owner } = useAccount();
 
   const { data: allowanceData, refetch } = useReadContract({
     address: args.token,
