@@ -41,7 +41,7 @@ abstract contract P3_5BatchBuilder is Script {
         0xFf7d46fe2f672BB6dc1586613303c7b012aCafFE, // DAI
         0xe08EF7Cb507706D8ff287A41Cf607Fb2d03473BD, // EURC
         0xD564EBcCFAE91f2E234b3074B0ad75eF7A820e61, // TRYC
-        0xa13c0935A98e2c175b31A4054f698819271a8FfC  // BRLC
+        0xa13c0935A98e2c175b31A4054f698819271a8FfC // BRLC
     ];
 
     /// @dev Reads the 7 P3.5 aggregator addresses from env vars.
@@ -76,5 +76,4 @@ abstract contract P3_5BatchBuilder is Script {
             payloads[i] = abi.encodeCall(ArcoraDexRegistry.setOracle, (TOKENS[i], IChainlinkAggregator(aggs[i])));
         }
     }
-
 }

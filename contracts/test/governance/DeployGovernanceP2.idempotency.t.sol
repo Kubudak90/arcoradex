@@ -22,10 +22,7 @@ contract FeedOwnershipHarness {
     /// Mirrors the per-feed body of the script helper.
     /// Returns true if a migration was performed, false if skipped.
     /// Reverts if the feed is owned by neither `deployer` nor `safe`.
-    function migrateOne(MockChainlinkFeedV2 feed, address deployer, address safe)
-        external
-        returns (bool migrated)
-    {
+    function migrateOne(MockChainlinkFeedV2 feed, address deployer, address safe) external returns (bool migrated) {
         address currentOwner = feed.owner();
         if (currentOwner == safe) {
             return false; // already migrated; skip

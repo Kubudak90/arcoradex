@@ -181,7 +181,7 @@ contract MockChainlinkFeedV2Test is Test {
         (uint80 rBefore,,,,) = feed.latestRoundData();
 
         // A non-writer call must revert AND must not advance _roundId.
-        vm.prank(address(0xDEAD));   // anyone NOT the writer
+        vm.prank(address(0xDEAD)); // anyone NOT the writer
         vm.expectRevert(MockChainlinkFeedV2.NotWriter.selector);
         feed.setAnswer(2e8);
 
