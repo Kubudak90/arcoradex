@@ -7,6 +7,7 @@ import { ensureAllowance } from "../allowance";
 import { minOut, deadline as defaultDeadline } from "../slippage";
 import { quoteDeposit } from "./quoteDeposit";
 import { MissingAccountError, parseContractError } from "../errors";
+import { assertReceiptOk } from "../recoverRevert";
 
 export interface DepositArgs {
   token: `0x${string}`;
@@ -49,6 +50,15 @@ export async function deposit(
   }
 
   const receipt = await client.publicClient.waitForTransactionReceipt({ hash });
+  // H-4 (audit 2026-05-24): recover typed revert reason from reverted receipts.
+  // See packages/sdk/src/recoverRevert.ts for the why.
+  await assertReceiptOk(client.publicClient, receipt, {
+    address: client.addresses.pool,
+    abi: poolAbi,
+    functionName: "deposit",
+    args: [args.token, args.amount, minLpOut, dl],
+    account: client.account.address,
+  });
   const event = decodeDepositedEvent(receipt.logs as Log[], client.addresses.pool);
   const result: DepositResult = { hash, receipt, lpMinted: event.lpMinted, event };
   if (approveHash) result.approveHash = approveHash;

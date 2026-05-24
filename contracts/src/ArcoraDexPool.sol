@@ -57,6 +57,9 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
     mapping(address token => uint256) public override lastValidPrice; // 1e18-scaled USD price (cache)
     mapping(address token => uint256) public override lastValidPriceAt; // block.timestamp of cache write
     mapping(address account => uint256) public override lastMintAt;
+    /// @notice Per-token TTL on the cache fallback. Zero = disabled. See setMaxCacheAge.
+    /// Audit H-1 (2026-05-24): cap how stale a cached fallback price may get.
+    mapping(address token => uint32) public override maxCacheAgeSeconds;
     uint16 public override swapFeeBps;
     uint16 public override protocolFeeShareBps;
     bool public override paused;
@@ -176,6 +179,23 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         // Justification [incorrect-equality,timestamp]: price1e18 == 0 is the sentinel for an uninitialised price cache; a genuine oracle price of zero is impossible (Chainlink feeds require positive answers), so strict equality is safe. The value is oracle-derived so timestamp-related.
         // slither-disable-next-line incorrect-equality,timestamp
         if (price1e18 == 0) revert NoValidPrice(token);
+        _requireCacheNotExpired(token);
+    }
+
+    /// @dev Audit H-1 (2026-05-24): cap the age of the cache fallback. Without
+    /// this, a persistent oracle outage lets the pool trade indefinitely at a
+    /// stale cached price (the per-read `maxStaleSeconds` window only gates
+    /// fresh reads; the cache itself had no upper bound). When
+    /// `maxCacheAgeSeconds[token] == 0` the check is disabled (legacy behaviour).
+    function _requireCacheNotExpired(address token) private view {
+        uint32 maxAge = maxCacheAgeSeconds[token];
+        if (maxAge == 0) return; // disabled for this token
+        // Justification [timestamp]: this is an explicit deadline check on a
+        // cache write that is itself bounded by Chainlink oracle staleness;
+        // miner timestamp manipulation (~15 s) is negligible vs. the configured
+        // TTL (expected hours, not seconds).
+        // slither-disable-next-line timestamp
+        if (block.timestamp - lastValidPriceAt[token] > maxAge) revert NoValidPrice(token);
     }
 
     /// @dev View-only equivalent: returns cached fallback price without updating it.
@@ -208,6 +228,7 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         // Justification [incorrect-equality,timestamp]: price1e18 == 0 is the sentinel for an uninitialised price cache; a genuine oracle price of zero is impossible (Chainlink feeds require positive answers), so strict equality is safe. The value is oracle-derived so timestamp-related.
         // slither-disable-next-line incorrect-equality,timestamp
         if (price1e18 == 0) revert NoValidPrice(token);
+        _requireCacheNotExpired(token);
     }
 
     /// @dev View-only deviation guard for `quote*()` callers. Reverts when the
@@ -290,6 +311,10 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         // Justification [incorrect-equality]: price1e18 == 0 is the correct sentinel check for an uninitialised cache; a price of exactly zero is impossible from a valid oracle (feeds have positive answers), so strict equality is safe and intentional here.
         // slither-disable-next-line incorrect-equality
         if (price1e18 == 0) revert NoValidPrice(token);
+        // Audit H-1 (2026-05-24): only relevant when we're using the cached
+        // fallback. A fresh raw price is always acceptable regardless of how
+        // old the cache might be.
+        if (!isFresh) _requireCacheNotExpired(token);
 
         // Stale-branch: check the cache-guarded price against lastAcceptedPrice
         // in case the oracle is stale (isFresh=false) and the cache itself has drifted.
@@ -647,6 +672,18 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         if (newGuardian == address(0)) revert ZeroAddress();
         emit PauseGuardianUpdated(pauseGuardian, newGuardian);
         pauseGuardian = newGuardian;
+    }
+
+    /// @notice Set the per-token cache fallback TTL. Zero disables the check
+    /// (legacy behaviour). Recommended value: a small multiple of the token's
+    /// `maxStaleSeconds` (e.g. 6×), so a brief Chainlink outage still trades
+    /// from cache but a sustained outage halts trading instead of using a
+    /// progressively staler price.
+    /// @dev Audit H-1 (2026-05-24).
+    function setMaxCacheAge(address token, uint32 maxAgeSeconds) external override onlyOwner {
+        if (token == address(0)) revert ZeroAddress();
+        maxCacheAgeSeconds[token] = maxAgeSeconds;
+        emit MaxCacheAgeSet(token, maxAgeSeconds);
     }
 
     function syncAcceptedPrice(address token) external override onlyOwner returns (uint256 price1e18) {

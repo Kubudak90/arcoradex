@@ -63,6 +63,10 @@ interface IArcoraDexPool {
     event AcceptedPriceSynced(address indexed token, uint256 oldPrice1e18, uint256 newPrice1e18);
     event PriceCacheUpdated(address indexed token, uint256 price1e18, uint256 updatedAt);
     event PauseGuardianUpdated(address indexed prev, address indexed next);
+    /// @notice Emitted when the per-token cache TTL is updated. `maxAgeSeconds == 0`
+    /// means the cache TTL is disabled for that token (fallback never expires
+    /// independently of the per-read `maxStaleSeconds` window).
+    event MaxCacheAgeSet(address indexed token, uint32 maxAgeSeconds);
 
     // ── Views ─────────────────────────────────────────────────────────
     // Justification [naming-convention]: UPPER_CASE marks an immutable, per project convention.
@@ -76,6 +80,11 @@ interface IArcoraDexPool {
     function lastAcceptedPrice(address token) external view returns (uint256);
     function lastValidPrice(address token) external view returns (uint256);
     function lastValidPriceAt(address token) external view returns (uint256);
+    /// @notice Per-token TTL (seconds) on the `lastValidPrice` cache fallback.
+    /// Zero = disabled (no upper bound on cache age). When non-zero, any cache
+    /// fallback older than this reverts with `NoValidPrice` instead of trading
+    /// at a stale price.
+    function maxCacheAgeSeconds(address token) external view returns (uint32);
     function lastMintAt(address account) external view returns (uint256);
     function pauseGuardian() external view returns (address);
     function swapFeeBps() external view returns (uint16);
@@ -114,6 +123,10 @@ interface IArcoraDexPool {
     function unpause() external;
     function syncAcceptedPrice(address token) external returns (uint256 price1e18);
     function setPauseGuardian(address newGuardian) external;
+    /// @notice Set the cache-fallback TTL for `token`. Zero disables the check.
+    /// @dev Audit H-1 (2026-05-24): prevents persistent oracle outages from
+    /// letting the pool trade at indefinitely-stale cached prices.
+    function setMaxCacheAge(address token, uint32 maxAgeSeconds) external;
 
     /// @notice Called by the LP token on every transfer to propagate min-hold.
     /// Only the LP contract may call this.

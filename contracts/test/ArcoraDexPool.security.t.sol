@@ -55,6 +55,127 @@ contract ArcoraDexPoolSecurityTest is Test {
         assertEq(pool.lastValidPrice(address(eurc)), 1.1e18);
     }
 
+    // ── H-1 (audit 2026-05-24): cache fallback TTL ────────────────────
+
+    function test_setMaxCacheAge_onlyOwner_and_emits_event() public {
+        vm.expectRevert();
+        vm.prank(ALICE);
+        pool.setMaxCacheAge(address(usdc), 3600);
+
+        vm.expectEmit(true, false, false, true, address(pool));
+        emit IArcoraDexPool.MaxCacheAgeSet(address(usdc), 3600);
+        vm.prank(DEPLOYER);
+        pool.setMaxCacheAge(address(usdc), 3600);
+        assertEq(pool.maxCacheAgeSeconds(address(usdc)), 3600);
+    }
+
+    function test_setMaxCacheAge_rejects_zero_address() public {
+        vm.expectRevert(IArcoraDexPool.ZeroAddress.selector);
+        vm.prank(DEPLOYER);
+        pool.setMaxCacheAge(address(0), 3600);
+    }
+
+    function test_cache_fallback_within_ttl_still_serves_swaps() public {
+        // Seed both token caches.
+        usdc.mint(ALICE, 1_000_000_000);
+        eurc.mint(ALICE, 1_000_000_000);
+        vm.startPrank(ALICE);
+        usdc.approve(address(pool), type(uint256).max);
+        eurc.approve(address(pool), type(uint256).max);
+        pool.deposit(address(usdc), 100_000_000, 0, block.timestamp + 60);
+        pool.deposit(address(eurc), 100_000_000, 0, block.timestamp + 60);
+        vm.stopPrank();
+
+        // Set EURC cache TTL to 12h.
+        vm.prank(DEPLOYER);
+        pool.setMaxCacheAge(address(eurc), 12 hours);
+
+        // Warp past EURC oracle staleness (4h) but well within the 12h cache TTL.
+        vm.warp(block.timestamp + 6 hours);
+
+        // NAV/quote must still resolve from cache.
+        uint256 nav = pool.totalReservesUSD();
+        assertGt(nav, 0, "NAV must serve from cache within TTL");
+    }
+
+    function test_cache_fallback_beyond_ttl_reverts_NoValidPrice() public {
+        // Seed both token caches.
+        usdc.mint(ALICE, 1_000_000_000);
+        eurc.mint(ALICE, 1_000_000_000);
+        vm.startPrank(ALICE);
+        usdc.approve(address(pool), type(uint256).max);
+        eurc.approve(address(pool), type(uint256).max);
+        pool.deposit(address(usdc), 100_000_000, 0, block.timestamp + 60);
+        pool.deposit(address(eurc), 100_000_000, 0, block.timestamp + 60);
+        vm.stopPrank();
+
+        // Set EURC cache TTL to 6h (3600 * 6 seconds).
+        vm.prank(DEPLOYER);
+        pool.setMaxCacheAge(address(eurc), 6 hours);
+
+        // Warp past TTL (8h > 6h). EURC oracle is also stale (8h > 4h budget),
+        // so the read falls to cache → cache age check trips → NoValidPrice.
+        vm.warp(block.timestamp + 8 hours);
+
+        vm.expectRevert(abi.encodeWithSelector(IArcoraDexPool.NoValidPrice.selector, address(eurc)));
+        pool.totalReservesUSD();
+    }
+
+    function test_cache_ttl_zero_preserves_legacy_behavior() public {
+        // Default (no setMaxCacheAge call) means TTL is disabled — the
+        // fallback never expires. This is the pre-H-1 behaviour and must be
+        // preserved for tokens whose TTL has not been configured yet.
+        usdc.mint(ALICE, 1_000_000_000);
+        eurc.mint(ALICE, 1_000_000_000);
+        vm.startPrank(ALICE);
+        usdc.approve(address(pool), type(uint256).max);
+        eurc.approve(address(pool), type(uint256).max);
+        pool.deposit(address(usdc), 100_000_000, 0, block.timestamp + 60);
+        pool.deposit(address(eurc), 100_000_000, 0, block.timestamp + 60);
+        vm.stopPrank();
+
+        assertEq(pool.maxCacheAgeSeconds(address(eurc)), 0);
+
+        // Warp absurdly far (30 days) — with TTL=0, cache fallback still works.
+        vm.warp(block.timestamp + 30 days);
+        uint256 nav = pool.totalReservesUSD();
+        assertGt(nav, 0, "with TTL=0 the cache fallback must remain valid indefinitely");
+    }
+
+    function test_fresh_oracle_ignores_cache_ttl() public {
+        // Even if the cache is older than the TTL, a fresh oracle read on
+        // the next access must succeed and refresh the cache. The TTL only
+        // gates the fallback path, not the fresh path.
+        usdc.mint(ALICE, 1_000_000_000);
+        eurc.mint(ALICE, 1_000_000_000);
+        vm.startPrank(ALICE);
+        usdc.approve(address(pool), type(uint256).max);
+        eurc.approve(address(pool), type(uint256).max);
+        pool.deposit(address(usdc), 100_000_000, 0, block.timestamp + 60);
+        pool.deposit(address(eurc), 100_000_000, 0, block.timestamp + 60);
+        vm.stopPrank();
+
+        vm.prank(DEPLOYER);
+        pool.setMaxCacheAge(address(eurc), 6 hours);
+
+        // Warp 8h, then push a fresh feed update so the oracle is fresh again
+        // (within EURC's 4h stale window from the new updatedAt).
+        vm.warp(block.timestamp + 8 hours);
+        vm.prank(DEPLOYER);
+        fEurc.setAnswer(110_000_000); // re-anchor updatedAt to now
+        // USDC oracle also needs to be fresh for the NAV loop. Re-anchor it too.
+        vm.prank(DEPLOYER);
+        fUsdc.setAnswer(100_000_000);
+
+        // The Mut path (deposit/withdraw/swap) must succeed and refresh the
+        // EURC cache to the current block.timestamp, proving the cache TTL is
+        // not consulted on the fresh-read code path.
+        uint256 nowTs = block.timestamp;
+        vm.prank(ALICE);
+        pool.deposit(address(eurc), 10_000_000, 0, block.timestamp + 60);
+        assertEq(pool.lastValidPriceAt(address(eurc)), nowTs);
+    }
+
     function test_no_valid_price_reverts_when_never_seeded() public {
         // Seed USDC + EURC caches so the iteration doesn't revert on them first
         usdc.mint(ALICE, 1_000_000_000);

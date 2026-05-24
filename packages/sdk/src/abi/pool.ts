@@ -29,6 +29,7 @@ export const poolAbi = parseAbi([
   "error PriceDeviation(address token, uint256 newPrice, uint256 lastAccepted, uint16 maxDevBps)",
   "error InvalidOracleRound(address token, uint80 roundId, uint80 answeredInRound)",
   "error InvalidOracleTimestamp(address token, uint256 updatedAt)",
+  "error NoValidPrice(address token)",
   "error InvalidFeeBps(uint16 bps)",
   "error InvalidProtocolFeeShareBps(uint16 bps)",
   "error InsufficientLpOut(uint256 actual, uint256 minLpOut)",

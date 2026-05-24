@@ -7,6 +7,7 @@ import { ensureAllowance } from "../allowance";
 import { minOut, deadline as defaultDeadline } from "../slippage";
 import { quoteSwap } from "./quoteSwap";
 import { MissingAccountError, parseContractError } from "../errors";
+import { assertReceiptOk } from "../recoverRevert";
 
 export interface SwapArgs {
   tokenIn: `0x${string}`;
@@ -53,6 +54,15 @@ export async function swap(client: ArcoraDexClient, args: SwapArgs): Promise<Swa
   }
 
   const receipt = await client.publicClient.waitForTransactionReceipt({ hash });
+  // H-4 (audit 2026-05-24): recover typed revert reason from reverted receipts.
+  // See packages/sdk/src/recoverRevert.ts for the why.
+  await assertReceiptOk(client.publicClient, receipt, {
+    address: client.addresses.pool,
+    abi: poolAbi,
+    functionName: "swap",
+    args: [args.tokenIn, args.tokenOut, args.amountIn, minAmountOut, dl, recipient],
+    account: client.account.address,
+  });
   const event = decodeSwappedEvent(receipt.logs as Log[], client.addresses.pool);
   const result: SwapResult = { hash, receipt, amountOut: event.amountOut, event };
   if (approveHash) result.approveHash = approveHash;

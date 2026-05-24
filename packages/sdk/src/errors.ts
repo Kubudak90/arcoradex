@@ -48,9 +48,24 @@ export class SlippageExceededError extends ArcoraDexError {
   }
 }
 
+/**
+ * The pool's oracle path rejected a read for `token`. Surfaced for any of:
+ * - `InvalidOracleTimestamp` (Chainlink `updatedAt` is zero or beyond `maxStaleSeconds`)
+ * - `InvalidOracleRound` (`answeredInRound < roundId`, or roundId is zero)
+ * - `NoValidPrice` (no fresh read AND no usable cached fallback)
+ *
+ * `reason` carries the underlying selector name so callers can distinguish
+ * the three sub-cases without needing extra error classes.
+ */
 export class OracleStaleError extends ArcoraDexError {
-  constructor(public readonly token: `0x${string}`) {
-    super(`Oracle for ${token} is stale (>1h)`);
+  constructor(
+    public readonly token: `0x${string}`,
+    public readonly reason:
+      | "InvalidOracleTimestamp"
+      | "InvalidOracleRound"
+      | "NoValidPrice" = "NoValidPrice",
+  ) {
+    super(`Oracle read rejected for ${token} (${reason})`);
     this.name = "OracleStaleError";
   }
 }
@@ -151,6 +166,15 @@ export function parseContractError(err: unknown): ArcoraDexError {
         args[2] as bigint,
         Number(args[3]),
       );
+    // H-3 / H-1 (audit 2026-05-24): map all three oracle-rejection reverts to
+    // OracleStaleError so consumers can `catch (e) { if (e instanceof OracleStaleError) }`
+    // and inspect `.reason` to tell them apart.
+    case "InvalidOracleTimestamp":
+      return new OracleStaleError(args[0] as `0x${string}`, "InvalidOracleTimestamp");
+    case "InvalidOracleRound":
+      return new OracleStaleError(args[0] as `0x${string}`, "InvalidOracleRound");
+    case "NoValidPrice":
+      return new OracleStaleError(args[0] as `0x${string}`, "NoValidPrice");
     default:
       return new ArcoraDexError(`Contract reverted: ${name ?? "unknown"}`);
   }
