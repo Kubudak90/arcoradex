@@ -5,10 +5,12 @@ on:
     branches: [main]
     paths:
       - 'contracts/**'
+      - '.gitmodules'
       - '.github/workflows/slither.yml'
   pull_request:
     paths:
       - 'contracts/**'
+      - '.gitmodules'
       - '.github/workflows/slither.yml'
 
 jobs:
