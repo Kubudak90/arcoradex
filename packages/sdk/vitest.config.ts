@@ -11,6 +11,12 @@ export default defineConfig({
       "test/react/**/*.test.tsx",
     ],
     testTimeout: 60_000,
+    // Retry on CI only: integration tests share a single anvil (singleFork:
+    // true), and the wagmi mock-connector path occasionally races on receipt
+    // readback between near-back-to-back txs from different test files. Two
+    // retries swamp the flake without hiding a real regression; local dev
+    // experience is unaffected (process.env.CI is unset).
+    retry: process.env.CI ? 2 : 0,
     globalSetup: ["./test/setup.ts"],
     pool: "forks",
     poolOptions: { forks: { singleFork: true } },

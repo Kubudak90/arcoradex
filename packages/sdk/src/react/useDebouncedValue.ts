@@ -1,3 +1,7 @@
+"use client";
+// M-7 (audit 2026-05-24): the directive was missing — every other hook in
+// this directory carries it, and an RSC import path that pulls this module
+// would crash at runtime (`useState`/`useEffect` are client-only).
 import { useEffect, useState } from "react";
 
 export function useDebouncedValue<T>(value: T, delayMs: number): T {
