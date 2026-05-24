@@ -1,25 +1,18 @@
 import { http, createConfig, fallback } from "wagmi";
-import { defineChain } from "viem";
 import { injected, walletConnect } from "wagmi/connectors";
+import { arcTestnet } from "@arcoralabs/dex-sdk";
+
+// H-5 (audit 2026-05-24): use the SDK's canonical arcTestnet definition
+// rather than redefining it here. Two parallel `defineChain` calls were
+// drifting (nativeCurrency, blockExplorer) and forcing every wallet
+// component to pick between the SDK and the app for chain-id checks.
+// The env-overridable RPC URL is still honoured — it's applied to the
+// wagmi transport rather than to a duplicate chain object.
 
 const RPC_URL =
-  process.env.NEXT_PUBLIC_RPC_URL || "https://rpc.testnet.arc.network";
-
-const EXPLORER_URL =
-  process.env.NEXT_PUBLIC_BLOCK_EXPLORER || "https://testnet.arcscan.app";
+  process.env.NEXT_PUBLIC_RPC_URL || arcTestnet.rpcUrls.default.http[0];
 
 const WC_PROJECT_ID = process.env.NEXT_PUBLIC_WC_PROJECT_ID || "";
-
-export const arcTestnet = defineChain({
-  id: 5042002,
-  name: "Arc Testnet",
-  nativeCurrency: { name: "USD Coin", symbol: "USDC", decimals: 18 },
-  rpcUrls: { default: { http: [RPC_URL] } },
-  blockExplorers: {
-    default: { name: "Arc Explorer", url: EXPLORER_URL },
-  },
-  testnet: true,
-});
 
 export const wagmiConfig = createConfig({
   chains: [arcTestnet],
