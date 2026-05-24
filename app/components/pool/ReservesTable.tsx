@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { usePoolStats, useTokens, useArcoraDex } from "@arcoralabs/dex-sdk/react";
 import { fmtUnits, fmtUSD } from "@arcoralabs/dex-sdk";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,17 +9,16 @@ export function ReservesTable() {
   const sdk = useArcoraDex();
   const { tokens } = useTokens();
   const { stats } = usePoolStats({ refetchOnBlock: true });
-  const [reserves, setReserves] = useState<Record<`0x${string}`, bigint>>({});
 
-  useEffect(() => {
-    let cancelled = false;
-    sdk.getReserves().then((r) => {
-      if (!cancelled) setReserves(r);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [sdk, stats?.navUsd1e18]);
+  // M-10 (audit 2026-05-24): replaced the previous useEffect + setState data
+  // fetch with TanStack Query so the reserves snapshot is cache-managed,
+  // refetched whenever the on-block-updated NAV moves, and doesn't introduce
+  // an extra render on mount. `stats?.navUsd1e18` in the queryKey naturally
+  // invalidates the reserves read on every new block.
+  const { data: reserves = {} } = useQuery({
+    queryKey: ["arcora", "reserves", sdk.addresses.pool, stats?.navUsd1e18?.toString()],
+    queryFn: () => sdk.getReserves(),
+  });
 
   return (
     <Card>
