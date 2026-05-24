@@ -3,6 +3,7 @@ import { useState } from "react";
 import { useAccount, useChainId } from "wagmi";
 import { arcTestnet } from "@arcoralabs/dex-sdk";
 import { Modal } from "@/components/ui/modal";
+import { FAUCET_TOKENS } from "@/lib/faucet-tokens";
 
 interface ClaimResult {
   ok: true;
@@ -37,15 +38,13 @@ function formatRetryAfter(sec: number | undefined): string | null {
   return `${Math.ceil(sec / 3600)}h`;
 }
 
-const TOKEN_LIST = [
-  { sym: "USDC", amt: "1,000" },
-  { sym: "USDT", amt: "1,000" },
-  { sym: "PYUSD", amt: "1,000" },
-  { sym: "DAI", amt: "1,000" },
-  { sym: "EURC", amt: "925" },
-  { sym: "TRYC", amt: "34,500" },
-  { sym: "BRLC", amt: "5,000" },
-];
+// M-11 (audit 2026-05-24): derive the displayed mint list from the same
+// source of truth the server route mints from. Previously this was a hand-
+// maintained duplicate that silently drifted from the canonical amounts.
+const TOKEN_LIST = FAUCET_TOKENS.map((t) => ({
+  sym: t.symbol,
+  amt: t.amount.toLocaleString("en-US"),
+}));
 
 export function FaucetButton() {
   const { address, isConnected } = useAccount();
@@ -152,7 +151,12 @@ export function FaucetButton() {
           </button>
         )}
 
-        {failure ? <FailureNotice failure={failure} /> : null}
+        {/* M-9 (audit 2026-05-24): a11y wrapper. role="alert" + aria-live so
+            screen readers announce the failure when it appears. The region
+            is rendered unconditionally so AT can pick up the live mutation. */}
+        <div role="alert" aria-live="assertive" aria-atomic="true">
+          {failure ? <FailureNotice failure={failure} /> : null}
+        </div>
       </Modal>
     </>
   );
