@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import { Script, console2 } from "forge-std/Script.sol";
-import { Safe } from "@safe-global/safe-contracts/contracts/Safe.sol";
-import { MockChainlinkFeedV2 } from "../src/testnet/MockChainlinkFeedV2.sol";
-import { SafeSigHelpers } from "../test/governance/SafeSigHelpers.sol";
+import {Script, console2} from "forge-std/Script.sol";
+import {Safe} from "@safe-global/safe-contracts/contracts/Safe.sol";
+import {MockChainlinkFeedV2} from "../src/testnet/MockChainlinkFeedV2.sol";
+import {SafeSigHelpers} from "../test/governance/SafeSigHelpers.sol";
 
 /// @notice Migrates the `writer` role of the 7 P3 secondary MockChainlinkFeedV2
 /// feeds from the deployer EOA to the keeper EOA, so the keeper can push prices
@@ -19,8 +19,7 @@ import { SafeSigHelpers } from "../test/governance/SafeSigHelpers.sol";
 contract MigrateSecondaryWriters is Script {
     using SafeSigHelpers for Safe;
 
-    string constant MNEMONIC =
-        "test test test test test test test test test test test junk";
+    string constant MNEMONIC = "test test test test test test test test test test test junk";
     Safe constant GOV_SAFE = Safe(payable(0x715f669D79Cc72d6685F8724c0B86f7B53d7e624));
 
     function run() external {
@@ -56,11 +55,7 @@ contract MigrateSecondaryWriters is Script {
             }
 
             require(
-                GOV_SAFE.execCall(
-                    feed,
-                    abi.encodeCall(MockChainlinkFeedV2.setWriter, (keeper)),
-                    keys3
-                ),
+                GOV_SAFE.execCall(feed, abi.encodeCall(MockChainlinkFeedV2.setWriter, (keeper)), keys3),
                 "setWriter Safe exec failed"
             );
             require(MockChainlinkFeedV2(feed).writer() == keeper, "writer not migrated");

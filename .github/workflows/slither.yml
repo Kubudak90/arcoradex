@@ -28,6 +28,21 @@ jobs:
         with:
           version: nightly
 
+      # Versions pinned to match contracts/foundry.lock. The lock file alone is
+      # not enough — `forge install` without args is a noop in current Foundry,
+      # so deps must be listed explicitly. Keep these in sync with foundry.lock
+      # and with contracts.yml.
+      - name: forge install
+        working-directory: contracts
+        run: |
+          forge install --no-commit \
+            foundry-rs/forge-std@v1.16.1 \
+            OpenZeppelin/openzeppelin-contracts@v5.6.1 \
+            smartcontractkit/chainlink-brownie-contracts@1.3.0
+
+      # OPS-B (audit 2026-05-24): continue-on-error:true so SARIF uploads even
+      # when slither finds medium+ issues. Merge gating moved to required
+      # branch-protection status check rather than this step's exit code.
       - name: Slither static analysis
         id: slither
         uses: crytic/slither-action@v0.4.2
@@ -36,10 +51,20 @@ jobs:
           slither-args: '--filter-paths "lib/|test/|script/" --exclude naming-convention,solc-version,assembly,low-level-calls'
           fail-on: medium
           sarif: results.sarif
-        continue-on-error: false
+        continue-on-error: true
 
       - name: Upload SARIF
         if: always() && steps.slither.outputs.sarif != ''
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: ${{ steps.slither.outputs.sarif }}
+
+      # Surface the slither result as the job's overall conclusion so branch
+      # protection can require this status check without losing the SARIF upload.
+      - name: Report slither result
+        if: always()
+        run: |
+          if [ "${{ steps.slither.outcome }}" != "success" ]; then
+            echo "::error::Slither found medium+ severity issues — see Security tab for SARIF report."
+            exit 1
+          fi

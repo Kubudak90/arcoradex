@@ -71,8 +71,9 @@ contract P3AggregatorTest is Test {
     function test_aggregator_reverts_when_both_sources_revert() public {
         RevertingMockFeed bad1 = new RevertingMockFeed(8);
         RevertingMockFeed bad2 = new RevertingMockFeed(8);
-        OracleAggregator agg =
-            new OracleAggregator(IChainlinkAggregator(address(bad1)), IChainlinkAggregator(address(bad2)), 200, 3600, OWNER);
+        OracleAggregator agg = new OracleAggregator(
+            IChainlinkAggregator(address(bad1)), IChainlinkAggregator(address(bad2)), 200, 3600, OWNER
+        );
         vm.expectRevert(abi.encodeWithSelector(OracleAggregator.AllSourcesUnavailable.selector));
         agg.latestRoundData();
     }
@@ -97,7 +98,9 @@ contract P3AggregatorTest is Test {
     function test_constructor_reverts_on_decimals_mismatch() public {
         MockChainlinkFeedV2 sec6 = new MockChainlinkFeedV2(6, 1_000_000, OWNER, OWNER);
         vm.expectRevert(abi.encodeWithSelector(OracleAggregator.DecimalsMismatch.selector, uint8(8), uint8(6)));
-        new OracleAggregator(IChainlinkAggregator(address(primary)), IChainlinkAggregator(address(sec6)), 200, 3600, OWNER);
+        new OracleAggregator(
+            IChainlinkAggregator(address(primary)), IChainlinkAggregator(address(sec6)), 200, 3600, OWNER
+        );
     }
 
     // M3-1: divergence exactly at the cap must NOT revert (strict > means AT cap passes)
@@ -149,7 +152,9 @@ contract P3AggregatorTest is Test {
     // Constructor revert: zero divergence bps
     function test_constructor_reverts_on_zero_divergence_bps() public {
         vm.expectRevert(abi.encodeWithSelector(OracleAggregator.InvalidDivergenceBps.selector, uint16(0)));
-        new OracleAggregator(IChainlinkAggregator(address(primary)), IChainlinkAggregator(address(secondary)), 0, 3600, OWNER);
+        new OracleAggregator(
+            IChainlinkAggregator(address(primary)), IChainlinkAggregator(address(secondary)), 0, 3600, OWNER
+        );
     }
 
     // Constructor revert: divergence bps above 10_000
@@ -166,8 +171,8 @@ contract P3AggregatorTest is Test {
         new OracleAggregator(
             IChainlinkAggregator(address(primary)),
             IChainlinkAggregator(address(secondary)),
-            200,    // divergence bps
-            0,      // maxStaleSeconds_ - must be > 0
+            200, // divergence bps
+            0, // maxStaleSeconds_ - must be > 0
             OWNER
         );
     }
@@ -258,11 +263,7 @@ contract P3AggregatorTest is Test {
 
     function test_latestRoundData_returns_nonzero_roundId_when_both_ok() public {
         OracleAggregator agg = new OracleAggregator(
-            IChainlinkAggregator(address(primary)),
-            IChainlinkAggregator(address(secondary)),
-            200,
-            3600,
-            OWNER
+            IChainlinkAggregator(address(primary)), IChainlinkAggregator(address(secondary)), 200, 3600, OWNER
         );
         vm.prank(OWNER);
         secondary.setAnswer(101_000_000);

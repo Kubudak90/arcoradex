@@ -86,14 +86,11 @@ contract OracleAggregator is IChainlinkAggregator, Ownable2Step {
 
     /// @dev Called only when both sources are healthy. Checks divergence and
     ///      returns the mid-price, staler timestamp, and max roundId.
-    function _combineSources(
-        int256 pAns,
-        uint256 pAt,
-        uint80 pR,
-        int256 sAns,
-        uint256 sAt,
-        uint80 sR
-    ) private view returns (uint80, int256, uint256, uint256, uint80) {
+    function _combineSources(int256 pAns, uint256 pAt, uint80 pR, int256 sAns, uint256 sAt, uint80 sR)
+        private
+        view
+        returns (uint80, int256, uint256, uint256, uint80)
+    {
         uint256 absDiff = pAns > sAns ? uint256(pAns - sAns) : uint256(sAns - pAns);
         uint256 minAns = pAns < sAns ? uint256(pAns) : uint256(sAns);
         if (absDiff * 10_000 > minAns * uint256(maxDivergenceBps)) {

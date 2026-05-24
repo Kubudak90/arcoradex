@@ -47,10 +47,7 @@ contract P3_5GovernanceActions is P3_5BatchBuilder {
         // ── N-1: env-var sanity check — aggregators must have code and be Safe-owned ──
         for (uint256 i = 0; i < 7; i++) {
             require(aggs[i].code.length > 0, "P3_5: aggregator has no code");
-            require(
-                OracleAggregator(aggs[i]).owner() == address(GOV_SAFE),
-                "P3_5: aggregator not Safe-owned"
-            );
+            require(OracleAggregator(aggs[i]).owner() == address(GOV_SAFE), "P3_5: aggregator not Safe-owned");
         }
 
         // Build the batch payload — identical to what ExecuteP3_5Batch will use.
@@ -87,9 +84,8 @@ contract P3_5GovernanceActions is P3_5BatchBuilder {
         // Only start broadcast when we actually need to schedule.
         vm.startBroadcast(deployerKey);
 
-        bytes memory schedBatchCall = abi.encodeCall(
-            TimelockController.scheduleBatch, (targets, values, payloads, PREDECESSOR, SALT, minDelay)
-        );
+        bytes memory schedBatchCall =
+            abi.encodeCall(TimelockController.scheduleBatch, (targets, values, payloads, PREDECESSOR, SALT, minDelay));
 
         require(GOV_SAFE.execCall(address(TIMELOCK), schedBatchCall, _keys3(govKeys)), "scheduleBatch failed");
 
