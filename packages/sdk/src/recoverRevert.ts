@@ -27,6 +27,14 @@ export async function recoverRevertReason(
   receipt: TransactionReceipt,
   call: SimulationCall,
 ): Promise<never> {
+  // Simulate at the block BEFORE the receipt's block so we replay against the
+  // same pre-state the original tx saw. Simulating against the receipt's own
+  // block reads POST-block state (including other txs in the same block that
+  // ran after this one); on a busy chain — or on a shared anvil running an
+  // integration suite — the same call against post-state may no longer revert,
+  // surfacing a confusing "could not be reproduced" error for a tx that did.
+  // The pre-block snapshot is the exact pre-state the reverted tx executed on.
+  const simBlock = receipt.blockNumber > 0n ? receipt.blockNumber - 1n : receipt.blockNumber;
   try {
     await publicClient.simulateContract({
       address: call.address,
@@ -34,7 +42,7 @@ export async function recoverRevertReason(
       functionName: call.functionName,
       args: call.args as readonly unknown[],
       account: call.account,
-      blockNumber: receipt.blockNumber,
+      blockNumber: simBlock,
     });
   } catch (e) {
     throw parseContractError(e);
