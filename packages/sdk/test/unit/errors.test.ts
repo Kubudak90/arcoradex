@@ -4,6 +4,8 @@ import {
   SlippageExceededError,
   InsufficientLiquidityError,
   PoolPausedError,
+  EarlyWithdrawError,
+  OracleStaleError,
   parseContractError,
 } from "@/errors";
 
@@ -65,6 +67,39 @@ describe("parseContractError", () => {
       expect(out.token).toBe("0xabc");
       expect(out.requested).toBe(5n);
       expect(out.available).toBe(1n);
+    }
+  });
+
+  // H-2 (audit 2026-05-24): EarlyWithdrawError must be reachable via instanceof.
+  it("recognizes EarlyWithdraw and surfaces it as EarlyWithdrawError", () => {
+    const fakeViemErr = {
+      name: "ContractFunctionRevertedError",
+      data: { errorName: "EarlyWithdraw", args: [1_700_000_000n, 1_700_000_500n] },
+    };
+    const out = parseContractError(fakeViemErr);
+    expect(out).toBeInstanceOf(EarlyWithdrawError);
+    if (out instanceof EarlyWithdrawError) {
+      expect(out.unlockAt).toBe(1_700_000_000n);
+      expect(out.nowAt).toBe(1_700_000_500n);
+    }
+  });
+
+  // H-3 (audit 2026-05-24): three oracle revert paths all map to OracleStaleError
+  // with `reason` distinguishing them. Previously fell through to generic ArcoraDexError.
+  it.each([
+    ["InvalidOracleTimestamp", ["0xtok", 0n]],
+    ["InvalidOracleRound", ["0xtok", 0n, 0n]],
+    ["NoValidPrice", ["0xtok"]],
+  ] as const)("maps %s revert to OracleStaleError with reason=%s", (selector, args) => {
+    const fakeViemErr = {
+      name: "ContractFunctionRevertedError",
+      data: { errorName: selector, args },
+    };
+    const out = parseContractError(fakeViemErr);
+    expect(out).toBeInstanceOf(OracleStaleError);
+    if (out instanceof OracleStaleError) {
+      expect(out.token).toBe("0xtok");
+      expect(out.reason).toBe(selector);
     }
   });
 });

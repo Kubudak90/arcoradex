@@ -6,6 +6,7 @@ import { poolAbi } from "../abi/pool";
 import { minOut, deadline as defaultDeadline } from "../slippage";
 import { quoteWithdraw } from "./quoteWithdraw";
 import { MissingAccountError, parseContractError } from "../errors";
+import { assertReceiptOk } from "../recoverRevert";
 
 export interface WithdrawArgs {
   tokenOut: `0x${string}`;
@@ -42,6 +43,17 @@ export async function withdraw(
   }
 
   const receipt = await client.publicClient.waitForTransactionReceipt({ hash });
+  // H-4 (audit 2026-05-24): wagmi/wallet-connector writes skip simulate; a
+  // reverted receipt would otherwise fall through to decodeWithdrewEvent and
+  // surface as a generic "event not found" error. Re-simulate to recover the
+  // typed revert reason (EarlyWithdrawError, OracleStaleError, …).
+  await assertReceiptOk(client.publicClient, receipt, {
+    address: client.addresses.pool,
+    abi: poolAbi,
+    functionName: "withdraw",
+    args: [args.tokenOut, args.lpAmount, minTokenOut, dl],
+    account: client.account.address,
+  });
   const event = decodeWithdrewEvent(receipt.logs as Log[], client.addresses.pool);
   return { hash, receipt, amountOut: event.amountOut, event };
 }

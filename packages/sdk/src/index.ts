@@ -30,6 +30,7 @@ export {
   PoolPausedError,
   TokenNotActiveError,
   DeadlinePassedError,
+  EarlyWithdrawError,
   parseContractError,
 } from "./errors";
 export { quoteSwap } from "./actions/quoteSwap";
