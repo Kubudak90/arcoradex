@@ -27,8 +27,9 @@ export const poolAbi = parseAbi([
   "error InsufficientLiquidity(address token, uint256 requested, uint256 available)",
   "error InsufficientOutput(uint256 amountOut, uint256 minOut)",
   "error PriceDeviation(address token, uint256 newPrice, uint256 lastAccepted, uint16 maxDevBps)",
-  "error InvalidOracleRound(address token, uint80 roundId, uint80 answeredInRound)",
-  "error InvalidOracleTimestamp(address token, uint256 updatedAt)",
+  // G-5 (audit 2026-05-31): InvalidOracleRound / InvalidOracleTimestamp were
+  // removed from the contract (the Chainlink round/timestamp checks now collapse
+  // into NoValidPrice), so they are no longer declared here.
   "error NoValidPrice(address token)",
   "error InvalidFeeBps(uint16 bps)",
   "error InvalidProtocolFeeShareBps(uint16 bps)",

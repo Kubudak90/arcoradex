@@ -31,6 +31,8 @@ export {
   TokenNotActiveError,
   DeadlinePassedError,
   EarlyWithdrawError,
+  SameTokenError,
+  ZeroAmountError,
   parseContractError,
 } from "./errors";
 export { quoteSwap } from "./actions/quoteSwap";

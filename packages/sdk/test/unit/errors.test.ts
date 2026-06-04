@@ -6,6 +6,9 @@ import {
   PoolPausedError,
   EarlyWithdrawError,
   OracleStaleError,
+  SameTokenError,
+  ZeroAmountError,
+  TokenNotActiveError,
   parseContractError,
 } from "@/errors";
 
@@ -84,22 +87,104 @@ describe("parseContractError", () => {
     }
   });
 
-  // H-3 (audit 2026-05-24): three oracle revert paths all map to OracleStaleError
-  // with `reason` distinguishing them. Previously fell through to generic ArcoraDexError.
-  it.each([
-    ["InvalidOracleTimestamp", ["0xtok", 0n]],
-    ["InvalidOracleRound", ["0xtok", 0n, 0n]],
-    ["NoValidPrice", ["0xtok"]],
-  ] as const)("maps %s revert to OracleStaleError with reason=%s", (selector, args) => {
+  // H-3 (audit 2026-05-24): oracle revert paths map to OracleStaleError.
+  // G-5 (audit 2026-05-31): InvalidOracleTimestamp / InvalidOracleRound were
+  // removed from the contract; only NoValidPrice remains.
+  it("maps NoValidPrice revert to OracleStaleError with reason=NoValidPrice", () => {
     const fakeViemErr = {
       name: "ContractFunctionRevertedError",
-      data: { errorName: selector, args },
+      data: { errorName: "NoValidPrice", args: ["0xtok"] },
     };
     const out = parseContractError(fakeViemErr);
     expect(out).toBeInstanceOf(OracleStaleError);
     if (out instanceof OracleStaleError) {
       expect(out.token).toBe("0xtok");
-      expect(out.reason).toBe(selector);
+      expect(out.reason).toBe("NoValidPrice");
     }
+  });
+
+  // G-5 (audit 2026-05-31): the removed oracle selectors no longer map to a
+  // typed class — they fall through to the generic ArcoraDexError.
+  it.each(["InvalidOracleTimestamp", "InvalidOracleRound"] as const)(
+    "no longer maps removed oracle selector %s to OracleStaleError",
+    (selector) => {
+      const fakeViemErr = {
+        name: "ContractFunctionRevertedError",
+        data: { errorName: selector, args: ["0xtok", 0n, 0n] },
+      };
+      const out = parseContractError(fakeViemErr);
+      expect(out).not.toBeInstanceOf(OracleStaleError);
+      expect(out).toBeInstanceOf(ArcoraDexError);
+      expect(out.message).toContain(selector);
+    },
+  );
+
+  // L-1 (audit 2026-05-31): SameToken / ZeroAmount now map to typed classes.
+  it("decodes SameToken → SameTokenError with the token field", () => {
+    const fakeViemErr = {
+      name: "ContractFunctionRevertedError",
+      data: { errorName: "SameToken", args: ["0xtok"] },
+    };
+    const out = parseContractError(fakeViemErr);
+    expect(out).toBeInstanceOf(SameTokenError);
+    if (out instanceof SameTokenError) {
+      expect(out.token).toBe("0xtok");
+    }
+  });
+
+  it("decodes ZeroAmount → ZeroAmountError (no args)", () => {
+    const fakeViemErr = {
+      name: "ContractFunctionRevertedError",
+      data: { errorName: "ZeroAmount", args: [] },
+    };
+    expect(parseContractError(fakeViemErr)).toBeInstanceOf(ZeroAmountError);
+  });
+});
+
+// L-1 (audit 2026-05-31): a quote read that reverts must surface a typed
+// ArcoraDexError, not a raw viem error. The quote actions wrap readContract in
+// parseContractError; here we drive that wrapper directly with a stub client
+// whose publicClient.readContract throws the viem-shaped revert.
+describe("quote actions surface typed errors on revert (L-1)", () => {
+  it("quoteSwap maps a SameToken revert to SameTokenError", async () => {
+    const { quoteSwap } = await import("@/actions/quoteSwap");
+    const stub = {
+      addresses: { pool: "0xpool" },
+      publicClient: {
+        readContract: async () => {
+          throw {
+            name: "ContractFunctionExecutionError",
+            cause: {
+              name: "ContractFunctionRevertedError",
+              data: { errorName: "SameToken", args: ["0xtok"] },
+            },
+          };
+        },
+      },
+    } as never;
+    await expect(
+      quoteSwap(stub, { tokenIn: "0xtok", tokenOut: "0xtok", amountIn: 1n }),
+    ).rejects.toBeInstanceOf(SameTokenError);
+  });
+
+  it("quoteDeposit maps a TokenNotActive revert to TokenNotActiveError", async () => {
+    const { quoteDeposit } = await import("@/actions/quoteDeposit");
+    const stub = {
+      addresses: { pool: "0xpool" },
+      publicClient: {
+        readContract: async () => {
+          throw {
+            name: "ContractFunctionExecutionError",
+            cause: {
+              name: "ContractFunctionRevertedError",
+              data: { errorName: "TokenNotActive", args: ["0xtok"] },
+            },
+          };
+        },
+      },
+    } as never;
+    await expect(
+      quoteDeposit(stub, { token: "0xtok", amount: 1n }),
+    ).rejects.toBeInstanceOf(TokenNotActiveError);
   });
 });
