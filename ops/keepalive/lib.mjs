@@ -163,3 +163,43 @@ export function clampToMaxDev(prev, targetAnswer, maxDevBps) {
 
 /// Converts a USD float to the feed's 1e8 fixed-point BigInt.
 export const priceTo1e8 = (usd) => BigInt(Math.round(usd * 1e8));
+
+// ---------------------------------------------------------------------------
+// H-2: wallet-selection-by-role (pure). Primary feeds are signed by the primary
+// key, secondary feeds by the secondary key. The two keys MUST differ (the
+// on-chain MigrateSecondaryWriters enforces the same distinctness:
+// "KEEPER_SECONDARY must differ from KEEPER_ADDRESS").
+// ---------------------------------------------------------------------------
+
+/// Normalises a raw private key string to 0x-prefixed lowercase. Returns null
+/// for an empty/falsy input.
+export function normalizePk(pk) {
+    if (!pk) return null;
+    const s = String(pk).trim();
+    if (!s) return null;
+    return (s.startsWith("0x") ? s : "0x" + s).toLowerCase();
+}
+
+/// Validates a primary/secondary key pair. Throws if either is missing or if
+/// they are equal (H-2 distinctness). Returns the normalised pair.
+export function assertDistinctKeys(primaryPk, secondaryPk) {
+    const p = normalizePk(primaryPk);
+    const s = normalizePk(secondaryPk);
+    if (!p) throw new Error("KEEPER_PRIMARY_KEY missing");
+    if (!s) throw new Error("KEEPER_SECONDARY_KEY missing");
+    if (p === s) {
+        throw new Error(
+            "KEEPER_PRIMARY_KEY must differ from KEEPER_SECONDARY_KEY (H-2): " +
+            "identical keys collapse the two-source oracle to a single writer",
+        );
+    }
+    return { primaryPk: p, secondaryPk: s };
+}
+
+/// Selects the signing wallet for a feed role. `wallets` is { primary, secondary }.
+/// Throws on an unknown role.
+export function selectWalletForRole(role, wallets) {
+    if (role === "primary") return wallets.primary;
+    if (role === "secondary") return wallets.secondary;
+    throw new Error(`unknown feed role: ${role}`);
+}

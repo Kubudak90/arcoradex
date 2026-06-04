@@ -6,6 +6,11 @@
 // answer is already current, and rejects fetched prices that fall outside
 // per-feed sanity bands.
 //
+// H-2 (audit 2026-05-31): the PRIMARY feeds are signed by KEEPER_PRIMARY_KEY
+// and the SECONDARY feeds by a SEPARATE KEEPER_SECONDARY_KEY, mirroring the
+// on-chain writer separation set by MigrateSecondaryWriters.s.sol. The two keys
+// MUST differ — identical keys collapse the two-source oracle to one writer.
+//
 // L-3/L-4 (audit 2026-05-31): CoinGecko fetches use an AbortController timeout;
 // every tx carries an explicit gas-fee ceiling, an explicitly-managed nonce, and
 // a confirmation timeout; the transport supports a fallback RPC; and a startup
@@ -29,6 +34,8 @@ import {
     decidePriceSanity,
     clampToMaxDev,
     priceTo1e8,
+    assertDistinctKeys,
+    selectWalletForRole,
     numEnv,
     DEFAULT_FETCH_TIMEOUT_MS,
     DEFAULT_TX_TIMEOUT_MS,
@@ -192,12 +199,17 @@ async function pushFeedAddress(publicClient, walletClient, label, feedAddr, usd,
 }
 
 async function main() {
-    const pkRaw = process.env.KEEPER_PRIVATE_KEY;
-    if (!pkRaw) {
-        log("KEEPER_PRIVATE_KEY missing — abort");
+    // H-2: separate primary/secondary signing keys. KEEPER_PRIVATE_KEY is kept
+    // as a back-compat alias for the PRIMARY key only.
+    const primaryPkRaw = process.env.KEEPER_PRIMARY_KEY || process.env.KEEPER_PRIVATE_KEY;
+    const secondaryPkRaw = process.env.KEEPER_SECONDARY_KEY;
+    let keys;
+    try {
+        keys = assertDistinctKeys(primaryPkRaw, secondaryPkRaw);
+    } catch (err) {
+        log(`${err?.message || err} — abort`);
         process.exit(2);
     }
-    const pk = pkRaw.startsWith("0x") ? pkRaw : "0x" + pkRaw;
     const apiKey = process.env.COINGECKO_API_KEY || undefined;
 
     const transport = buildTransport(
@@ -208,33 +220,42 @@ async function main() {
         }),
     );
 
-    const account = privateKeyToAccount(pk);
+    const primaryAccount = privateKeyToAccount(keys.primaryPk);
+    const secondaryAccount = privateKeyToAccount(keys.secondaryPk);
     const publicClient = createPublicClient({ chain: arcTestnet, transport });
-    const walletClient = createWalletClient({ account, chain: arcTestnet, transport });
+    // H-2: one wallet per role. The push loop selects the signer by feed role so
+    // PRIMARY feeds are signed by the primary key and SECONDARY feeds by the
+    // secondary key — matching the on-chain writer separation.
+    const wallets = {
+        primary: createWalletClient({ account: primaryAccount, chain: arcTestnet, transport }),
+        secondary: createWalletClient({ account: secondaryAccount, chain: arcTestnet, transport }),
+    };
 
     const gasCeiling = resolveGasCeiling(process.env);
 
-    // L-4: startup balance check. Warn below the soft floor; abort below the
-    // hard floor before signing anything. Then fetch the pending nonce once and
-    // increment it locally so a stuck tx can be re-priced and the next run never
-    // collides.
+    // L-4: per-signer startup balance check + explicit pending nonce. Warn below
+    // the soft floor; abort below the hard floor before signing anything. Each
+    // signer has its own nonce ref (incremented locally) so a stuck tx is
+    // re-priceable and runs never collide.
     const minBalance = numEnv(process.env.KEEPER_MIN_BALANCE_ETHER, DEFAULT_MIN_BALANCE_ETHER);
     const abortBalance = numEnv(process.env.KEEPER_ABORT_BALANCE_ETHER, DEFAULT_ABORT_BALANCE_ETHER);
-    const nonceRef = { value: 0 };
-    try {
-        const balWei = await publicClient.getBalance({ address: account.address });
-        const balEth = Number(formatEther(balWei));
-        if (balEth < abortBalance) {
-            log(`keeper ${account.address} balance ${balEth} ARC < abort floor ${abortBalance} — abort`);
+    const nonces = { primary: { value: 0 }, secondary: { value: 0 } };
+    for (const [role, account] of [["primary", primaryAccount], ["secondary", secondaryAccount]]) {
+        try {
+            const balWei = await publicClient.getBalance({ address: account.address });
+            const balEth = Number(formatEther(balWei));
+            if (balEth < abortBalance) {
+                log(`${role} keeper ${account.address} balance ${balEth} ARC < abort floor ${abortBalance} — abort`);
+                process.exit(2);
+            }
+            if (balEth < minBalance) {
+                log(`WARN: ${role} keeper ${account.address} balance ${balEth} ARC < ${minBalance} — top up soon`);
+            }
+            nonces[role].value = await publicClient.getTransactionCount({ address: account.address, blockTag: "pending" });
+        } catch (err) {
+            log(`startup check for ${role} keeper failed: ${err?.message || err} — abort`);
             process.exit(2);
         }
-        if (balEth < minBalance) {
-            log(`WARN: keeper ${account.address} balance ${balEth} ARC < ${minBalance} — top up soon`);
-        }
-        nonceRef.value = await publicClient.getTransactionCount({ address: account.address, blockTag: "pending" });
-    } catch (err) {
-        log(`startup check failed: ${err?.message || err} — abort`);
-        process.exit(2);
     }
 
     let updated = 0;
@@ -269,7 +290,9 @@ async function main() {
                 errored++;
                 continue;
             }
-            const outcome = await pushFeedAddress(publicClient, walletClient, label, addr, usd, f.maxDevBps, gasCeiling, nonceRef);
+            // H-2: sign each role with its own key.
+            const wallet = selectWalletForRole(role, wallets);
+            const outcome = await pushFeedAddress(publicClient, wallet, label, addr, usd, f.maxDevBps, gasCeiling, nonces[role]);
             if (outcome === "updated") {
                 updated++;
             } else if (outcome === "skipped") {
