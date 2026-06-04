@@ -19,8 +19,8 @@ contract P3AggregatorTest is Test {
     MockChainlinkFeedV2 secondary;
 
     function setUp() public {
-        primary = new MockChainlinkFeedV2(8, 100_000_000, OWNER, OWNER); // $1.00
-        secondary = new MockChainlinkFeedV2(8, 100_000_000, OWNER, OWNER); // $1.00
+        primary = new MockChainlinkFeedV2(8, 100_000_000, OWNER, OWNER, 1, type(int256).max, 0, 0); // $1.00
+        secondary = new MockChainlinkFeedV2(8, 100_000_000, OWNER, OWNER, 1, type(int256).max, 0, 0); // $1.00
     }
 
     function test_aggregator_returns_average_within_divergence_cap() public {
@@ -96,7 +96,7 @@ contract P3AggregatorTest is Test {
     }
 
     function test_constructor_reverts_on_decimals_mismatch() public {
-        MockChainlinkFeedV2 sec6 = new MockChainlinkFeedV2(6, 1_000_000, OWNER, OWNER);
+        MockChainlinkFeedV2 sec6 = new MockChainlinkFeedV2(6, 1_000_000, OWNER, OWNER, 1, type(int256).max, 0, 0);
         vm.expectRevert(abi.encodeWithSelector(OracleAggregator.DecimalsMismatch.selector, uint8(8), uint8(6)));
         new OracleAggregator(
             IChainlinkAggregator(address(primary)), IChainlinkAggregator(address(sec6)), 200, 3600, OWNER
@@ -331,7 +331,7 @@ contract P3AggregatorGovernanceTest is Test {
         vm.startPrank(DEPLOYER);
         reg = new ArcoraDexRegistry(DEPLOYER);
         usdc = new MockERC20("USDC", "USDC", 6);
-        primary = new MockChainlinkFeedV2(8, 100_000_000, DEPLOYER, DEPLOYER);
+        primary = new MockChainlinkFeedV2(8, 100_000_000, DEPLOYER, DEPLOYER, 1, type(int256).max, 0, 0);
         reg.listToken(address(usdc), 6, IChainlinkAggregator(address(primary)), 50, 3600);
         reg.transferOwnership(address(timelock));
         vm.stopPrank();
@@ -382,7 +382,7 @@ contract P3AggregatorGovernanceTest is Test {
         );
 
         // Deploy the P3 OracleAggregator (two matching-decimals sources, 2% cap).
-        secondary = new MockChainlinkFeedV2(8, 100_000_000, DEPLOYER, DEPLOYER);
+        secondary = new MockChainlinkFeedV2(8, 100_000_000, DEPLOYER, DEPLOYER, 1, type(int256).max, 0, 0);
         aggregator = new OracleAggregator(
             IChainlinkAggregator(address(primary)),
             IChainlinkAggregator(address(secondary)),
@@ -468,8 +468,8 @@ contract P3AggregatorDegradedConsumerTest is Test {
     MockChainlinkFeedV2 secondary;
 
     function setUp() public {
-        primary = new MockChainlinkFeedV2(8, 100_000_000, OWNER, OWNER); // $1.00
-        secondary = new MockChainlinkFeedV2(8, 100_000_000, OWNER, OWNER); // $1.00
+        primary = new MockChainlinkFeedV2(8, 100_000_000, OWNER, OWNER, 1, type(int256).max, 0, 0); // $1.00
+        secondary = new MockChainlinkFeedV2(8, 100_000_000, OWNER, OWNER, 1, type(int256).max, 0, 0); // $1.00
     }
 
     /// @dev D3 regression test: aggregator in degraded (single-source) mode

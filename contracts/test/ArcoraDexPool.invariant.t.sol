@@ -45,10 +45,10 @@ contract ArcoraDexPoolInvariant is StdInvariant, Test {
         fot = new FeeOnTransferERC20("FOT", "FOT", 6, owner, 50);
         // Test contract acts as both the writer (price-pusher) and owner so
         // setAnswer / setWriter can be called inline without prank gymnastics.
-        fUsdc = new MockChainlinkFeedV2(8, int256(1e8), address(this), address(this));
-        fEurc = new MockChainlinkFeedV2(8, int256(11e7), address(this), address(this));
-        fDai = new MockChainlinkFeedV2(8, int256(1e8), address(this), address(this));
-        fFot = new MockChainlinkFeedV2(8, int256(1e8), address(this), address(this));
+        fUsdc = new MockChainlinkFeedV2(8, int256(1e8), address(this), address(this), 1, type(int256).max, 0, 0);
+        fEurc = new MockChainlinkFeedV2(8, int256(11e7), address(this), address(this), 1, type(int256).max, 0, 0);
+        fDai = new MockChainlinkFeedV2(8, int256(1e8), address(this), address(this), 1, type(int256).max, 0, 0);
+        fFot = new MockChainlinkFeedV2(8, int256(1e8), address(this), address(this), 1, type(int256).max, 0, 0);
 
         reg = new ArcoraDexRegistry(owner);
         pool = new ArcoraDexPool(address(reg), 30, 1000, owner);

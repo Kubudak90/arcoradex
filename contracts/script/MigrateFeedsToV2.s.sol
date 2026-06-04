@@ -51,7 +51,10 @@ contract MigrateFeedsToV2 is Script {
         require(currentAnswer > 0, "old oracle answer is zero");
         uint8 oracleDec = oldOracle.decimals();
 
-        MockChainlinkFeedV2 newFeed = new MockChainlinkFeedV2(oracleDec, currentAnswer, keeperEOA, deployer);
+        // TODO(PR-5): tighten per-token band (minAnswer/maxAnswer/maxJumpBps/minUpdateSeconds).
+        // Permissive bounds for now: any positive answer, jump+interval guards disabled.
+        MockChainlinkFeedV2 newFeed =
+            new MockChainlinkFeedV2(oracleDec, currentAnswer, keeperEOA, deployer, 1, type(int256).max, 0, 0);
 
         reg.setOracle(token, IChainlinkAggregator(address(newFeed)));
 

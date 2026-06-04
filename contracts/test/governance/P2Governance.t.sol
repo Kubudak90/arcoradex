@@ -61,7 +61,7 @@ contract P2GovernanceTest is Test {
         vm.startPrank(DEPLOYER);
         reg = new ArcoraDexRegistry(DEPLOYER);
         usdc = new MockERC20("USDC", "USDC", 6);
-        fUsdc = new MockChainlinkFeedV2(8, 100_000_000, DEPLOYER, DEPLOYER);
+        fUsdc = new MockChainlinkFeedV2(8, 100_000_000, DEPLOYER, DEPLOYER, 1, type(int256).max, 0, 0);
         reg.listToken(address(usdc), 6, IChainlinkAggregator(address(fUsdc)), 50, 3600);
         pool = new ArcoraDexPool(address(reg), 5, 2500, DEPLOYER);
 

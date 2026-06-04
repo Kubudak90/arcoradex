@@ -121,8 +121,11 @@ contract DeployOraclesP3 is Script {
 
         // 2. Per-token: deploy secondary feed, deploy aggregator, configure guard
         for (uint256 i = 0; i < cfg.length; i++) {
-            MockChainlinkFeedV2 secondary =
-                new MockChainlinkFeedV2(cfg[i].feedDecimals, cfg[i].initialPrice, deployer, deployer);
+            // TODO(PR-5): tighten per-token band (minAnswer/maxAnswer/maxJumpBps/minUpdateSeconds).
+            // Permissive bounds for now: any positive answer, jump+interval guards disabled.
+            MockChainlinkFeedV2 secondary = new MockChainlinkFeedV2(
+                cfg[i].feedDecimals, cfg[i].initialPrice, deployer, deployer, 1, type(int256).max, 0, 0
+            );
 
             OracleAggregator agg = new OracleAggregator(
                 IChainlinkAggregator(cfg[i].primaryFeed),
