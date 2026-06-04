@@ -14,6 +14,7 @@ export const COOLDOWN_MS = 24 * 60 * 60 * 1000;
 export interface CooldownStore {
   get(key: string): number | undefined;
   set(key: string, value: number): void;
+  delete(key: string): void;
 }
 
 export class MemoryCooldownStore implements CooldownStore {
@@ -23,6 +24,9 @@ export class MemoryCooldownStore implements CooldownStore {
   }
   set(key: string, value: number): void {
     this.map.set(key, value);
+  }
+  delete(key: string): void {
+    this.map.delete(key);
   }
 }
 
@@ -84,6 +88,19 @@ export function recordClaim(
 ): void {
   store.set(addrKey(recipient), now);
   if (ip) store.set(ipKey(ip), now);
+}
+
+// M-2 (audit 2026-05-31): undo a recordClaim. The route records the claim
+// BEFORE broadcasting so a partial mint failure still consumes the cooldown;
+// this rollback is called only when ZERO tokens were broadcast, restoring the
+// user's ability to retry immediately.
+export function rollbackClaim(
+  store: CooldownStore,
+  recipient: string,
+  ip: string | undefined,
+): void {
+  store.delete(addrKey(recipient));
+  if (ip) store.delete(ipKey(ip));
 }
 
 // Resolve the first IP from x-forwarded-for (Vercel sets this), falling back

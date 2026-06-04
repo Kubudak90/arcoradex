@@ -14,6 +14,7 @@ import {
   MemoryCooldownStore,
   checkRateLimit,
   recordClaim,
+  rollbackClaim,
   extractClientIp,
 } from "@/lib/faucet-rate-limit";
 import { FAUCET_TOKENS } from "@/lib/faucet-tokens";
@@ -128,6 +129,15 @@ export async function POST(req: Request): Promise<NextResponse<FaucetSuccess | F
   inFlightAddrs.add(addrKey);
   if (ip != null) inFlightIps.add(ip);
 
+  // M-2 (audit 2026-05-31): record the claim BEFORE broadcasting. Previously
+  // recordClaim ran only on the success path, so a mid-batch failure (e.g.
+  // token #4 reverts) returned 502 WITHOUT recording — letting the same
+  // recipient/IP immediately re-POST and re-mint the tokens that DID land,
+  // unbounded. We now record up-front and roll the claim back only if ZERO
+  // tokens were broadcast, so a partial failure still consumes the cooldown.
+  recordClaim(cooldownStore, recipient, ip);
+
+  const txHashes: Record<string, `0x${string}`> = {};
   try {
     // Build clients
     const account = privateKeyToAccount(key as `0x${string}`);
@@ -135,7 +145,6 @@ export async function POST(req: Request): Promise<NextResponse<FaucetSuccess | F
     const publicClient = createPublicClient({ chain: arcTestnet, transport });
     const walletClient = createWalletClient({ chain: arcTestnet, transport, account });
 
-    const txHashes: Record<string, `0x${string}`> = {};
     try {
       // Pre-fetch the next nonce so back-to-back broadcasts don't collide
       // (viem's auto-nonce reads `pending` per-call and can repeat the same
@@ -159,11 +168,20 @@ export async function POST(req: Request): Promise<NextResponse<FaucetSuccess | F
         nonce += 1;
       }
     } catch (e) {
+      // I-12 (audit 2026-05-31): never leak raw viem/RPC detail to the client.
+      // Log it server-side; return a generic message.
+      console.error("[faucet] mint failed mid-flight:", e);
+
+      // M-2: roll the claim back ONLY if nothing was broadcast. If even one
+      // token landed, keep the cooldown — the re-mint window is what we're
+      // closing. Net: one batch per cooldown window regardless of partial
+      // failure.
+      if (Object.keys(txHashes).length === 0) {
+        rollbackClaim(cooldownStore, recipient, ip);
+      }
+
       return NextResponse.json(
-        {
-          ok: false,
-          error: `Mint failed mid-flight: ${(e as Error).message}. Some tokens may have arrived.`,
-        },
+        { ok: false, error: "Faucet mint failed, please try again later." },
         { status: 502 },
       );
     }
@@ -178,11 +196,6 @@ export async function POST(req: Request): Promise<NextResponse<FaucetSuccess | F
     } catch {
       // Don't fail the response — txs were broadcast; client can poll the explorer.
     }
-
-    // Record the claim only after a successful broadcast so a mid-flight revert
-    // doesn't lock out the user (txs are atomic per-token but the mint loop can
-    // partially fail; in that case the catch above already returned 502).
-    recordClaim(cooldownStore, recipient, ip);
 
     return NextResponse.json({ ok: true, recipient, txHashes }, { status: 200 });
   } finally {
