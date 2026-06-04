@@ -29,6 +29,12 @@ describe("read actions", () => {
     expect(new Set(tokens.map((t) => t.symbol))).toEqual(
       new Set(["USDC", "USDT", "PYUSD", "DAI", "EURC", "TRYC", "BRLC"]),
     );
+    // I-8 (audit 2026-05-31): maxStaleSeconds must round-trip from the registry.
+    // Deploy config: USD-pegs=3600, EURC=14400, TRYC/BRLC=86400.
+    const bySymbol = Object.fromEntries(tokens.map((t) => [t.symbol, t]));
+    expect(bySymbol.USDC!.maxStaleSeconds).toBe(3600);
+    expect(bySymbol.EURC!.maxStaleSeconds).toBe(14_400);
+    expect(bySymbol.TRYC!.maxStaleSeconds).toBe(86_400);
   });
 
   it("quoteSwap USDC→EURC: 100 USDC → ~92.31 EURC after 30 bps fee", async () => {

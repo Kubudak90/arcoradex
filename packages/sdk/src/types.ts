@@ -79,6 +79,12 @@ export interface TokenInfo {
   isActive: boolean;
   oracle: `0x${string}`;
   maxOracleDeviationBps: number;
+  /**
+   * I-8 (audit 2026-05-31): per-token Chainlink freshness window (seconds). A
+   * read whose `updatedAt` is older than this is rejected as stale. Mirrors the
+   * on-chain `Registry.TokenInfo.maxStaleSeconds` (uint32).
+   */
+  maxStaleSeconds: number;
 }
 
 export interface UserPosition {
