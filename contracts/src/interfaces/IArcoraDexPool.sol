@@ -77,6 +77,10 @@ interface IArcoraDexPool {
     event Unpaused(address indexed by);
     event AcceptedPriceSynced(address indexed token, uint256 oldPrice1e18, uint256 newPrice1e18);
     event PriceCacheUpdated(address indexed token, uint256 price1e18, uint256 updatedAt);
+    /// @notice Emitted when an owner clears a token's price caches (I-2). After
+    /// this, the next priced op for `token` takes the fresh-oracle path, or reverts
+    /// `NoValidPrice` until the keeper pushes a fresh reading.
+    event PriceCacheReset(address indexed token);
     event PauseGuardianUpdated(address indexed prev, address indexed next);
     /// @notice Emitted when the per-token cache TTL is updated. `maxAgeSeconds == 0`
     /// means the cache TTL is disabled for that token (fallback never expires
@@ -137,6 +141,13 @@ interface IArcoraDexPool {
     function pause() external;
     function unpause() external;
     function syncAcceptedPrice(address token) external returns (uint256 price1e18);
+    /// @notice Clear a token's stale price caches (I-2). Owner-only.
+    /// @dev MUST be paired with `Registry.reactivateToken(token)` (or the re-listing
+    /// of a previously-removed token) in the same governance batch, so a reactivated
+    /// token cannot trade against an ancient cached price. After the reset the next
+    /// priced op takes the fresh-oracle path, or reverts `NoValidPrice` until the
+    /// keeper pushes a fresh reading — this is intended.
+    function resetPriceCache(address token) external;
     function setPauseGuardian(address newGuardian) external;
     /// @notice Set the cache-fallback TTL for `token`. Zero disables the check.
     /// @dev Audit H-1 (2026-05-24): prevents persistent oracle outages from

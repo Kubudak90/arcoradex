@@ -716,6 +716,28 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         emit MaxCacheAgeSet(token, maxAgeSeconds);
     }
 
+    /// @notice Clear `token`'s stale price caches so it cannot trade against an
+    /// ancient cached price (I-2). Owner-only (the governance Timelock).
+    /// @dev Zeroes all three cache mappings: `lastAcceptedPrice` (the deviation
+    /// ratchet baseline), `lastValidPrice` (the cached fallback price) and
+    /// `lastValidPriceAt` (its write timestamp). Intended to be called in the SAME
+    /// Timelock batch as `Registry.reactivateToken(token)` — or after re-listing a
+    /// previously-removed token — because reactivation/re-listing alone leaves the
+    /// stale cache in place.
+    ///
+    /// Consequence: after the reset, the next priced op for `token` takes the
+    /// fresh-oracle path (cache==0 ⇒ no fallback, no cache-deviation guard). If the
+    /// oracle is not currently fresh, that op reverts `NoValidPrice(token)` until
+    /// the keeper pushes a fresh reading (or the owner calls `syncAcceptedPrice`).
+    /// This fail-closed behaviour is intended: trading halts rather than resuming
+    /// on a stale price.
+    function resetPriceCache(address token) external override onlyOwner {
+        lastAcceptedPrice[token] = 0;
+        lastValidPrice[token] = 0;
+        lastValidPriceAt[token] = 0;
+        emit PriceCacheReset(token);
+    }
+
     function syncAcceptedPrice(address token) external override onlyOwner returns (uint256 price1e18) {
         // Owner-only escape hatch: bypasses the cache-deviation guard so the operator
         // can force-accept an out-of-band price after a large legitimate move and

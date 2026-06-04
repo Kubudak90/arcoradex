@@ -134,6 +134,19 @@ contract ArcoraDexRegistryTest is Test {
         reg.deactivateToken(address(usdc));
     }
 
+    // ── I-1: deactivate reserve-guard ───────────────────────────────
+    /// @dev Back-compat: on a bare registry with no `setPool`, deactivate must
+    /// still work even if some (unknown) pool holds reserves — the guard is keyed
+    /// on the registry's own `pool` reference, which is unset here.
+    function test_i1_deactivate_allowedWhenPoolUnset() public {
+        vm.startPrank(owner);
+        reg.listToken(address(usdc), 6, IChainlinkAggregator(address(feed)), 50, 3600);
+        assertEq(reg.pool(), address(0), "pool must be unset in the bare fixture");
+        reg.deactivateToken(address(usdc));
+        vm.stopPrank();
+        assertFalse(reg.isActive(address(usdc)));
+    }
+
     // ── ownership transfer (Ownable2Step) ──────────────────────────
     function test_ownership_transfer_two_step() public {
         vm.prank(owner);

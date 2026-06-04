@@ -22,6 +22,12 @@ interface IArcoraDexRegistry {
     error TokenNotListed(address token);
     error MaxTokensReached();
     error TokenStillActive(address token);
+    /// @notice Reverted by `deactivateToken` when the wired Pool still holds a
+    /// non-zero reserve balance for the token (I-1). Deactivating a token with
+    /// live reserves would drop those reserves out of NAV (the NAV loop skips
+    /// inactive tokens), transferring value between LP cohorts and stranding the
+    /// reserves. Drain the Pool's reserves for the token to zero first.
+    error TokenHasReserves(address token);
 
     // ── Events ────────────────────────────────────────────────────────
     event TokenListed(
@@ -37,6 +43,9 @@ interface IArcoraDexRegistry {
     event TokenDeactivated(address indexed token);
     event TokenReactivated(address indexed token);
     event TokenRemoved(address indexed token);
+    /// @notice Emitted when the owner wires (or rewires) the Pool the registry
+    /// consults for the I-1 reserve guard.
+    event PoolSet(address indexed pool);
 
     // ── Mutators ──────────────────────────────────────────────────────
     function listToken(
@@ -52,6 +61,7 @@ interface IArcoraDexRegistry {
     function deactivateToken(address token) external;
     function reactivateToken(address token) external;
     function removeToken(address token) external;
+    function setPool(address pool_) external;
 
     // ── Views ─────────────────────────────────────────────────────────
     function MAX_TOKENS() external view returns (uint256);
@@ -59,4 +69,5 @@ interface IArcoraDexRegistry {
     function tokensLength() external view returns (uint256);
     function tokenInfo(address token) external view returns (TokenInfo memory);
     function isActive(address token) external view returns (bool);
+    function pool() external view returns (address);
 }

@@ -796,4 +796,135 @@ contract ArcoraDexPoolTest is Test {
         usdc.mint(address(this), 50_000_000);
         pool.deposit(address(usdc), 50_000_000, 0, block.timestamp + 60);
     }
+
+    // ── I-1: Registry.deactivateToken reserve-guard ────────────────────
+    /// @dev With the Pool wired into the Registry, deactivating a token while the
+    /// Pool still holds reserves for it must revert `TokenHasReserves`; once the
+    /// reserves are drained to zero, deactivation succeeds. Guards against the
+    /// value-transfer-between-LP-cohorts bug (inactive tokens drop out of NAV).
+    function test_i1_deactivate_revertsWithReserves() public {
+        // Wire the pool so the registry can read its reserves (production wiring).
+        vm.prank(owner);
+        reg.setPool(address(pool));
+
+        // Zero fees so the drain swap below empties USDC reserves to exactly zero.
+        vm.startPrank(owner);
+        pool.setSwapFeeBps(0);
+        pool.setProtocolFeeShareBps(0);
+        vm.stopPrank();
+
+        // Seed USDC (the token under test) and DAI (the drain counter-asset).
+        vm.startPrank(alice);
+        usdc.approve(address(pool), 1_000e6);
+        dai.approve(address(pool), 5_000e18);
+        pool.deposit(address(usdc), 1_000e6, 0, block.timestamp);
+        pool.deposit(address(dai), 5_000e18, 0, block.timestamp);
+        vm.stopPrank();
+
+        uint256 r = pool.reserves(address(usdc));
+        assertGt(r, 0, "USDC reserves must be non-zero after deposit");
+
+        // Deactivation must be blocked while reserves are live.
+        vm.prank(owner);
+        vm.expectRevert(abi.encodeWithSelector(IArcoraDexRegistry.TokenHasReserves.selector, address(usdc)));
+        reg.deactivateToken(address(usdc));
+
+        // Drain all USDC by swapping DAI -> USDC. Both priced at $1.00, fees are 0,
+        // so daiIn = r * 1e12 (18-dec DAI for 6-dec USDC) pulls out exactly r USDC.
+        uint256 daiIn = r * 1e12;
+        vm.prank(owner);
+        dai.mint(bob, daiIn);
+        vm.startPrank(bob);
+        dai.approve(address(pool), daiIn);
+        pool.swap(address(dai), address(usdc), daiIn, 0, block.timestamp, bob);
+        vm.stopPrank();
+
+        assertEq(pool.reserves(address(usdc)), 0, "USDC reserves must be drained to zero");
+
+        // Now deactivation is permitted.
+        vm.prank(owner);
+        reg.deactivateToken(address(usdc));
+        assertFalse(reg.isActive(address(usdc)), "USDC must be inactive after draining + deactivating");
+    }
+
+    // ── I-2: Pool.resetPriceCache forces a fresh price on reactivation ──
+    /// @dev A token that was deactivated (drained) keeps its stale price caches.
+    /// On reactivation, without `resetPriceCache` a swap trades against the ancient
+    /// cached price (the cache-deviation guard demotes the fresh oracle to the
+    /// stale cache). After the owner calls `resetPriceCache`, the next priced op
+    /// takes the fresh-oracle path instead of the stale cache.
+    function test_i2_reactivate_thenResetCache_forcesFreshPrice() public {
+        vm.prank(owner);
+        reg.setPool(address(pool));
+
+        // Zero fees so the drain swap empties EURC reserves to exactly zero.
+        vm.startPrank(owner);
+        pool.setSwapFeeBps(0);
+        pool.setProtocolFeeShareBps(0);
+        vm.stopPrank();
+
+        // Seed EURC ($1.10) and USDC ($1.00). This establishes EURC's caches.
+        vm.startPrank(alice);
+        eurc.approve(address(pool), 5_000e6);
+        usdc.approve(address(pool), 5_000e6);
+        pool.deposit(address(eurc), 5_000e6, 0, block.timestamp);
+        pool.deposit(address(usdc), 5_000e6, 0, block.timestamp);
+        vm.stopPrank();
+
+        assertEq(pool.lastValidPrice(address(eurc)), 1.1e18, "EURC cache must be seeded at $1.10");
+        assertEq(pool.lastAcceptedPrice(address(eurc)), 1.1e18, "EURC accepted baseline must be $1.10");
+
+        // Drain EURC fully by swapping it out (USDC -> EURC pulls all EURC).
+        uint256 rEurc = pool.reserves(address(eurc));
+        // USDC in worth rEurc EURC at $1.00/$1.10: usdcIn = rEurc * 1.10 (same 6 dec).
+        uint256 usdcIn = (rEurc * 11) / 10;
+        vm.prank(owner);
+        usdc.mint(bob, usdcIn);
+        vm.startPrank(bob);
+        usdc.approve(address(pool), usdcIn);
+        pool.swap(address(usdc), address(eurc), usdcIn, 0, block.timestamp, bob);
+        vm.stopPrank();
+        assertEq(pool.reserves(address(eurc)), 0, "EURC reserves must be drained to zero");
+
+        // Deactivate EURC (now permitted: zero reserves).
+        vm.prank(owner);
+        reg.deactivateToken(address(eurc));
+
+        // Oracle moves dramatically while EURC is inactive: $1.10 -> $5.00.
+        // (350%+ jump, far beyond the 150 bps deviation cap.)
+        fEurc.setAnswer(int256(5e8));
+
+        // Reactivate WITHOUT resetting the cache: the stale $1.10 cache survives.
+        vm.prank(owner);
+        reg.reactivateToken(address(eurc));
+        assertEq(pool.lastValidPrice(address(eurc)), 1.1e18, "stale cache must survive reactivation");
+        assertEq(pool.lastAcceptedPrice(address(eurc)), 1.1e18, "stale accepted baseline must survive reactivation");
+
+        // A swap now trades EURC against the STALE cache ($1.10): the fresh $5.00
+        // oracle is demoted by the cache-deviation guard, so the cache is unchanged.
+        vm.prank(owner);
+        eurc.mint(bob, 100e6);
+        vm.startPrank(bob);
+        eurc.approve(address(pool), 100e6);
+        pool.swap(address(eurc), address(usdc), 100e6, 0, block.timestamp, bob);
+        vm.stopPrank();
+        assertEq(pool.lastValidPrice(address(eurc)), 1.1e18, "without reset, swap uses the stale $1.10 cache");
+
+        // Owner resets the EURC caches (paired with reactivation in governance).
+        vm.prank(owner);
+        pool.resetPriceCache(address(eurc));
+        assertEq(pool.lastValidPrice(address(eurc)), 0, "lastValidPrice must be cleared");
+        assertEq(pool.lastValidPriceAt(address(eurc)), 0, "lastValidPriceAt must be cleared");
+        assertEq(pool.lastAcceptedPrice(address(eurc)), 0, "lastAcceptedPrice must be cleared");
+
+        // The next priced op takes the FRESH-oracle path ($5.00), NOT the stale cache.
+        vm.prank(owner);
+        eurc.mint(bob, 100e6);
+        vm.startPrank(bob);
+        eurc.approve(address(pool), 100e6);
+        pool.swap(address(eurc), address(usdc), 100e6, 0, block.timestamp, bob);
+        vm.stopPrank();
+        assertEq(pool.lastValidPrice(address(eurc)), 5e18, "after reset, swap must use the fresh $5.00 oracle");
+        assertEq(pool.lastAcceptedPrice(address(eurc)), 5e18, "after reset, accepted baseline must be the fresh $5.00");
+    }
 }

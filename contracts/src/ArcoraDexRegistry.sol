@@ -8,6 +8,14 @@ import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IER
 import {IArcoraDexRegistry} from "./interfaces/IArcoraDexRegistry.sol";
 import {IChainlinkAggregator} from "./interfaces/IChainlinkAggregator.sol";
 
+/// @dev Minimal local view of the Pool used solely for the I-1 reserve guard in
+/// `deactivateToken`. Declared locally (rather than importing the full
+/// `IArcoraDexPool`) to avoid an interface-import cycle: `IArcoraDexPool` already
+/// references `IArcoraDexRegistry`.
+interface IPoolReserves {
+    function reserves(address token) external view returns (uint256);
+}
+
 /// @title ArcoraDexRegistry
 /// @notice Per-token catalogue: decimals, USD oracle, deviation cap, active flag.
 contract ArcoraDexRegistry is IArcoraDexRegistry, Ownable2Step {
@@ -18,6 +26,12 @@ contract ArcoraDexRegistry is IArcoraDexRegistry, Ownable2Step {
 
     mapping(address token => TokenInfo) internal _info;
     address[] public override tokens;
+
+    /// @notice The Pool whose reserves the registry consults for the I-1 guard in
+    /// `deactivateToken`. When unset (`address(0)`) the guard is skipped, preserving
+    /// back-compat for bare registries and deploys that never wire a pool.
+    /// Production MUST call `setPool(pool)` so deactivation cannot strand reserves.
+    address public override pool;
 
     constructor(address initialOwner) Ownable(initialOwner) {}
 
@@ -89,13 +103,40 @@ contract ArcoraDexRegistry is IArcoraDexRegistry, Ownable2Step {
         emit MaxStaleSecondsUpdated(token, old, maxStaleSeconds_);
     }
 
+    /// @notice Wire (or rewire) the Pool the registry consults for the I-1
+    /// reserve guard in `deactivateToken`.
+    /// @dev The registry is not the Pool's owner and cannot drive it; it only
+    /// *reads* `reserves(token)`. A zero address disables the guard (back-compat).
+    /// Production deployments MUST call this with the live Pool so a token cannot
+    /// be deactivated while the Pool still holds its reserves (which would silently
+    /// drop those reserves out of NAV — see `IArcoraDexRegistry.TokenHasReserves`).
+    function setPool(address pool_) external override onlyOwner {
+        pool = pool_;
+        emit PoolSet(pool_);
+    }
+
+    /// @dev I-1: deactivating a token whose Pool reserves are non-zero would drop
+    /// those reserves out of NAV (the NAV loop skips inactive tokens), transferring
+    /// value between LP cohorts and stranding the reserves. When a Pool is wired,
+    /// require its reserves for the token to be drained to zero first. When no Pool
+    /// is wired (`pool == address(0)`) the guard is skipped (back-compat).
     function deactivateToken(address token) external override onlyOwner {
         TokenInfo storage info = _info[token];
         if (info.usdOracle == IChainlinkAggregator(address(0))) revert TokenNotListed(token);
+        if (pool != address(0) && IPoolReserves(pool).reserves(token) != 0) revert TokenHasReserves(token);
         info.isActive = false;
         emit TokenDeactivated(token);
     }
 
+    /// @notice Re-activate a previously deactivated token.
+    /// @dev STALE-CACHE WARNING (I-2): reactivation does NOT touch the Pool's price
+    /// caches (`lastAcceptedPrice` / `lastValidPrice` / `lastValidPriceAt`). A token
+    /// that was inactive for a while (or is being re-listed after a prior
+    /// `removeToken`) may carry an ancient cached price that the Pool would trade
+    /// against until the keeper pushes a fresh oracle reading. Governance MUST call
+    /// `Pool.resetPriceCache(token)` in the SAME Timelock batch as this call (and
+    /// likewise after re-listing a previously-removed token) so the next priced op
+    /// takes the fresh-oracle path instead of the stale cache.
     function reactivateToken(address token) external override onlyOwner {
         TokenInfo storage info = _info[token];
         if (info.usdOracle == IChainlinkAggregator(address(0))) revert TokenNotListed(token);
