@@ -28,14 +28,16 @@ contract ArcoraDexLP is ERC20, IArcoraDexLP {
         _burn(from, amount);
     }
 
-    /// @dev Propagates the pool's min-hold lock through LP transfers.
-    /// On a normal transfer (from != 0 && to != 0), notifies the pool so it can
-    /// extend the recipient's `lastMintAt` to max(to.lastMintAt, from.lastMintAt).
-    /// Mints (from == 0) and burns (to == 0) skip the notification — they are
-    /// already gated by the pool's deposit/withdraw paths.
+    /// @dev Enforces the pool's min-hold lock on LP transfers (H-1 sender-gate).
+    /// On a non-zero wallet-to-wallet transfer (from != 0 && to != 0 && value > 0)
+    /// the pool reverts unless the SENDER's own min-hold has elapsed. The recipient's
+    /// clock is never bumped. Zero-value transfers, mints (from == 0) and burns
+    /// (to == 0) skip the notification: zero-value transfers move no claim and could
+    /// otherwise be weaponised to grief a victim's lock, while mint/burn are already
+    /// gated by the pool's deposit/withdraw paths.
     function _update(address from, address to, uint256 value) internal override {
         super._update(from, to, value);
-        if (from != address(0) && to != address(0)) {
+        if (from != address(0) && to != address(0) && value > 0) {
             IArcoraDexPool(MINTER).notifyLPTransfer(from, to);
         }
     }

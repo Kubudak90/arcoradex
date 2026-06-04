@@ -24,6 +24,9 @@ interface IArcoraDexPool {
     error PriceDeviation(address token, uint256 newPrice1e18, uint256 prev1e18, uint16 maxDevBps);
     error NoValidPrice(address token);
     error EarlyWithdraw(uint256 unlockAt, uint256 nowAt);
+    // H-1 (audit 2026-05-31): sender-gate on LP transfers — a transfer reverts
+    // until the sender's own min-hold has elapsed (anti-JIT, non-griefable).
+    error EarlyTransfer(uint256 unlockAt, uint256 nowAt);
     error NotLP();
     error NotAuthorized();
 

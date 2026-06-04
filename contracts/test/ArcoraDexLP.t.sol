@@ -82,7 +82,10 @@ contract ArcoraDexLPTest is Test {
         lp.burn(alice, 40e18);
     }
 
-    function test_transfer_works_freely() public {
+    function test_transfer_invokes_hook() public {
+        // Exercises the MockMinter stub, which has no hold gate, so this documents
+        // hook dispatch on transfer rather than an ungated transfer (real LP
+        // transfers are sender-gated by notifyLPTransfer).
         vm.prank(address(minterContract));
         lp.mint(alice, 100e18);
 
@@ -93,7 +96,10 @@ contract ArcoraDexLPTest is Test {
     }
 
     /// @notice Verifies the _update hook invokes notifyLPTransfer on the minter
-    /// for wallet-to-wallet transfers (not for mints or burns).
+    /// for non-zero wallet-to-wallet transfers, but NOT for mints, burns, or
+    /// zero-value transfers. H-1 (audit 2026-05-31) added the `value > 0` guard:
+    /// a zero-value transfer must not reach the hook, otherwise it could be
+    /// weaponised to grief a victim's min-hold lock without moving any claim.
     function test_transfer_hook_calls_notifyLPTransfer() public {
         vm.prank(address(minterContract));
         lp.mint(alice, 100e18);
@@ -102,7 +108,13 @@ contract ArcoraDexLPTest is Test {
         assertEq(minterContract.lastFrom(), address(0));
         assertEq(minterContract.lastTo(), address(0));
 
-        // Normal transfer must invoke notifyLPTransfer.
+        // Zero-value transfer (H-1 guard) must NOT call notifyLPTransfer.
+        vm.prank(alice);
+        lp.transfer(bob, 0);
+        assertEq(minterContract.lastFrom(), address(0), "zero-value transfer must not reach the hook");
+        assertEq(minterContract.lastTo(), address(0), "zero-value transfer must not reach the hook");
+
+        // Normal (value > 0) transfer must invoke notifyLPTransfer.
         vm.prank(alice);
         lp.transfer(bob, 50e18);
         assertEq(minterContract.lastFrom(), alice);

@@ -653,19 +653,23 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         emit Unpaused(msg.sender);
     }
 
-    /// @notice Hook invoked by ArcoraDexLP on every transfer to propagate
-    /// the deposit-side min-hold lock. The recipient inherits the stricter
-    /// of (their existing lock, the sender's lock) — preventing the
-    /// deposit→transfer→withdraw JIT bypass.
-    /// @dev Only the LP contract may call this.
-    function notifyLPTransfer(address from, address to) external override {
+    /// @notice Hook invoked by ArcoraDexLP on non-zero wallet-to-wallet transfers
+    /// to enforce the deposit-side min-hold lock (H-1 audit 2026-05-31).
+    /// @dev Sender-gate: the transfer reverts unless the SENDER's own min-hold has
+    /// elapsed. The recipient's `lastMintAt` is intentionally NOT modified. This
+    /// closes the deposit→transfer→withdraw JIT bypass (INV-9) — a holder cannot
+    /// move LP until their 1h hold is up, by which point they could have withdrawn
+    /// themselves — while preventing the pre-fix recipient-clock bump from being
+    /// weaponised into a withdrawal denial-of-service against an arbitrary victim.
+    /// Only the LP contract may call this.
+    /// @dev `to` is unnamed: the recipient's clock is intentionally never read or
+    /// written under the sender-gate model (the parameter is kept for the interface).
+    function notifyLPTransfer(address from, address) external override {
         if (msg.sender != address(LP)) revert NotLP();
-        uint256 fromLock = lastMintAt[from];
-        // Justification [timestamp]: lastMintAt stores block.timestamp from the deposit; comparing it here to propagate the stricter hold lock to LP transfer recipients is intentional and miner manipulation (~15 s) cannot bypass a 3600-second hold window.
+        uint256 unlockAt = lastMintAt[from] + MIN_HOLD_SECONDS;
+        // Justification [timestamp]: lastMintAt stores block.timestamp from the sender's deposit; gating the transfer on the sender's 1-hour hold is intentional and miner manipulation (~15 s) cannot bypass a 3600-second hold window.
         // slither-disable-next-line timestamp
-        if (fromLock > lastMintAt[to]) {
-            lastMintAt[to] = fromLock;
-        }
+        if (block.timestamp < unlockAt) revert EarlyTransfer(unlockAt, block.timestamp);
     }
 
     function setPauseGuardian(address newGuardian) external override onlyOwner {
