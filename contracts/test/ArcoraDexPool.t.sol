@@ -977,4 +977,35 @@ contract ArcoraDexPoolTest is Test {
         assertEq(pool.lastValidPrice(address(eurc)), 5e18, "after reset, swap must use the fresh $5.00 oracle");
         assertEq(pool.lastAcceptedPrice(address(eurc)), 5e18, "after reset, accepted baseline must be the fresh $5.00");
     }
+
+    // ── PR-4 golden test: price-stack NAV/quote bit-identical net (G-1..G-4) ──
+    // Seeds a deterministic multi-token pool (USDC@$1.00, EURC@$1.10, DAI@$1.00)
+    // and pins the EXACT outputs of totalReservesUSD / quoteDeposit / quoteWithdraw
+    // / quote(swap). These constants were captured on pre-refactor code and MUST
+    // remain bit-identical after the G-1/G-2/G-3/G-4 read-collapse refactor.
+    function test_g_nav_and_quotes_unchanged() public {
+        // Deterministic multi-token seed (all from alice, who is funded in setUp).
+        vm.startPrank(alice);
+        usdc.approve(address(pool), 1000e6);
+        pool.deposit(address(usdc), 1000e6, 0, block.timestamp); // 1000 USDC @ $1.00
+        eurc.approve(address(pool), 600e6);
+        pool.deposit(address(eurc), 600e6, 0, block.timestamp); // 600 EURC @ $1.10
+        dai.approve(address(pool), 2000e18);
+        pool.deposit(address(dai), 2000e18, 0, block.timestamp); // 2000 DAI @ $1.00
+        vm.stopPrank();
+
+        uint256 nav = pool.totalReservesUSD();
+        uint256 qDepUsdc = pool.quoteDeposit(address(usdc), 250e6);
+        uint256 qDepDai = pool.quoteDeposit(address(dai), 750e18);
+        (uint256 qWdAmt, uint256 qWdFee) = pool.quoteWithdraw(address(eurc), 100e24);
+        uint256 qSwap = pool.quote(address(usdc), address(eurc), 500e6);
+
+        // ── Golden constants (captured on pre-refactor code) ──
+        assertEq(nav, 3660e18, "NAV");
+        assertEq(qDepUsdc, 250000000000000000000000249, "quoteDeposit USDC");
+        assertEq(qDepDai, 750000000000000000000000749, "quoteDeposit DAI");
+        assertEq(qWdAmt, 90636363, "quoteWithdraw amountOut");
+        assertEq(qWdFee, 27272, "quoteWithdraw protocolFee");
+        assertEq(qSwap, 453181818, "quote swap USDC->EURC");
+    }
 }
