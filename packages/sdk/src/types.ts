@@ -4,6 +4,14 @@ export interface SwappedEvent {
   user: `0x${string}`;
   tokenIn: `0x${string}`;
   tokenOut: `0x${string}`;
+  /**
+   * L-10 (audit 2026-05-31): the amount of `tokenIn` the pool *actually
+   * received* — the measured balance delta, post fee-on-transfer — NOT the
+   * requested `amountIn` passed to `swap`. For standard tokens requested ==
+   * received; for fee-on-transfer/deflationary tokens this is the lower,
+   * received value (and `amountOut` is derived from it). Mirrors the contract
+   * NatSpec on `IArcoraDexPool.Swapped`.
+   */
   amountIn: bigint;
   amountOut: bigint;
   lpFeeUsd1e18: bigint;
@@ -17,6 +25,14 @@ export interface SwappedEvent {
 export interface DepositedEvent {
   user: `0x${string}`;
   token: `0x${string}`;
+  /**
+   * L-10 (audit 2026-05-31): the amount the pool *actually received* — the
+   * measured balance delta, post fee-on-transfer — NOT the requested `amount`
+   * passed to `deposit`. For standard tokens requested == received; for
+   * fee-on-transfer/deflationary tokens this is the lower, received value (and
+   * `lpMinted` is derived from it). Mirrors the contract NatSpec on
+   * `IArcoraDexPool.Deposited`.
+   */
   amountIn: bigint;
   lpMinted: bigint;
   navBefore1e18: bigint;
