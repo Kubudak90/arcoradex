@@ -92,6 +92,15 @@ contract OracleAggregator is IChainlinkAggregator, Ownable2Step {
         returns (uint80, int256, uint256, uint256, uint80)
     {
         uint256 absDiff = pAns > sAns ? uint256(pAns - sAns) : uint256(sAns - pAns);
+        // I-5: the divergence cap is measured against `min(pAns, sAns)`, not the
+        // mid or max. Because the denominator is the smaller of the two answers,
+        // the effective tolerance is ASYMMETRIC — slightly WIDER than if it were
+        // taken relative to mid (and wider still vs. max): a given `absDiff`
+        // clears the check more easily when one source is low. At the configured
+        // 50–200 bps caps the difference is numerically negligible (an upper-
+        // single-bps effect on the boundary), so the math is intentionally left
+        // as-is for gas/simplicity. If symmetric semantics are ever required,
+        // switch the denominator to `mid = (pAns + sAns) / 2`.
         uint256 minAns = pAns < sAns ? uint256(pAns) : uint256(sAns);
         if (absDiff * 10_000 > minAns * uint256(maxDivergenceBps)) {
             revert SourcesDiverge(uint256(pAns), uint256(sAns), maxDivergenceBps);

@@ -11,7 +11,7 @@ import {IChainlinkAggregator} from "../src/interfaces/IChainlinkAggregator.sol";
 import {MintableERC20} from "../src/testnet/MintableERC20.sol";
 import {FeeOnTransferERC20} from "./mocks/FeeOnTransferERC20.sol";
 import {MockChainlinkFeed} from "../src/testnet/MockChainlinkFeed.sol";
-import {RevertingMockFeed, RevertingDecimalsMockFeed} from "./oracle/RevertingMockFeed.sol";
+import {RevertingMockFeed} from "./oracle/RevertingMockFeed.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 contract ArcoraDexPoolTest is Test {
@@ -821,11 +821,20 @@ contract ArcoraDexPoolTest is Test {
         // Capture NAV with the live feed (baseline — only USDC has reserves here).
         uint256 navBaseline = pool.totalReservesUSD();
 
-        // Step 2: swap in a feed whose latestRoundData() succeeds (fresh round) but
-        // whose decimals() reverts — exercising the inner catch path.
-        RevertingDecimalsMockFeed badDec = new RevertingDecimalsMockFeed();
-        vm.prank(owner);
-        reg.setOracle(address(usdc), IChainlinkAggregator(address(badDec)));
+        // Step 2: model an ALREADY-INSTALLED feed whose latestRoundData() keeps
+        // succeeding (fresh round) but whose decimals() starts reverting at
+        // runtime — exercising the Pool's inner `decimals()` try/catch in
+        // `_readOracle`. We mock the live feed (fUsdc) rather than installing a
+        // RevertingDecimalsMockFeed via setOracle, because I-7 now makes setOracle
+        // probe `decimals()` up front and reject a feed that reverts there; the
+        // inner-catch path defends against a feed that degrades AFTER install,
+        // which is what this regression covers. `RevertingDecimalsMockFeed`
+        // remains a documented analogue of this failure mode.
+        vm.mockCallRevert(
+            address(fUsdc),
+            abi.encodeWithSelector(IChainlinkAggregator.decimals.selector),
+            "decimals unavailable"
+        );
 
         // totalReservesUSD() must not revert; cache fallback keeps NAV non-zero
         // and equal to the baseline (same reserves, same cached price).

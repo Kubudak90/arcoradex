@@ -19,8 +19,6 @@ interface IArcoraDexPool {
     error InsufficientTokenOut(uint256 actual, uint256 minTokenOut);
     error InsufficientLiquidity(address token, uint256 requested, uint256 available);
     error FirstDepositTooSmall(uint256 usdValue, uint256 minimumLiquidity);
-    error InvalidOracleRound(address token, uint80 roundId, uint80 answeredInRound);
-    error InvalidOracleTimestamp(address token, uint256 updatedAt);
     error PriceDeviation(address token, uint256 newPrice1e18, uint256 prev1e18, uint16 maxDevBps);
     error NoValidPrice(address token);
     error EarlyWithdraw(uint256 unlockAt, uint256 nowAt);

@@ -28,6 +28,11 @@ interface IArcoraDexRegistry {
     /// inactive tokens), transferring value between LP cohorts and stranding the
     /// reserves. Drain the Pool's reserves for the token to zero first.
     error TokenHasReserves(address token);
+    /// @notice Reverted by `setOracle` when the candidate feed reports more than
+    /// 18 decimals (I-7). The Pool reads `oracle.decimals()` at runtime to scale
+    /// answers to 1e18; a feed outside the supported `[1, 18]` domain would
+    /// mis-scale every price. Defense-in-depth: reject the repoint up front.
+    error OracleDecimalsTooHigh(uint8 decimals);
 
     // ── Events ────────────────────────────────────────────────────────
     event TokenListed(

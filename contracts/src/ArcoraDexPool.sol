@@ -744,10 +744,20 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         emit PriceCacheReset(token);
     }
 
+    /// @notice Owner-only escape hatch that re-baselines `token`'s deviation
+    /// ratchet (`lastAcceptedPrice`) to the current oracle price, bypassing the
+    /// per-read deviation guard so the operator can force-accept an out-of-band
+    /// price after a large legitimate move.
+    /// @dev I-6: the effect on the price cache depends on oracle freshness — it
+    /// is NOT a symmetric "reset both" operation:
+    /// - Fresh oracle branch: writes the fresh price into BOTH the cache
+    ///   (`lastValidPrice` + `lastValidPriceAt = block.timestamp`) and the
+    ///   `lastAcceptedPrice` baseline. Only here is the cache age reset.
+    /// - Stale oracle branch: re-baselines `lastAcceptedPrice` ONLY, seeded from
+    ///   the EXISTING `lastValidPrice` cache (reverts `NoValidPrice` if the cache
+    ///   was never seeded). The cache value and its age (`lastValidPriceAt`) are
+    ///   left untouched — this call does NOT refresh a stale cache.
     function syncAcceptedPrice(address token) external override onlyOwner returns (uint256 price1e18) {
-        // Owner-only escape hatch: bypasses the cache-deviation guard so the operator
-        // can force-accept an out-of-band price after a large legitimate move and
-        // simultaneously reset both the cache and the lastAcceptedPrice baseline.
         uint8 tokenDecimals;
         bool isFresh;
         (price1e18, tokenDecimals, isFresh) = _readOracle(token);

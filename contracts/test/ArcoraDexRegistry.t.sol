@@ -107,6 +107,39 @@ contract ArcoraDexRegistryTest is Test {
         reg.setOracle(address(usdc), IChainlinkAggregator(address(feed)));
     }
 
+    // ── I-7: setOracle defense-in-depth decimals guard ─────────────────
+    /// @dev The Pool reads `oracle.decimals()` at runtime to scale answers to
+    /// 1e18. A feed reporting > 18 decimals is out of the supported domain and
+    /// would mis-scale prices, so `setOracle` rejects it up front. Repointing the
+    /// feed is an instant operation (the next priced op reads the new feed), so
+    /// this guard is the last line of defense against a misconfigured repoint.
+    function test_i7_setOracle_rejectsOver18Decimals() public {
+        vm.prank(owner);
+        reg.listToken(address(usdc), 6, IChainlinkAggregator(address(feed)), 50, 3600);
+
+        // A feed that reports 19 decimals — out of the supported [1, 18] domain.
+        MockChainlinkFeed badFeed = new MockChainlinkFeed(19, int256(1e8));
+
+        vm.prank(owner);
+        vm.expectRevert(abi.encodeWithSelector(IArcoraDexRegistry.OracleDecimalsTooHigh.selector, uint8(19)));
+        reg.setOracle(address(usdc), IChainlinkAggregator(address(badFeed)));
+
+        // The original feed is unchanged after the rejected repoint.
+        assertEq(address(reg.tokenInfo(address(usdc)).usdOracle), address(feed));
+    }
+
+    /// @dev Boundary: a feed reporting exactly 18 decimals is accepted.
+    function test_i7_setOracle_accepts18Decimals() public {
+        vm.prank(owner);
+        reg.listToken(address(usdc), 6, IChainlinkAggregator(address(feed)), 50, 3600);
+
+        MockChainlinkFeed feed18 = new MockChainlinkFeed(18, int256(1e18));
+        vm.prank(owner);
+        reg.setOracle(address(usdc), IChainlinkAggregator(address(feed18)));
+
+        assertEq(address(reg.tokenInfo(address(usdc)).usdOracle), address(feed18));
+    }
+
     // ── setDeviation ───────────────────────────────────────────────
     function test_setDeviation_updates() public {
         vm.prank(owner);

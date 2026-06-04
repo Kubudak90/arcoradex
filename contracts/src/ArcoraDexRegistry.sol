@@ -76,15 +76,33 @@ contract ArcoraDexRegistry is IArcoraDexRegistry, Ownable2Step {
         emit TokenListed(token, decimals_, address(oracle), maxDeviationBps, maxStaleSeconds_);
     }
 
+    /// @notice Repoint `token`'s USD price feed to `newOracle`. Owner-only.
+    /// @dev Security: this is an INSTANT feed repoint — there is no timelock or
+    /// staging here, and the Pool reads `info.usdOracle` (and, on it,
+    /// `oracle.decimals()` + `latestRoundData()`) afresh on the very next priced
+    /// op. A wrong or malicious feed therefore takes effect immediately, so this
+    /// must only be driven by the governance owner (the Timelock in production).
+    /// I-7 defense-in-depth: reject a feed reporting > 18 decimals — the Pool
+    /// scales answers to 1e18 by `oracle.decimals()`, so a feed outside the
+    /// supported `[1, 18]` domain would mis-scale every price.
     function setOracle(address token, IChainlinkAggregator newOracle) external override onlyOwner {
         if (address(newOracle) == address(0)) revert ZeroAddress();
         TokenInfo storage info = _info[token];
         if (info.usdOracle == IChainlinkAggregator(address(0))) revert TokenNotListed(token);
+        uint8 newDecimals = newOracle.decimals();
+        if (newDecimals > 18) revert OracleDecimalsTooHigh(newDecimals);
         address oldOracle = address(info.usdOracle);
         info.usdOracle = newOracle;
         emit OracleUpdated(token, oldOracle, address(newOracle));
     }
 
+    /// @notice Update `token`'s per-read oracle deviation cap (bps). Owner-only.
+    /// @dev Security: the cap bounds how far a fresh oracle reading may move from
+    /// the Pool's `lastAcceptedPrice` baseline before the priced op reverts
+    /// `PriceDeviation` and falls back to cache. Loosening it (toward 10_000)
+    /// widens the band an attacker-controlled or glitching feed can move within
+    /// in a single update; tightening it (toward 1) makes the Pool more prone to
+    /// reverting on legitimate volatility. Bounded to `[1, 10_000]`.
     function setDeviation(address token, uint16 maxDeviationBps) external override onlyOwner {
         if (maxDeviationBps == 0 || maxDeviationBps > 10_000) revert InvalidDeviation(maxDeviationBps);
         TokenInfo storage info = _info[token];
@@ -94,6 +112,13 @@ contract ArcoraDexRegistry is IArcoraDexRegistry, Ownable2Step {
         emit DeviationUpdated(token, old, maxDeviationBps);
     }
 
+    /// @notice Update `token`'s per-read oracle staleness window (seconds).
+    /// Owner-only.
+    /// @dev Security: the Pool treats an oracle answer older than
+    /// `block.timestamp - maxStaleSeconds` as not-fresh and falls back to its
+    /// `lastValidPrice` cache. Raising this lets the Pool accept older live
+    /// readings (more tolerant of feed lag, but more exposed to stale prices);
+    /// lowering it forces cache fallback sooner. Bounded to `[60s, 7 days]`.
     function setMaxStaleSeconds(address token, uint32 maxStaleSeconds_) external override onlyOwner {
         if (maxStaleSeconds_ < 60 || maxStaleSeconds_ > 7 days) revert InvalidStaleSeconds(maxStaleSeconds_);
         TokenInfo storage info = _info[token];
