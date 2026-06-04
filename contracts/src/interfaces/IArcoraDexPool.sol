@@ -31,6 +31,12 @@ interface IArcoraDexPool {
     error NotAuthorized();
 
     // ── Events ────────────────────────────────────────────────────────
+    /// @notice Emitted on a successful deposit.
+    /// @dev L-10 (audit 2026-05-31): `amountIn` is the amount the pool *actually
+    /// received* (the measured balance delta, post fee-on-transfer), NOT the
+    /// requested transfer amount passed to `deposit`. For standard tokens the two
+    /// are equal; for fee-on-transfer/deflationary tokens `amountIn` is the lower,
+    /// received value. Off-chain consumers must treat this as the received amount.
     event Deposited(
         address indexed user,
         address indexed token,
@@ -48,6 +54,12 @@ interface IArcoraDexPool {
         uint256 navBefore1e18,
         uint256 navAfter1e18
     );
+    /// @notice Emitted on a successful swap.
+    /// @dev L-10 (audit 2026-05-31): `amountIn` is the amount of `tokenIn` the pool
+    /// *actually received* (the measured balance delta, post fee-on-transfer), NOT
+    /// the requested `amountIn` passed to `swap`. The output (`amountOut`) is derived
+    /// from this received amount. For standard tokens requested == received; for
+    /// fee-on-transfer/deflationary tokens `amountIn` is the lower, received value.
     event Swapped(
         address indexed user,
         address indexed tokenIn,

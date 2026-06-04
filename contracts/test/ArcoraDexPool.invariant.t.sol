@@ -13,6 +13,7 @@ import {MintableERC20} from "../src/testnet/MintableERC20.sol";
 // deployment relies on. The V1 mock pinned roundId to 1 unconditionally,
 // which made `answeredInRound >= roundId` always pass.
 import {MockChainlinkFeedV2} from "../src/testnet/MockChainlinkFeedV2.sol";
+import {FeeOnTransferERC20} from "./mocks/FeeOnTransferERC20.sol";
 import {PoolHandler} from "./handlers/PoolHandler.sol";
 
 contract ArcoraDexPoolInvariant is StdInvariant, Test {
@@ -25,6 +26,10 @@ contract ArcoraDexPoolInvariant is StdInvariant, Test {
     MockChainlinkFeedV2 fEurc;
     MintableERC20 dai;
     MockChainlinkFeedV2 fDai;
+    // L-10 (audit 2026-06-03): 4th token is fee-on-transfer (50 bps burn on every
+    // transfer) so the invariant suite exercises the measured-balance-delta path.
+    FeeOnTransferERC20 fot;
+    MockChainlinkFeedV2 fFot;
     address owner = makeAddr("owner");
     PoolHandler handler;
 
@@ -36,11 +41,14 @@ contract ArcoraDexPoolInvariant is StdInvariant, Test {
         usdc = new MintableERC20("USDC", "USDC", 6, owner);
         eurc = new MintableERC20("EURC", "EURC", 6, owner);
         dai = new MintableERC20("DAI", "DAI", 18, owner);
+        // L-10: fee-on-transfer token (6 dec, 50 bps burn on every transfer).
+        fot = new FeeOnTransferERC20("FOT", "FOT", 6, owner, 50);
         // Test contract acts as both the writer (price-pusher) and owner so
         // setAnswer / setWriter can be called inline without prank gymnastics.
         fUsdc = new MockChainlinkFeedV2(8, int256(1e8), address(this), address(this));
         fEurc = new MockChainlinkFeedV2(8, int256(11e7), address(this), address(this));
         fDai = new MockChainlinkFeedV2(8, int256(1e8), address(this), address(this));
+        fFot = new MockChainlinkFeedV2(8, int256(1e8), address(this), address(this));
 
         reg = new ArcoraDexRegistry(owner);
         pool = new ArcoraDexPool(address(reg), 30, 1000, owner);
@@ -50,6 +58,7 @@ contract ArcoraDexPoolInvariant is StdInvariant, Test {
         reg.listToken(address(usdc), 6, IChainlinkAggregator(address(fUsdc)), 50, 3600);
         reg.listToken(address(eurc), 6, IChainlinkAggregator(address(fEurc)), 150, 14400);
         reg.listToken(address(dai), 18, IChainlinkAggregator(address(fDai)), 50, 3600);
+        reg.listToken(address(fot), 6, IChainlinkAggregator(address(fFot)), 50, 3600);
         vm.stopPrank();
 
         // Pre-mint generous balances to each actor (handler can't mint due to onlyOwner).
@@ -59,6 +68,7 @@ contract ArcoraDexPoolInvariant is StdInvariant, Test {
             usdc.mint(actor, 1_000_000e6);
             eurc.mint(actor, 1_000_000e6);
             dai.mint(actor, 1_000_000e18);
+            fot.mint(actor, 1_000_000e6);
         }
         vm.stopPrank();
 
@@ -70,13 +80,17 @@ contract ArcoraDexPoolInvariant is StdInvariant, Test {
         eurc.mint(seeder, 100_000e6);
         vm.prank(owner);
         dai.mint(seeder, 100_000e18);
+        vm.prank(owner);
+        fot.mint(seeder, 100_000e6);
         vm.startPrank(seeder);
         usdc.approve(address(pool), 100_000e6);
         eurc.approve(address(pool), 100_000e6);
         dai.approve(address(pool), 100_000e18);
+        fot.approve(address(pool), 100_000e6);
         pool.deposit(address(usdc), 100_000e6, 0, block.timestamp + 1);
         pool.deposit(address(eurc), 100_000e6, 0, block.timestamp + 1);
         pool.deposit(address(dai), 100_000e18, 0, block.timestamp + 1);
+        pool.deposit(address(fot), 100_000e6, 0, block.timestamp + 1);
         vm.stopPrank();
 
         // Build handler
@@ -84,17 +98,20 @@ contract ArcoraDexPoolInvariant is StdInvariant, Test {
         actors[0] = a1;
         actors[1] = a2;
         actors[2] = a3;
-        address[] memory tks = new address[](3);
+        address[] memory tks = new address[](4);
         tks[0] = address(usdc);
         tks[1] = address(eurc);
         tks[2] = address(dai);
+        tks[3] = address(fot);
         handler = new PoolHandler(address(pool), address(lp), actors, tks);
         targetContract(address(handler));
     }
 
     /// Contract balance of every token equals reserves + protocolFeesAccrued.
+    /// Includes the fee-on-transfer token (L-10): the measured-balance-delta credit
+    /// keeps this exact even though transfers burn a portion in flight.
     function invariant_balance_equals_reserves_plus_fees() public view {
-        address[3] memory tks = [address(usdc), address(eurc), address(dai)];
+        address[4] memory tks = [address(usdc), address(eurc), address(dai), address(fot)];
         for (uint256 i = 0; i < tks.length; i++) {
             uint256 bal = MintableERC20(tks[i]).balanceOf(address(pool));
             uint256 res = pool.reserves(tks[i]);
@@ -113,7 +130,7 @@ contract ArcoraDexPoolInvariant is StdInvariant, Test {
 
     /// fees <= contract balance per token.
     function invariant_fees_le_balance() public view {
-        address[3] memory tks = [address(usdc), address(eurc), address(dai)];
+        address[4] memory tks = [address(usdc), address(eurc), address(dai), address(fot)];
         for (uint256 i = 0; i < tks.length; i++) {
             uint256 fees = pool.protocolFeesAccrued(tks[i]);
             uint256 bal = MintableERC20(tks[i]).balanceOf(address(pool));

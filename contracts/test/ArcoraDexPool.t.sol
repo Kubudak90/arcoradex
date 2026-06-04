@@ -9,6 +9,7 @@ import {IArcoraDexPool} from "../src/interfaces/IArcoraDexPool.sol";
 import {IArcoraDexRegistry} from "../src/interfaces/IArcoraDexRegistry.sol";
 import {IChainlinkAggregator} from "../src/interfaces/IChainlinkAggregator.sol";
 import {MintableERC20} from "../src/testnet/MintableERC20.sol";
+import {FeeOnTransferERC20} from "./mocks/FeeOnTransferERC20.sol";
 import {MockChainlinkFeed} from "../src/testnet/MockChainlinkFeed.sol";
 import {RevertingMockFeed, RevertingDecimalsMockFeed} from "./oracle/RevertingMockFeed.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
@@ -169,6 +170,101 @@ contract ArcoraDexPoolTest is Test {
         vm.expectRevert(IArcoraDexPool.DeadlinePassed.selector);
         pool.deposit(address(usdc), 100e6, 0, 1_000);
         vm.stopPrank();
+    }
+
+    // ── L-10: fee-on-transfer / deflationary token accounting ────────
+    /// @notice The pool must credit the *measured* balance delta on inbound
+    /// transfers, not the *requested* amount. A fee-on-transfer token delivers
+    /// less than `amount`; crediting `amount` over-states reserves and breaks the
+    /// `balance == reserves + fees` invariant (can freeze residual liquidity).
+    function test_l10_depositCreditsReceivedNotRequested() public {
+        // 100 bps (1%) fee-on-transfer token, 6 decimals, priced at $1.00.
+        FeeOnTransferERC20 fot = new FeeOnTransferERC20("Fee Token", "FOT", 6, owner, 100);
+        MockChainlinkFeed fFot = new MockChainlinkFeed(8, int256(1e8));
+
+        vm.prank(owner);
+        reg.listToken(address(fot), 6, IChainlinkAggregator(address(fFot)), 50, 3600);
+
+        uint256 amount = 1000e6;
+        vm.prank(owner);
+        fot.mint(alice, amount);
+
+        // 1% burns on transfer-in → pool receives 990e6, not 1000e6.
+        uint256 expectedReceived = amount - (amount * 100) / 10_000;
+        assertEq(expectedReceived, 990e6);
+
+        vm.startPrank(alice);
+        fot.approve(address(pool), amount);
+        pool.deposit(address(fot), amount, 0, block.timestamp);
+        vm.stopPrank();
+
+        // Pool actually holds the post-fee balance...
+        assertEq(fot.balanceOf(address(pool)), expectedReceived, "pool balance must equal received");
+        // ...and reserves must match it exactly (received, not requested).
+        assertEq(pool.reserves(address(fot)), expectedReceived, "reserves must credit received, not requested");
+    }
+
+    /// @notice Swap path of L-10: when a fee-on-transfer token is swapped IN, the
+    /// pool must credit only the *received* (post-fee) amount to its reserves AND
+    /// compute the swap output from that received amount — not the requested
+    /// `amountIn`. Crediting the requested amount would over-state reserves and
+    /// hand the swapper more output than the pool actually received, draining LPs.
+    function test_l10_swapCreditsReceivedInNotAmountIn() public {
+        // 100 bps (1%) fee-on-transfer token IN, 6 decimals, priced at $1.00.
+        FeeOnTransferERC20 fot = new FeeOnTransferERC20("Fee Token", "FOT", 6, owner, 100);
+        MockChainlinkFeed fFot = new MockChainlinkFeed(8, int256(1e8));
+        vm.prank(owner);
+        reg.listToken(address(fot), 6, IChainlinkAggregator(address(fFot)), 50, 3600);
+
+        // Seed both sides with liquidity so the swap can execute. USDC is the
+        // clean token OUT; FOT is seeded via a deposit (deposit credits received).
+        uint256 fotSeed = 10_000e6;
+        vm.prank(owner);
+        fot.mint(alice, fotSeed);
+        vm.startPrank(alice);
+        usdc.approve(address(pool), 5_000e6);
+        pool.deposit(address(usdc), 5_000e6, 0, block.timestamp);
+        fot.approve(address(pool), fotSeed);
+        pool.deposit(address(fot), fotSeed, 0, block.timestamp);
+        vm.stopPrank();
+
+        uint256 amountIn = 1000e6; // requested transfer amount
+        // 1% burns on transfer-in → pool receives 990e6, not 1000e6.
+        uint256 receivedIn = amountIn - (amountIn * 100) / 10_000;
+        assertEq(receivedIn, 990e6);
+
+        // Baseline output a *clean* token of the same size/price would yield:
+        // quote the full requested amountIn (what the pool would credit if the
+        // token had no transfer fee). FOT→USDC, both $1.00, both 6 dec.
+        uint256 cleanOut = pool.quote(address(fot), address(usdc), amountIn);
+        // Expected FOT output is consistent with the received (post-fee) amount.
+        uint256 expectedFotOut = pool.quote(address(fot), address(usdc), receivedIn);
+        assertLt(expectedFotOut, cleanOut, "received-amount quote must be below full-amount quote");
+
+        uint256 reservesBefore = pool.reserves(address(fot));
+        uint256 bobUsdcBefore = usdc.balanceOf(bob); // bob holds a setUp() balance
+
+        // Bob swaps the FOT token IN, USDC OUT, minOut: 0.
+        vm.prank(owner);
+        fot.mint(bob, amountIn);
+        vm.startPrank(bob);
+        fot.approve(address(pool), amountIn);
+        uint256 amountOut = pool.swap(address(fot), address(usdc), amountIn, 0, block.timestamp, bob);
+        vm.stopPrank();
+
+        // (a) reserves(fot) increased by the RECEIVED amount, not the requested.
+        assertEq(
+            pool.reserves(address(fot)) - reservesBefore,
+            receivedIn,
+            "reserves must increase by received (post-fee), not requested amountIn"
+        );
+
+        // (b) output was computed from the received amount: it matches the
+        // received-amount quote, and is strictly lower than a clean-token swap
+        // of the same requested size (output computed from 990e6, not 1000e6).
+        assertEq(amountOut, expectedFotOut, "output must derive from received amount");
+        assertLt(amountOut, cleanOut, "output must be below a fee-free swap of the same requested size");
+        assertEq(usdc.balanceOf(bob) - bobUsdcBefore, amountOut, "recipient receives the computed output");
     }
 
     // ── withdraw ─────────────────────────────────────────────────────

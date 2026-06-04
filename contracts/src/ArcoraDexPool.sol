@@ -393,9 +393,25 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
     {
         if (amount == 0) revert ZeroAmount();
         (uint256 priceIn, uint8 dIn) = _readAndGuardPrice(token);
+
+        // Audit L-10 (2026-06-03): credit the MEASURED balance delta, not the
+        // requested `amount`. A fee-on-transfer / deflationary / rebasing token
+        // delivers less than `amount`; crediting `amount` over-states reserves and
+        // breaks the `balance == reserves + fees` invariant. We snapshot
+        // balanceOf(this) around the inbound transfer and thread the `received`
+        // amount through the USD/LP-mint math so accounting stays consistent.
+        // Note: navBefore (read below for the proportional branch) is computed
+        // BEFORE we credit reserves[token], so the depositor's own funds — already
+        // sitting in the contract balance after this transfer — do not inflate
+        // navBefore (NAV is derived from reserves[], not balanceOf).
+        uint256 balBefore = IERC20(token).balanceOf(address(this));
+        IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
+        uint256 received = IERC20(token).balanceOf(address(this)) - balBefore;
+        if (received == 0) revert ZeroAmount();
+
         // Justification [divide-before-multiply]: usdIn intentionally truncates to a USD-normalised integer before the LP ratio multiplication; reordering would overflow uint256 for large token amounts and large prices.
         // slither-disable-next-line divide-before-multiply
-        uint256 usdIn = (amount * priceIn) / (10 ** dIn);
+        uint256 usdIn = (received * priceIn) / (10 ** dIn);
 
         uint256 supply = LP.totalSupply();
         uint256 navBefore;
@@ -418,8 +434,7 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         // slither-disable-next-line timestamp
         if (lpMinted < minLpOut) revert InsufficientLpOut(lpMinted, minLpOut);
 
-        IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
-        reserves[token] += amount;
+        reserves[token] += received;
 
         if (supply == 0) {
             LP.mint(DEAD_ADDRESS, MINIMUM_LIQUIDITY);
@@ -429,7 +444,7 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         // slither-disable-next-line reentrancy-benign
         lastMintAt[msg.sender] = block.timestamp;
 
-        emit Deposited(msg.sender, token, amount, lpMinted, navBefore, navBefore + usdIn);
+        emit Deposited(msg.sender, token, received, lpMinted, navBefore, navBefore + usdIn);
     }
 
     function withdraw(address tokenOut, uint256 lpAmount, uint256 minTokenOut, uint256 deadline)
@@ -504,13 +519,25 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         if (amountIn == 0) revert ZeroAmount();
         if (recipient == address(0)) revert ZeroAddress();
 
+        // Audit L-10 (2026-06-03): pull the input first and credit the MEASURED
+        // balance delta, not the requested `amountIn`. A fee-on-transfer /
+        // deflationary token delivers less than `amountIn`; the output, fees and
+        // reserves credit must all be derived from `receivedIn` so the
+        // `balance == reserves + fees` invariant holds for tokenIn. The inbound
+        // transfer is hoisted above the output math (the nonReentrant guard makes
+        // this pull-then-compute ordering safe).
+        uint256 inBalBefore = IERC20(tokenIn).balanceOf(address(this));
+        IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), amountIn);
+        uint256 receivedIn = IERC20(tokenIn).balanceOf(address(this)) - inBalBefore;
+        if (receivedIn == 0) revert ZeroAmount();
+
         uint256 protFee;
         uint256 lpFeeUsd1e18;
         {
             (uint256 pIn, uint8 dIn) = _readAndGuardPrice(tokenIn);
             (uint256 pOut, uint8 dOut) = _readAndGuardPrice(tokenOut);
 
-            uint256 gross = _grossOut(amountIn, pIn, pOut, dIn, dOut);
+            uint256 gross = _grossOut(receivedIn, pIn, pOut, dIn, dOut);
             // Justification [divide-before-multiply]: fee is the BPS-discounted portion of gross (one division); protFee then takes a further BPS share of fee — two sequential fee-tier extractions where intermediate truncation is the intended rounding behaviour.
             // slither-disable-next-line divide-before-multiply
             uint256 fee = (gross * swapFeeBps) / BPS;
@@ -529,15 +556,14 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         // slither-disable-next-line timestamp
         if (r < amountOut + protFee) revert InsufficientLiquidity(tokenOut, amountOut + protFee, r);
 
-        // CEI
-        IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), amountIn);
-        reserves[tokenIn] = reserves[tokenIn] + amountIn;
+        // CEI: input already pulled above (L-10); credit the measured delta.
+        reserves[tokenIn] = reserves[tokenIn] + receivedIn;
         reserves[tokenOut] = r - (amountOut + protFee);
         protocolFeesAccrued[tokenOut] += protFee;
 
         IERC20(tokenOut).safeTransfer(recipient, amountOut);
 
-        emit Swapped(msg.sender, tokenIn, tokenOut, amountIn, amountOut, lpFeeUsd1e18, protFee, recipient);
+        emit Swapped(msg.sender, tokenIn, tokenOut, receivedIn, amountOut, lpFeeUsd1e18, protFee, recipient);
     }
 
     // ── Quote views ──────────────────────────────────────────────────
