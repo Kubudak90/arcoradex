@@ -1,6 +1,6 @@
 "use client";
 import { useMemo, useState } from "react";
-import { useAccount, useReadContract } from "wagmi";
+import { useAccount, useReadContract, useChainId, useSwitchChain } from "wagmi";
 import { parseAbi } from "viem";
 import {
   useTokens,
@@ -8,7 +8,7 @@ import {
   useWithdraw,
   useArcoraDex,
 } from "@arcoralabs/dex-sdk/react";
-import { fmtUnits, tryParseUnits } from "@arcoralabs/dex-sdk";
+import { fmtUnits, tryParseUnits, arcTestnet } from "@arcoralabs/dex-sdk";
 import { TokenIcon } from "@/components/common/TokenIcon";
 import { TokenPickerModal } from "@/components/swap/TokenPickerModal";
 
@@ -20,6 +20,11 @@ export function WithdrawTab() {
   const { activeTokens } = useTokens();
   const { address: account, isConnected } = useAccount();
   const sdk = useArcoraDex();
+  // L-5 (audit 2026-05-31): chain gating (mirrors ConnectButton). arcTestnet.id
+  // === 5042002.
+  const chainId = useChainId();
+  const { switchChain, isPending: switchPending } = useSwitchChain();
+  const wrongChain = isConnected && chainId !== arcTestnet.id;
 
   const [tokenOut, setTokenOut] = useState<`0x${string}` | undefined>();
   const [lpStr, setLpStr] = useState("");
@@ -67,7 +72,7 @@ export function WithdrawTab() {
   }
 
   const ctaDisabled =
-    !isConnected || !lpAmount || lpAmount === 0n || withdrawQuote == null || insufficient;
+    !isConnected || wrongChain || !lpAmount || lpAmount === 0n || withdrawQuote == null || insufficient;
 
   return (
     <div className="space-y-3.5">
@@ -149,26 +154,38 @@ export function WithdrawTab() {
         </div>
       </div>
 
-      <button
-        onClick={onWithdraw}
-        disabled={ctaDisabled}
-        className="w-full inline-flex items-center justify-center h-13 rounded-full text-[15px] font-medium mt-1 transition-all"
-        style={
-          ctaDisabled
-            ? { background: "var(--arc-ink-100)", color: "var(--arc-ink-400)", cursor: "not-allowed" }
-            : { background: "var(--grad-arcora)", color: "white", boxShadow: "var(--shadow-glow)" }
-        }
-      >
-        {!isConnected
-          ? "Connect wallet"
-          : !lpAmount || lpAmount === 0n
-            ? "Enter an amount"
-            : insufficient
-              ? "Insufficient ADEX-LP balance"
-              : isPending
-                ? "Withdrawing…"
-                : `Withdraw to ${meta?.symbol}`}
-      </button>
+      {/* L-5: switch-chain CTA when on the wrong network. */}
+      {wrongChain ? (
+        <button
+          onClick={() => switchChain({ chainId: arcTestnet.id })}
+          disabled={switchPending}
+          className="w-full inline-flex items-center justify-center h-13 rounded-full text-[15px] font-medium text-white mt-1 transition-all disabled:opacity-50"
+          style={{ background: "var(--grad-arcora)", boxShadow: "var(--shadow-glow)" }}
+        >
+          {switchPending ? "Switching…" : "Switch to Arc Testnet"}
+        </button>
+      ) : (
+        <button
+          onClick={onWithdraw}
+          disabled={ctaDisabled}
+          className="w-full inline-flex items-center justify-center h-13 rounded-full text-[15px] font-medium mt-1 transition-all"
+          style={
+            ctaDisabled
+              ? { background: "var(--arc-ink-100)", color: "var(--arc-ink-400)", cursor: "not-allowed" }
+              : { background: "var(--grad-arcora)", color: "white", boxShadow: "var(--shadow-glow)" }
+          }
+        >
+          {!isConnected
+            ? "Connect wallet"
+            : !lpAmount || lpAmount === 0n
+              ? "Enter an amount"
+              : insufficient
+                ? "Insufficient ADEX-LP balance"
+                : isPending
+                  ? "Withdrawing…"
+                  : `Withdraw to ${meta?.symbol}`}
+        </button>
+      )}
 
       {result?.event && meta ? (
         <p className="text-xs text-center" style={{ color: "var(--color-success)" }}>

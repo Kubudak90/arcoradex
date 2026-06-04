@@ -1,5 +1,5 @@
 "use client";
-import { fmtUnits, fmtUSD } from "@arcoralabs/dex-sdk";
+import { fmtUnits, fmtUSD, minOut } from "@arcoralabs/dex-sdk";
 import type { TokenInfo } from "@arcoralabs/dex-sdk";
 import { Modal } from "@/components/ui/modal";
 import { TokenIcon } from "@/components/common/TokenIcon";
@@ -37,9 +37,19 @@ export function ConfirmSwapModal({
 }: Props) {
   if (!tokenIn || !tokenOut || !amountIn || !amountOutQuoted) return null;
 
-  const minOutFloat = Number(amountOutQuoted * BigInt(10_000 - slippageBps)) /
-    Number(10_000n) /
-    10 ** tokenOut.decimals;
+  // L-6 (audit 2026-05-31): compute the displayed "Minimum received" with the
+  // SAME SDK `minOut(quoted, slippageBps)` integer helper the swap action uses
+  // to enforce the floor, instead of bespoke float math here. This removes the
+  // formula/rounding mismatch between what the user sees and what gets enforced
+  // on-chain. (The SDK still re-quotes at execution, so the absolute floor can
+  // move with the pool between confirm and submit — that residual is inherent
+  // and bounded by slippageBps; this fix guarantees the FORMULA is identical.)
+  // PR-6 made minOut THROW for slippageBps >= 10000; the slippage UI is capped
+  // well below that (presets <=1%, custom <=50%), but guard defensively so a
+  // bad prop can never crash the confirm modal.
+  const safeSlippageBps = Math.min(Math.max(slippageBps, 0), 9_999);
+  const minOutRaw = minOut(amountOutQuoted, safeSlippageBps);
+  const minOutFloat = Number(minOutRaw) / 10 ** tokenOut.decimals;
 
   return (
     <Modal open={open} onOpenChange={onOpenChange} title="Confirm swap">
