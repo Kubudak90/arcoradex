@@ -50,13 +50,23 @@ const arcTestnet = defineChain({
     },
 });
 
-const GUARD = "0x035447f8d97A23fFfC32aa8bFb8ffDbC7B94E608";
+// I-11 (audit 2026-05-31): GUARD and REGISTRY are sourced from env
+// (GUARD_ADDRESS / REGISTRY_ADDRESS) instead of hardcoded constants, matching
+// multi-feed-push.mjs's env-sourcing. A Registry or CumulativeDeviationGuard
+// redeploy (the no-proxy "redeploy + migrate" model) would otherwise silently
+// leave this script recording into the OLD contracts. The literals below are the
+// current live addresses, kept only as documented defaults; set the env vars on
+// the VPS to make a migration a config change, not a code change.
+const GUARD = process.env.GUARD_ADDRESS || "0x035447f8d97A23fFfC32aa8bFb8ffDbC7B94E608";
 
 // Registry address — aggregators are resolved from here at startup so the
 // script automatically tracks whatever oracle the Registry currently points at.
 // This survives any future oracle migration (e.g. V1→V2 aggregators after P3.5)
-// with no code change.
-const REGISTRY = "0x9914436E5245bF3c0d4D4338e0a8b8F5Ab5505aB";
+// with no code change, PROVIDED the Registry address itself is current (hence
+// I-11: source it from env so a Registry redeploy is also covered).
+const REGISTRY = process.env.REGISTRY_ADDRESS || "0x9914436E5245bF3c0d4D4338e0a8b8F5Ab5505aB";
+
+const ADDR_RE = /^0x[0-9a-fA-F]{40}$/;
 
 // Token list — aggregator field is resolved from Registry.tokenInfo() at startup.
 const TOKENS = [
@@ -93,6 +103,16 @@ async function main() {
         log("KEEPER_PRIVATE_KEY missing — abort");
         process.exit(2);
     }
+    // I-11: fail loudly if GUARD/REGISTRY (env or default) are not valid addresses.
+    if (!ADDR_RE.test(GUARD)) {
+        log(`GUARD_ADDRESS invalid (${GUARD}) — set a 0x-40-hex address — abort`);
+        process.exit(2);
+    }
+    if (!ADDR_RE.test(REGISTRY)) {
+        log(`REGISTRY_ADDRESS invalid (${REGISTRY}) — set a 0x-40-hex address — abort`);
+        process.exit(2);
+    }
+    log(`using GUARD=${GUARD} REGISTRY=${REGISTRY}`);
     const account = privateKeyToAccount(pk.startsWith("0x") ? pk : "0x" + pk);
 
     const transport = buildTransport(
