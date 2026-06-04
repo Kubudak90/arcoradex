@@ -6,23 +6,47 @@
 // CircuitBreakerTripped event stream that off-chain monitoring consumes.
 //
 // record() is permissionless; this signs with the keeper EOA (already funded).
+//
+// L-4 (audit 2026-05-31): every tx carries an explicit gas-fee ceiling, an
+// explicitly-managed nonce, and a confirmation timeout; the transport supports a
+// fallback RPC; and a startup balance check warns/aborts a low keeper. The
+// on-chain reads run through the same fallback transport, so a single hung RPC
+// fails over rather than stalling the oneshot.
+//
 // Designed to run from a systemd timer on the VPS (Type=oneshot every 30 min).
 
 import {
     createPublicClient,
     createWalletClient,
-    http,
     parseAbi,
     defineChain,
+    formatEther,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
+import {
+    resolveRpcUrls,
+    buildTransport,
+    resolveGasCeiling,
+    numEnv,
+    DEFAULT_TX_TIMEOUT_MS,
+    DEFAULT_MIN_BALANCE_ETHER,
+    DEFAULT_ABORT_BALANCE_ETHER,
+} from "./lib.mjs";
+
+const DEFAULT_RPC = "https://rpc.testnet.arc.network";
 
 const arcTestnet = defineChain({
     id: 5042002,
     name: "Arc Testnet",
     nativeCurrency: { name: "Arc", symbol: "ARC", decimals: 18 },
     rpcUrls: {
-        default: { http: [process.env.ARC_TESTNET_RPC || "https://rpc.testnet.arc.network"] },
+        default: {
+            http: resolveRpcUrls({
+                primary: process.env.ARC_TESTNET_RPC,
+                fallback: process.env.ARC_TESTNET_RPC_FALLBACK,
+                defaultRpc: DEFAULT_RPC,
+            }),
+        },
     },
 });
 
@@ -58,6 +82,8 @@ const GUARD_ABI = parseAbi([
     "function record(address token, uint256 price1e18) external",
 ]);
 
+const TX_TIMEOUT_MS = numEnv(process.env.KEEPER_TX_TIMEOUT_MS, DEFAULT_TX_TIMEOUT_MS);
+
 const ts = () => new Date().toISOString();
 const log = (msg) => console.log(`[arcoradex-guard-record] ${ts()} ${msg}`);
 
@@ -68,8 +94,39 @@ async function main() {
         process.exit(2);
     }
     const account = privateKeyToAccount(pk.startsWith("0x") ? pk : "0x" + pk);
-    const publicClient = createPublicClient({ chain: arcTestnet, transport: http() });
-    const walletClient = createWalletClient({ account, chain: arcTestnet, transport: http() });
+
+    const transport = buildTransport(
+        resolveRpcUrls({
+            primary: process.env.ARC_TESTNET_RPC,
+            fallback: process.env.ARC_TESTNET_RPC_FALLBACK,
+            defaultRpc: DEFAULT_RPC,
+        }),
+    );
+    const publicClient = createPublicClient({ chain: arcTestnet, transport });
+    const walletClient = createWalletClient({ account, chain: arcTestnet, transport });
+
+    const gasCeiling = resolveGasCeiling(process.env);
+
+    // L-4: startup balance check + explicit pending nonce (re-priceable / no
+    // cross-run collision).
+    const minBalance = numEnv(process.env.KEEPER_MIN_BALANCE_ETHER, DEFAULT_MIN_BALANCE_ETHER);
+    const abortBalance = numEnv(process.env.KEEPER_ABORT_BALANCE_ETHER, DEFAULT_ABORT_BALANCE_ETHER);
+    const nonceRef = { value: 0 };
+    try {
+        const balWei = await publicClient.getBalance({ address: account.address });
+        const balEth = Number(formatEther(balWei));
+        if (balEth < abortBalance) {
+            log(`keeper ${account.address} balance ${balEth} ARC < abort floor ${abortBalance} — abort`);
+            process.exit(2);
+        }
+        if (balEth < minBalance) {
+            log(`WARN: keeper ${account.address} balance ${balEth} ARC < ${minBalance} — top up soon`);
+        }
+        nonceRef.value = await publicClient.getTransactionCount({ address: account.address, blockTag: "pending" });
+    } catch (err) {
+        log(`startup check failed: ${err?.message || err} — abort`);
+        process.exit(2);
+    }
 
     let recorded = 0;
     let errored = 0;
@@ -115,12 +172,17 @@ async function main() {
             if (answer <= 0n) throw new Error(`aggregator answer <= 0 (${answer})`);
             const price1e18 = answer * 10_000_000_000n; // 1e8 -> 1e18
 
+            // L-4: explicit nonce + fee ceiling + confirmation timeout.
+            const nonce = nonceRef.value++;
             const hash = await walletClient.writeContract({
                 address: GUARD, abi: GUARD_ABI, functionName: "record",
                 args: [t.token, price1e18],
+                nonce,
+                maxFeePerGas: gasCeiling.maxFeePerGas,
+                maxPriorityFeePerGas: gasCeiling.maxPriorityFeePerGas,
             });
-            await publicClient.waitForTransactionReceipt({ hash });
-            log(`${t.symbol}: recorded price1e18=${price1e18} tx=${hash}`);
+            await publicClient.waitForTransactionReceipt({ hash, timeout: TX_TIMEOUT_MS });
+            log(`${t.symbol}: recorded price1e18=${price1e18} (nonce=${nonce}) tx=${hash}`);
             recorded++;
         } catch (err) {
             log(`${t.symbol}: ERROR ${err?.message || err}`);

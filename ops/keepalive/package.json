@@ -6,7 +6,8 @@
   "description": "Push CoinGecko prices to ArcoraDEX MockChainlinkFeedV2 contracts on Arc testnet",
   "main": "multi-feed-push.mjs",
   "scripts": {
-    "push": "node multi-feed-push.mjs"
+    "push": "node multi-feed-push.mjs",
+    "test": "node --test"
   },
   "dependencies": {
     "viem": "^2.21.0"

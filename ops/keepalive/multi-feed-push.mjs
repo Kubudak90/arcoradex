@@ -6,23 +6,50 @@
 // answer is already current, and rejects fetched prices that fall outside
 // per-feed sanity bands.
 //
+// L-3/L-4 (audit 2026-05-31): CoinGecko fetches use an AbortController timeout;
+// every tx carries an explicit gas-fee ceiling, an explicitly-managed nonce, and
+// a confirmation timeout; the transport supports a fallback RPC; and a startup
+// balance check warns/aborts a low keeper.
+//
 // Designed to run from a systemd timer on the VPS (Type=oneshot every 30 min).
 
 import {
     createPublicClient,
     createWalletClient,
-    http,
     parseAbi,
     defineChain,
+    formatEther,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
+import {
+    fetchJson,
+    resolveRpcUrls,
+    buildTransport,
+    resolveGasCeiling,
+    decidePriceSanity,
+    clampToMaxDev,
+    priceTo1e8,
+    numEnv,
+    DEFAULT_FETCH_TIMEOUT_MS,
+    DEFAULT_TX_TIMEOUT_MS,
+    DEFAULT_MIN_BALANCE_ETHER,
+    DEFAULT_ABORT_BALANCE_ETHER,
+} from "./lib.mjs";
+
+const DEFAULT_RPC = "https://rpc.testnet.arc.network";
 
 const arcTestnet = defineChain({
     id: 5042002,
     name: "Arc Testnet",
     nativeCurrency: { name: "Arc", symbol: "ARC", decimals: 18 },
     rpcUrls: {
-        default: { http: [process.env.ARC_TESTNET_RPC || "https://rpc.testnet.arc.network"] },
+        default: {
+            http: resolveRpcUrls({
+                primary: process.env.ARC_TESTNET_RPC,
+                fallback: process.env.ARC_TESTNET_RPC_FALLBACK,
+                defaultRpc: DEFAULT_RPC,
+            }),
+        },
     },
 });
 
@@ -60,15 +87,16 @@ const FEED_ABI = parseAbi([
 // next 30-min keeper tick.
 const REFRESH_THRESHOLD_SECONDS = 30 * 60;
 
+const FETCH_TIMEOUT_MS = numEnv(process.env.KEEPER_FETCH_TIMEOUT_MS, DEFAULT_FETCH_TIMEOUT_MS);
+const TX_TIMEOUT_MS = numEnv(process.env.KEEPER_TX_TIMEOUT_MS, DEFAULT_TX_TIMEOUT_MS);
+
 const ts = () => new Date().toISOString();
 const log = (msg) => console.log(`[arcoradex-feeds] ${ts()} ${msg}`);
 
-const priceTo1e8 = (usd) => BigInt(Math.round(usd * 1e8));
-
 /// Fetches all USD prices in (at most) two batched CoinGecko calls — one for
 /// stable→USD ids, one for USD→fiat-currency vs_currencies. Returns a map
-/// keyed by feed symbol. A failed batch leaves its symbols absent from the
-/// map so per-feed error handling in main() surfaces the gap cleanly.
+/// keyed by feed symbol. A failed/timed-out batch leaves its symbols absent from
+/// the map so per-feed error handling in main() surfaces the gap cleanly.
 async function fetchAllPrices(feeds, apiKey) {
     const headers = apiKey ? { "x-cg-pro-api-key": apiKey } : undefined;
     const out = new Map();
@@ -85,9 +113,7 @@ async function fetchAllPrices(feeds, apiKey) {
     if (ids.length > 0) {
         try {
             const url = `https://api.coingecko.com/api/v3/simple/price?ids=${ids.join(",")}&vs_currencies=usd`;
-            const res = await fetch(url, { headers });
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            const json = await res.json();
+            const json = await fetchJson(url, { headers, timeoutMs: FETCH_TIMEOUT_MS });
             for (const f of feeds) {
                 if (!f.coingeckoId) continue;
                 const usd = json[f.coingeckoId]?.usd;
@@ -101,9 +127,7 @@ async function fetchAllPrices(feeds, apiKey) {
     if (currencies.length > 0) {
         try {
             const url = `https://api.coingecko.com/api/v3/simple/price?ids=usd&vs_currencies=${currencies.join(",")}`;
-            const res = await fetch(url, { headers });
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            const json = await res.json();
+            const json = await fetchJson(url, { headers, timeoutMs: FETCH_TIMEOUT_MS });
             for (const f of feeds) {
                 if (!f.coingeckoVsCurrency) continue;
                 const rate = json.usd?.[f.coingeckoVsCurrency];
@@ -119,8 +143,11 @@ async function fetchAllPrices(feeds, apiKey) {
 
 /// Pushes one band-checked USD price to a single feed address. Encapsulates
 /// the per-address logic (deviation cap vs that feed's own on-chain `prev`,
-/// staleness-refresh, skip-when-current). Returns "updated" | "skipped" | "errored".
-async function pushFeedAddress(publicClient, walletClient, label, feedAddr, usd, maxDevBps) {
+/// staleness-refresh, skip-when-current). Returns "updated" | "skipped" |
+/// "capped-updated" | "errored". `gasCeiling` and `nonceRef` carry the L-4
+/// hardening (fee cap + explicitly-managed nonce); a fresh nonce is consumed
+/// only when a tx is actually sent.
+async function pushFeedAddress(publicClient, walletClient, label, feedAddr, usd, maxDevBps, gasCeiling, nonceRef) {
     try {
         const targetAnswer = priceTo1e8(usd);
         const [prev, lastUpdated] = await Promise.all([
@@ -133,32 +160,30 @@ async function pushFeedAddress(publicClient, walletClient, label, feedAddr, usd,
         // pool compares against lastAcceptedPrice (set on the prior swap),
         // not the prior oracle answer, so capping vs `prev` is a strict
         // upper bound on the deviation any swap can observe.
-        let newAnswer = targetAnswer;
-        let capped = false;
-        if (prev > 0n) {
-            const maxDeltaAbs = (prev * BigInt(maxDevBps)) / 10_000n;
-            const delta = targetAnswer > prev ? targetAnswer - prev : prev - targetAnswer;
-            if (delta > maxDeltaAbs) {
-                newAnswer = targetAnswer > prev ? prev + maxDeltaAbs : prev - maxDeltaAbs;
-                capped = true;
-            }
-        }
+        const { newAnswer, capped } = clampToMaxDev(prev, targetAnswer, maxDevBps);
 
         if (prev === newAnswer && ageSeconds < REFRESH_THRESHOLD_SECONDS) {
             log(`${label}: unchanged at ${prev}, fresh (${ageSeconds}s)`);
             return "skipped";
         }
+
+        // L-4: explicit nonce (re-priceable / collision-free across runs),
+        // explicit fee ceiling, and a confirmation timeout.
+        const nonce = nonceRef.value++;
         const hash = await walletClient.writeContract({
             address: feedAddr,
             abi: FEED_ABI,
             functionName: "setAnswer",
             args: [newAnswer],
+            nonce,
+            maxFeePerGas: gasCeiling.maxFeePerGas,
+            maxPriorityFeePerGas: gasCeiling.maxPriorityFeePerGas,
         });
-        await publicClient.waitForTransactionReceipt({ hash });
+        await publicClient.waitForTransactionReceipt({ hash, timeout: TX_TIMEOUT_MS });
         const reason = capped
             ? `capped@${maxDevBps}bps (target=${targetAnswer})`
             : prev === newAnswer ? "refresh" : "value";
-        log(`${label}: ${prev} -> ${newAnswer} (usd=${usd}, ${reason}, age=${ageSeconds}s) tx=${hash}`);
+        log(`${label}: ${prev} -> ${newAnswer} (usd=${usd}, ${reason}, age=${ageSeconds}s, nonce=${nonce}) tx=${hash}`);
         return capped ? "capped-updated" : "updated";
     } catch (err) {
         log(`${label}: ERROR ${err?.message || err}`);
@@ -167,16 +192,50 @@ async function pushFeedAddress(publicClient, walletClient, label, feedAddr, usd,
 }
 
 async function main() {
-    const pk = process.env.KEEPER_PRIVATE_KEY;
-    if (!pk) {
+    const pkRaw = process.env.KEEPER_PRIVATE_KEY;
+    if (!pkRaw) {
         log("KEEPER_PRIVATE_KEY missing — abort");
         process.exit(2);
     }
+    const pk = pkRaw.startsWith("0x") ? pkRaw : "0x" + pkRaw;
     const apiKey = process.env.COINGECKO_API_KEY || undefined;
 
+    const transport = buildTransport(
+        resolveRpcUrls({
+            primary: process.env.ARC_TESTNET_RPC,
+            fallback: process.env.ARC_TESTNET_RPC_FALLBACK,
+            defaultRpc: DEFAULT_RPC,
+        }),
+    );
+
     const account = privateKeyToAccount(pk);
-    const publicClient = createPublicClient({ chain: arcTestnet, transport: http() });
-    const walletClient = createWalletClient({ account, chain: arcTestnet, transport: http() });
+    const publicClient = createPublicClient({ chain: arcTestnet, transport });
+    const walletClient = createWalletClient({ account, chain: arcTestnet, transport });
+
+    const gasCeiling = resolveGasCeiling(process.env);
+
+    // L-4: startup balance check. Warn below the soft floor; abort below the
+    // hard floor before signing anything. Then fetch the pending nonce once and
+    // increment it locally so a stuck tx can be re-priced and the next run never
+    // collides.
+    const minBalance = numEnv(process.env.KEEPER_MIN_BALANCE_ETHER, DEFAULT_MIN_BALANCE_ETHER);
+    const abortBalance = numEnv(process.env.KEEPER_ABORT_BALANCE_ETHER, DEFAULT_ABORT_BALANCE_ETHER);
+    const nonceRef = { value: 0 };
+    try {
+        const balWei = await publicClient.getBalance({ address: account.address });
+        const balEth = Number(formatEther(balWei));
+        if (balEth < abortBalance) {
+            log(`keeper ${account.address} balance ${balEth} ARC < abort floor ${abortBalance} — abort`);
+            process.exit(2);
+        }
+        if (balEth < minBalance) {
+            log(`WARN: keeper ${account.address} balance ${balEth} ARC < ${minBalance} — top up soon`);
+        }
+        nonceRef.value = await publicClient.getTransactionCount({ address: account.address, blockTag: "pending" });
+    } catch (err) {
+        log(`startup check failed: ${err?.message || err} — abort`);
+        process.exit(2);
+    }
 
     let updated = 0;
     let skipped = 0;
@@ -188,24 +247,21 @@ async function main() {
 
     for (const f of FEEDS) {
         const usd = prices.get(f.symbol);
-        if (typeof usd !== "number") {
-            log(`${f.symbol}: ERROR price source returned no value (likely 429 or upstream gap) — skip both feeds`);
-            errored += 2;
-            continue;
-        }
-        if (usd < f.band.min || usd > f.band.max) {
-            log(`${f.symbol}: price ${usd} outside band [${f.band.min}, ${f.band.max}] — skip both feeds`);
-            skipped += 2;
-            continue;
-        }
-        if (f.peg !== null && f.peg > 0 && f.maxPegDriftBps !== null) {
-            const driftBps = Math.abs(usd - f.peg) * 10_000 / f.peg;
-            if (driftBps > f.maxPegDriftBps) {
-                log(`${f.symbol}: usd=${usd} drifts ${driftBps.toFixed(1)} bps from peg=${f.peg} (cap=${f.maxPegDriftBps} bps) — skip both feeds`);
+        const sanity = decidePriceSanity(usd, f);
+        if (!sanity.ok) {
+            if (sanity.reason === "no-value") {
+                log(`${f.symbol}: ERROR price source returned no value (likely 429 or upstream gap) — skip both feeds`);
                 errored += 2;
-                continue;
+            } else if (sanity.reason === "out-of-band") {
+                log(`${f.symbol}: price ${usd} outside band [${f.band.min}, ${f.band.max}] — skip both feeds`);
+                skipped += 2;
+            } else if (sanity.reason === "peg-drift") {
+                log(`${f.symbol}: usd=${usd} drifts ${sanity.driftBps.toFixed(1)} bps from peg=${f.peg} (cap=${f.maxPegDriftBps} bps) — skip both feeds`);
+                errored += 2;
             }
+            continue;
         }
+
         for (const [role, addr] of [["primary", f.feed], ["secondary", f.secondary]]) {
             const label = `${f.symbol} ${role}`;
             if (!addr) {
@@ -213,7 +269,7 @@ async function main() {
                 errored++;
                 continue;
             }
-            const outcome = await pushFeedAddress(publicClient, walletClient, label, addr, usd, f.maxDevBps);
+            const outcome = await pushFeedAddress(publicClient, walletClient, label, addr, usd, f.maxDevBps, gasCeiling, nonceRef);
             if (outcome === "updated") {
                 updated++;
             } else if (outcome === "skipped") {
