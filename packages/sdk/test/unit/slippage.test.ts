@@ -11,9 +11,12 @@ describe("minOut", () => {
   it("applies 1% slippage (100 bps)", () => {
     expect(minOut(1_000_000n, 100)).toBe(990_000n);
   });
-  it("returns 0 when slippage >= 10000 bps", () => {
-    expect(minOut(1_000_000n, 10_000)).toBe(0n);
-    expect(minOut(1_000_000n, 99_999)).toBe(0n);
+  // I-10 (audit 2026-05-31): a >= 100% tolerance disables slippage protection,
+  // so it now throws instead of silently returning 0n.
+  it("throws RangeError when slippage >= 10000 bps", () => {
+    expect(() => minOut(1_000_000n, 10_000)).toThrow(RangeError);
+    expect(() => minOut(1_000_000n, 10_000)).toThrow("slippageBps must be < 10000");
+    expect(() => minOut(1_000_000n, 99_999)).toThrow(RangeError);
   });
   it("rounds toward zero (BigInt integer division)", () => {
     // 12345 * 9990 = 123_326_550 → /10_000 = 12_332

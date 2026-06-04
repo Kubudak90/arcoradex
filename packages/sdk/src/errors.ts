@@ -121,6 +121,20 @@ export class ZeroAmountError extends ArcoraDexError {
   }
 }
 
+/**
+ * I-9 (audit 2026-05-31): `ensureAllowance` refused to approve a token spend
+ * because the spender (the configured pool) failed the canonical-pool anchor
+ * check — its LP token's immutable `MINTER()` did not equal the spender. This
+ * guards against approving (especially an unlimited approval) to an address
+ * that is not actually the ArcoraDex pool.
+ */
+export class UntrustedSpenderError extends ArcoraDexError {
+  constructor(public readonly spender: `0x${string}`, public readonly reason: string) {
+    super(`Refusing to approve spend to non-canonical pool ${spender}: ${reason}`);
+    this.name = "UntrustedSpenderError";
+  }
+}
+
 export class EarlyWithdrawError extends ArcoraDexError {
   constructor(public readonly unlockAt: bigint, public readonly nowAt: bigint) {
     super(`LP min-hold active until ${unlockAt} (now ${nowAt})`);

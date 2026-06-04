@@ -33,6 +33,7 @@ export {
   EarlyWithdrawError,
   SameTokenError,
   ZeroAmountError,
+  UntrustedSpenderError,
   parseContractError,
 } from "./errors";
 export { quoteSwap } from "./actions/quoteSwap";
