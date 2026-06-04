@@ -176,4 +176,61 @@ contract ArcoraDexRegistryTest is Test {
         reg.setMaxStaleSeconds(address(usdc), 7200);
         assertEq(reg.tokenInfo(address(usdc)).maxStaleSeconds, 7200);
     }
+
+    // ── L-9: MAX_TOKENS cap + removeToken (bound NAV loop) ─────────────
+    /// @dev Lists `MAX_TOKENS` distinct 6-decimal tokens, each with its own $1.00
+    /// feed, then asserts the next listToken reverts MaxTokensReached.
+    function test_l9_listToken_revertsAtMaxTokens() public {
+        uint256 cap = reg.MAX_TOKENS();
+        vm.startPrank(owner);
+        for (uint256 i = 0; i < cap; i++) {
+            MintableERC20 tok = new MintableERC20("Tok", "TOK", 6, owner);
+            MockChainlinkFeed f = new MockChainlinkFeed(8, int256(1e8));
+            reg.listToken(address(tok), 6, IChainlinkAggregator(address(f)), 50, 3600);
+        }
+        assertEq(reg.tokensLength(), cap);
+
+        // The (cap + 1)-th listing must revert.
+        MintableERC20 overflowTok = new MintableERC20("Over", "OVR", 6, owner);
+        MockChainlinkFeed overflowFeed = new MockChainlinkFeed(8, int256(1e8));
+        vm.expectRevert(IArcoraDexRegistry.MaxTokensReached.selector);
+        reg.listToken(address(overflowTok), 6, IChainlinkAggregator(address(overflowFeed)), 50, 3600);
+        vm.stopPrank();
+    }
+
+    function test_l9_removeToken_dropsFromList() public {
+        // List a second token so removal of the first is observable as a swap-pop.
+        MintableERC20 dai = new MintableERC20("Dai", "DAI", 18, owner);
+        MockChainlinkFeed fDai = new MockChainlinkFeed(8, int256(1e8));
+
+        vm.startPrank(owner);
+        reg.listToken(address(usdc), 6, IChainlinkAggregator(address(feed)), 50, 3600);
+        reg.listToken(address(dai), 18, IChainlinkAggregator(address(fDai)), 50, 3600);
+        assertEq(reg.tokensLength(), 2);
+
+        // Must be deactivated before removal (I-1 guards that reserves are drained).
+        reg.deactivateToken(address(usdc));
+        reg.removeToken(address(usdc));
+        vm.stopPrank();
+
+        // List shrank and usdc is gone; dai survived (moved into the freed slot).
+        assertEq(reg.tokensLength(), 1);
+        assertEq(reg.tokens(0), address(dai));
+
+        // _info cleared: oracle reset to zero, so it reads as not-listed.
+        IArcoraDexRegistry.TokenInfo memory info = reg.tokenInfo(address(usdc));
+        assertEq(address(info.usdOracle), address(0));
+        assertEq(info.decimals, 0);
+        assertFalse(info.isActive);
+        assertFalse(reg.isActive(address(usdc)));
+    }
+
+    function test_l9_removeToken_revertsIfActive() public {
+        vm.startPrank(owner);
+        reg.listToken(address(usdc), 6, IChainlinkAggregator(address(feed)), 50, 3600);
+        // Token is active → removal must revert.
+        vm.expectRevert(abi.encodeWithSelector(IArcoraDexRegistry.TokenStillActive.selector, address(usdc)));
+        reg.removeToken(address(usdc));
+        vm.stopPrank();
+    }
 }

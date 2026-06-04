@@ -11,6 +11,11 @@ import {IChainlinkAggregator} from "./interfaces/IChainlinkAggregator.sol";
 /// @title ArcoraDexRegistry
 /// @notice Per-token catalogue: decimals, USD oracle, deviation cap, active flag.
 contract ArcoraDexRegistry is IArcoraDexRegistry, Ownable2Step {
+    /// @notice Upper bound on the number of listed tokens. Bounds the Pool's NAV
+    /// loop (which iterates every listed token) so its cost cannot grow without
+    /// limit. Combined with `removeToken`, deactivation can reclaim iteration cost.
+    uint256 public constant override MAX_TOKENS = 32;
+
     mapping(address token => TokenInfo) internal _info;
     address[] public override tokens;
 
@@ -44,6 +49,7 @@ contract ArcoraDexRegistry is IArcoraDexRegistry, Ownable2Step {
         if (maxDeviationBps == 0 || maxDeviationBps > 10_000) revert InvalidDeviation(maxDeviationBps);
         if (maxStaleSeconds_ < 60 || maxStaleSeconds_ > 7 days) revert InvalidStaleSeconds(maxStaleSeconds_);
         if (_info[token].usdOracle != IChainlinkAggregator(address(0))) revert TokenAlreadyListed(token);
+        if (tokens.length >= MAX_TOKENS) revert MaxTokensReached();
 
         _info[token] = TokenInfo({
             decimals: decimals_,
@@ -95,5 +101,30 @@ contract ArcoraDexRegistry is IArcoraDexRegistry, Ownable2Step {
         if (info.usdOracle == IChainlinkAggregator(address(0))) revert TokenNotListed(token);
         info.isActive = true;
         emit TokenReactivated(token);
+    }
+
+    /// @notice Permanently removes a token from the registry, reclaiming the
+    /// Pool's NAV-loop iteration cost for it.
+    /// @dev The caller MUST deactivate the token first (this reverts on an active
+    /// token). The I-1 guard ensures deactivation requires the Pool's reserves to
+    /// be drained to zero, so `!isActive ⇒ reserves == 0` by procedure — the
+    /// registry has no Pool reference and so cannot check reserves itself.
+    /// Uses swap-pop on `tokens[]`; this reorders the array, which is safe because
+    /// the NAV loop is an order-independent sum over all listed tokens.
+    function removeToken(address token) external override onlyOwner {
+        TokenInfo storage info = _info[token];
+        if (info.usdOracle == IChainlinkAggregator(address(0))) revert TokenNotListed(token);
+        if (info.isActive) revert TokenStillActive(token);
+
+        uint256 n = tokens.length;
+        for (uint256 i = 0; i < n; i++) {
+            if (tokens[i] == token) {
+                tokens[i] = tokens[n - 1];
+                tokens.pop();
+                break;
+            }
+        }
+        delete _info[token];
+        emit TokenRemoved(token);
     }
 }

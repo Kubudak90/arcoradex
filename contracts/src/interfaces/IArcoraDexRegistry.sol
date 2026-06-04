@@ -20,6 +20,8 @@ interface IArcoraDexRegistry {
     error InvalidStaleSeconds(uint32 maxStaleSeconds);
     error TokenAlreadyListed(address token);
     error TokenNotListed(address token);
+    error MaxTokensReached();
+    error TokenStillActive(address token);
 
     // ── Events ────────────────────────────────────────────────────────
     event TokenListed(
@@ -34,6 +36,7 @@ interface IArcoraDexRegistry {
     event MaxStaleSecondsUpdated(address indexed token, uint32 oldVal, uint32 newVal);
     event TokenDeactivated(address indexed token);
     event TokenReactivated(address indexed token);
+    event TokenRemoved(address indexed token);
 
     // ── Mutators ──────────────────────────────────────────────────────
     function listToken(
@@ -48,8 +51,10 @@ interface IArcoraDexRegistry {
     function setMaxStaleSeconds(address token, uint32 maxStaleSeconds_) external;
     function deactivateToken(address token) external;
     function reactivateToken(address token) external;
+    function removeToken(address token) external;
 
     // ── Views ─────────────────────────────────────────────────────────
+    function MAX_TOKENS() external view returns (uint256);
     function tokens(uint256 i) external view returns (address);
     function tokensLength() external view returns (uint256);
     function tokenInfo(address token) external view returns (TokenInfo memory);

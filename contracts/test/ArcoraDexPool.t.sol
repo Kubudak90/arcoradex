@@ -717,6 +717,53 @@ contract ArcoraDexPoolTest is Test {
         pool.deposit(address(usdc), 50_000_000, 0, block.timestamp + 60);
     }
 
+    // ── L-9: removeToken shrinks the NAV loop ────────────────────────
+    /// @notice After governance deactivates a zero-reserve token and removes it
+    /// from the registry, the Pool's NAV loop must no longer iterate over it and
+    /// NAV / quotes must be unchanged. The loop is order-independent (a sum), so
+    /// the registry's swap-pop reorder is safe.
+    function test_l9_removeToken_navLoopShrinks() public {
+        // Deposit A (USDC) and B (DAI). EURC is listed but never deposited.
+        vm.startPrank(alice);
+        usdc.approve(address(pool), 1000e6);
+        dai.approve(address(pool), 1000e18);
+        pool.deposit(address(usdc), 1000e6, 0, block.timestamp);
+        pool.deposit(address(dai), 1000e18, 0, block.timestamp);
+        vm.stopPrank();
+
+        // Remove EURC (B): it has zero reserves, so removal does not change NAV.
+        // (I-1, when landed, makes deactivation require reserves==0; here EURC was
+        // never deposited, so its reserves are already 0.)
+        assertEq(pool.reserves(address(eurc)), 0, "EURC must have zero reserves before removal");
+
+        uint256 navBefore = pool.totalReservesUSD();
+        uint256 quoteBefore = pool.quote(address(usdc), address(dai), 100e6);
+        uint256 lenBefore = reg.tokensLength();
+
+        vm.startPrank(owner);
+        reg.deactivateToken(address(eurc));
+        reg.removeToken(address(eurc));
+        vm.stopPrank();
+
+        // List shrank and EURC is gone from the registry's token set.
+        assertEq(reg.tokensLength(), lenBefore - 1, "tokensLength must decrease by one");
+        for (uint256 i = 0; i < reg.tokensLength(); i++) {
+            assertTrue(reg.tokens(i) != address(eurc), "EURC must not appear in the token list");
+        }
+
+        // NAV and quotes are unchanged: EURC contributed nothing and the surviving
+        // tokens' contributions are identical regardless of iteration order.
+        assertEq(pool.totalReservesUSD(), navBefore, "NAV must be unchanged after removing a zero-reserve token");
+        assertEq(pool.quote(address(usdc), address(dai), 100e6), quoteBefore, "quote must be unchanged");
+
+        // Prove the loop no longer visits EURC at all: once removed, EURC is fully
+        // unlisted (its _info is cleared), so the registry rejects any further ops
+        // on it. This confirms the NAV loop iterates a strictly smaller token set.
+        vm.prank(owner);
+        vm.expectRevert(abi.encodeWithSelector(IArcoraDexRegistry.TokenNotListed.selector, address(eurc)));
+        reg.setOracle(address(eurc), IChainlinkAggregator(address(fEurc)));
+    }
+
     /// @notice Covers the inner try/catch around `oracle.decimals()` in `_readOracle`.
     /// A feed with a working `latestRoundData()` (passes all freshness checks so
     /// `isFresh` becomes true) but a reverting `decimals()` must cause the Pool to
