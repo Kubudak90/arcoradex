@@ -29,6 +29,15 @@ contract DeployOraclesP3 is Script {
         uint8 feedDecimals;
         uint16 divergenceBps;
         uint32 cumulativeBps; // for guard config
+        // ── H-2: on-chain sanity band for the secondary MockChainlinkFeedV2 ──
+        // All four are at the feed's oracle decimals (8). The band is a strict
+        // SUPERSET of the keeper's off-chain band in ops/keepalive/multi-feed-push.mjs
+        // so a legitimate in-band keeper push can never revert on-chain; the
+        // on-chain band is the BACKSTOP, the keeper guards are primary.
+        int256 minAnswer; // hard sanity floor (1e8), < keeper band.min
+        int256 maxAnswer; // hard sanity ceiling (1e8), > keeper band.max
+        uint32 maxJumpBps; // > keeper per-tick maxDevBps so legit ticks never trip
+        uint32 minUpdateSeconds; // 0: keeper runs every 30 min; a min-interval risks blocking a legit re-push
     }
 
     function run() external {
@@ -44,6 +53,19 @@ contract DeployOraclesP3 is Script {
         //   USD-pegged (USDC/USDT/PYUSD/DAI): 50 / 200
         //   EUR (EURC):                       100 / 300
         //   soft-FX (TRYC/BRLC):              200 / 500
+        //
+        // H-2 on-chain feed bands (last 4 args, all 1e8) are SUPERSETS of the
+        // keeper's off-chain bands in ops/keepalive/multi-feed-push.mjs:
+        //   USDC  keeper [1.00,1.00] devBps 50  -> on-chain [0.95,1.05] jump 300
+        //   USDT  keeper [0.95,1.05] devBps 50  -> on-chain [0.90,1.10] jump 300
+        //   PYUSD keeper [0.95,1.05] devBps 50  -> on-chain [0.90,1.10] jump 300
+        //   DAI   keeper [0.95,1.05] devBps 50  -> on-chain [0.90,1.10] jump 300
+        //   EURC  keeper [1.00,1.30] devBps 150 -> on-chain [0.90,1.40] jump 500
+        //   TRYC  keeper [0.01,0.10] devBps 150 -> on-chain [0.005,0.15] jump 500
+        //   BRLC  keeper [0.10,0.30] devBps 150 -> on-chain [0.05,0.40] jump 500
+        // maxJumpBps >> keeper per-tick devBps so legit ticks never trip;
+        // minUpdateSeconds = 0 (keeper runs every 30 min; a min-interval risks
+        // blocking a legit re-push). On-chain band = backstop; keeper = primary.
         cfg[0] = TokenSpec(
             "USDC",
             0x3BFa09fF6467639f0981948385bA1018Ac07d22C,
@@ -51,7 +73,11 @@ contract DeployOraclesP3 is Script {
             100_000_000,
             8,
             50,
-            200
+            200,
+            95_000_000, // 0.95
+            105_000_000, // 1.05
+            300,
+            0
         );
         cfg[1] = TokenSpec(
             "USDT",
@@ -60,7 +86,11 @@ contract DeployOraclesP3 is Script {
             100_000_000,
             8,
             50,
-            200
+            200,
+            90_000_000, // 0.90
+            110_000_000, // 1.10
+            300,
+            0
         );
         cfg[2] = TokenSpec(
             "PYUSD",
@@ -69,7 +99,11 @@ contract DeployOraclesP3 is Script {
             100_000_000,
             8,
             50,
-            200
+            200,
+            90_000_000, // 0.90
+            110_000_000, // 1.10
+            300,
+            0
         );
         cfg[3] = TokenSpec(
             "DAI",
@@ -78,7 +112,11 @@ contract DeployOraclesP3 is Script {
             100_000_000,
             8,
             50,
-            200
+            200,
+            90_000_000, // 0.90
+            110_000_000, // 1.10
+            300,
+            0
         );
         cfg[4] = TokenSpec(
             "EURC",
@@ -87,7 +125,11 @@ contract DeployOraclesP3 is Script {
             108_000_000,
             8,
             100,
-            300
+            300,
+            90_000_000, // 0.90
+            140_000_000, // 1.40
+            500,
+            0
         );
         cfg[5] = TokenSpec(
             "TRYC",
@@ -96,7 +138,11 @@ contract DeployOraclesP3 is Script {
             2_900_000,
             8,
             200,
-            500
+            500,
+            500_000, // 0.005
+            15_000_000, // 0.15
+            500,
+            0
         );
         cfg[6] = TokenSpec(
             "BRLC",
@@ -105,7 +151,11 @@ contract DeployOraclesP3 is Script {
             20_000_000,
             8,
             200,
-            500
+            500,
+            5_000_000, // 0.05
+            40_000_000, // 0.40
+            500,
+            0
         );
 
         vm.startBroadcast(deployerKey);
@@ -121,8 +171,24 @@ contract DeployOraclesP3 is Script {
 
         // 2. Per-token: deploy secondary feed, deploy aggregator, configure guard
         for (uint256 i = 0; i < cfg.length; i++) {
-            MockChainlinkFeedV2 secondary =
-                new MockChainlinkFeedV2(cfg[i].feedDecimals, cfg[i].initialPrice, deployer, deployer);
+            // H-2 (audit 2026-05-31): finalize the per-token on-chain band. The
+            // band is a SUPERSET of the keeper's off-chain band (see cfg above /
+            // ops/keepalive/multi-feed-push.mjs) so a legitimate in-band keeper
+            // push can never revert on-chain; this is the defense-in-depth
+            // BACKSTOP, the keeper's own guards remain primary. minUpdateSeconds=0
+            // because the keeper runs every 30 min and a min-interval would risk
+            // blocking a legit re-push. Initial writer = deployer; migrated to a
+            // SEPARATE secondary keeper later via MigrateSecondaryWriters.s.sol.
+            MockChainlinkFeedV2 secondary = new MockChainlinkFeedV2(
+                cfg[i].feedDecimals,
+                cfg[i].initialPrice,
+                deployer,
+                deployer,
+                cfg[i].minAnswer,
+                cfg[i].maxAnswer,
+                cfg[i].maxJumpBps,
+                cfg[i].minUpdateSeconds
+            );
 
             OracleAggregator agg = new OracleAggregator(
                 IChainlinkAggregator(cfg[i].primaryFeed),
@@ -153,7 +219,7 @@ contract DeployOraclesP3 is Script {
             "Ownership of guard + 7 aggregators + 7 secondaries transferred (pending acceptance by Governance Safe)."
         );
         console2.log(
-            "NOTE: secondary feed writer remains the deployer EOA; the Governance Safe must call setWriter on each secondary feed if a separate keeper is expected to push secondary prices."
+            "NOTE (H-2): secondary feed writer remains the deployer EOA. Run MigrateSecondaryWriters.s.sol so the Governance Safe sets each secondary feed's writer to a SEPARATE KEEPER_SECONDARY key (must differ from the primary keeper); distinct writers keep the two-source divergence check meaningful."
         );
 
         vm.stopBroadcast();

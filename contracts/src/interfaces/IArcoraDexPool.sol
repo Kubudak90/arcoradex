@@ -19,15 +19,22 @@ interface IArcoraDexPool {
     error InsufficientTokenOut(uint256 actual, uint256 minTokenOut);
     error InsufficientLiquidity(address token, uint256 requested, uint256 available);
     error FirstDepositTooSmall(uint256 usdValue, uint256 minimumLiquidity);
-    error InvalidOracleRound(address token, uint80 roundId, uint80 answeredInRound);
-    error InvalidOracleTimestamp(address token, uint256 updatedAt);
     error PriceDeviation(address token, uint256 newPrice1e18, uint256 prev1e18, uint16 maxDevBps);
     error NoValidPrice(address token);
     error EarlyWithdraw(uint256 unlockAt, uint256 nowAt);
+    // H-1 (audit 2026-05-31): sender-gate on LP transfers — a transfer reverts
+    // until the sender's own min-hold has elapsed (anti-JIT, non-griefable).
+    error EarlyTransfer(uint256 unlockAt, uint256 nowAt);
     error NotLP();
     error NotAuthorized();
 
     // ── Events ────────────────────────────────────────────────────────
+    /// @notice Emitted on a successful deposit.
+    /// @dev L-10 (audit 2026-05-31): `amountIn` is the amount the pool *actually
+    /// received* (the measured balance delta, post fee-on-transfer), NOT the
+    /// requested transfer amount passed to `deposit`. For standard tokens the two
+    /// are equal; for fee-on-transfer/deflationary tokens `amountIn` is the lower,
+    /// received value. Off-chain consumers must treat this as the received amount.
     event Deposited(
         address indexed user,
         address indexed token,
@@ -45,6 +52,12 @@ interface IArcoraDexPool {
         uint256 navBefore1e18,
         uint256 navAfter1e18
     );
+    /// @notice Emitted on a successful swap.
+    /// @dev L-10 (audit 2026-05-31): `amountIn` is the amount of `tokenIn` the pool
+    /// *actually received* (the measured balance delta, post fee-on-transfer), NOT
+    /// the requested `amountIn` passed to `swap`. The output (`amountOut`) is derived
+    /// from this received amount. For standard tokens requested == received; for
+    /// fee-on-transfer/deflationary tokens `amountIn` is the lower, received value.
     event Swapped(
         address indexed user,
         address indexed tokenIn,
@@ -62,6 +75,10 @@ interface IArcoraDexPool {
     event Unpaused(address indexed by);
     event AcceptedPriceSynced(address indexed token, uint256 oldPrice1e18, uint256 newPrice1e18);
     event PriceCacheUpdated(address indexed token, uint256 price1e18, uint256 updatedAt);
+    /// @notice Emitted when an owner clears a token's price caches (I-2). After
+    /// this, the next priced op for `token` takes the fresh-oracle path, or reverts
+    /// `NoValidPrice` until the keeper pushes a fresh reading.
+    event PriceCacheReset(address indexed token);
     event PauseGuardianUpdated(address indexed prev, address indexed next);
     /// @notice Emitted when the per-token cache TTL is updated. `maxAgeSeconds == 0`
     /// means the cache TTL is disabled for that token (fallback never expires
@@ -122,6 +139,13 @@ interface IArcoraDexPool {
     function pause() external;
     function unpause() external;
     function syncAcceptedPrice(address token) external returns (uint256 price1e18);
+    /// @notice Clear a token's stale price caches (I-2). Owner-only.
+    /// @dev MUST be paired with `Registry.reactivateToken(token)` (or the re-listing
+    /// of a previously-removed token) in the same governance batch, so a reactivated
+    /// token cannot trade against an ancient cached price. After the reset the next
+    /// priced op takes the fresh-oracle path, or reverts `NoValidPrice` until the
+    /// keeper pushes a fresh reading — this is intended.
+    function resetPriceCache(address token) external;
     function setPauseGuardian(address newGuardian) external;
     /// @notice Set the cache-fallback TTL for `token`. Zero disables the check.
     /// @dev Audit H-1 (2026-05-24): prevents persistent oracle outages from

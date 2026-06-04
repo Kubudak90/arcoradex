@@ -3,8 +3,13 @@ import {
   COOLDOWN_MS,
   MemoryCooldownStore,
   checkRateLimit,
+  consumeHourlyBudget,
   extractClientIp,
   recordClaim,
+  refundHourlyBudget,
+  releaseInflight,
+  reserveInflight,
+  rollbackClaim,
 } from "../faucet-rate-limit";
 
 const ADDR = "0x0000000000000000000000000000000000001234";
@@ -14,17 +19,17 @@ const IP_A = "10.0.0.1";
 const IP_B = "10.0.0.2";
 
 describe("checkRateLimit", () => {
-  it("returns ok when neither recipient nor IP has claimed", () => {
+  it("returns ok when neither recipient nor IP has claimed", async () => {
     const store = new MemoryCooldownStore();
-    const r = checkRateLimit(store, ADDR, IP_A);
+    const r = await checkRateLimit(store, ADDR, IP_A);
     expect(r.ok).toBe(true);
   });
 
-  it("blocks by address when same recipient claimed within cooldown", () => {
+  it("blocks by address when same recipient claimed within cooldown", async () => {
     const store = new MemoryCooldownStore();
     const t0 = 1_000_000_000;
-    recordClaim(store, ADDR, IP_A, t0);
-    const r = checkRateLimit(store, ADDR, IP_B, t0 + 1_000);
+    await recordClaim(store, ADDR, IP_A, t0);
+    const r = await checkRateLimit(store, ADDR, IP_B, t0 + 1_000);
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.blockedBy).toBe("address");
@@ -32,51 +37,133 @@ describe("checkRateLimit", () => {
     }
   });
 
-  it("blocks by IP when a different recipient claimed from same IP within cooldown", () => {
+  it("blocks by IP when a different recipient claimed from same IP within cooldown", async () => {
     const store = new MemoryCooldownStore();
     const t0 = 1_000_000_000;
-    recordClaim(store, ADDR_OTHER, IP_A, t0);
-    const r = checkRateLimit(store, ADDR, IP_A, t0 + 1_000);
+    await recordClaim(store, ADDR_OTHER, IP_A, t0);
+    const r = await checkRateLimit(store, ADDR, IP_A, t0 + 1_000);
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.blockedBy).toBe("ip");
     }
   });
 
-  it("releases after cooldown elapses for both keys", () => {
+  it("releases after cooldown elapses for both keys", async () => {
     const store = new MemoryCooldownStore();
     const t0 = 1_000_000_000;
-    recordClaim(store, ADDR, IP_A, t0);
-    const r = checkRateLimit(store, ADDR, IP_A, t0 + COOLDOWN_MS + 1);
+    await recordClaim(store, ADDR, IP_A, t0);
+    const r = await checkRateLimit(store, ADDR, IP_A, t0 + COOLDOWN_MS + 1);
     expect(r.ok).toBe(true);
   });
 
-  it("address-blocked even when IP is undefined (no per-IP cap)", () => {
+  it("address-blocked even when IP is undefined (no per-IP cap)", async () => {
     const store = new MemoryCooldownStore();
     const t0 = 1_000_000_000;
-    recordClaim(store, ADDR, undefined, t0);
-    const r = checkRateLimit(store, ADDR, undefined, t0 + 1_000);
+    await recordClaim(store, ADDR, undefined, t0);
+    const r = await checkRateLimit(store, ADDR, undefined, t0 + 1_000);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.blockedBy).toBe("address");
   });
 
-  it("is case-insensitive on recipient address", () => {
+  it("is case-insensitive on recipient address", async () => {
     const store = new MemoryCooldownStore();
     const t0 = 1_000_000_000;
-    recordClaim(store, ADDR.toUpperCase(), IP_A, t0);
-    const r = checkRateLimit(store, ADDR_LOWER, IP_B, t0 + 1_000);
+    await recordClaim(store, ADDR.toUpperCase(), IP_A, t0);
+    const r = await checkRateLimit(store, ADDR_LOWER, IP_B, t0 + 1_000);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.blockedBy).toBe("address");
   });
 
-  it("retryAfterSec shrinks as time advances", () => {
+  it("retryAfterSec shrinks as time advances", async () => {
     const store = new MemoryCooldownStore();
     const t0 = 1_000_000_000;
-    recordClaim(store, ADDR, IP_A, t0);
-    const r1 = checkRateLimit(store, ADDR, IP_A, t0 + 1_000);
-    const r2 = checkRateLimit(store, ADDR, IP_A, t0 + 10 * 60 * 1000);
+    await recordClaim(store, ADDR, IP_A, t0);
+    const r1 = await checkRateLimit(store, ADDR, IP_A, t0 + 1_000);
+    const r2 = await checkRateLimit(store, ADDR, IP_A, t0 + 10 * 60 * 1000);
     if (r1.ok || r2.ok) throw new Error("expected both blocked");
     expect(r2.retryAfterSec).toBeLessThan(r1.retryAfterSec);
+  });
+});
+
+describe("rollbackClaim (M-2)", () => {
+  it("undoes a recorded claim so a retry is allowed", async () => {
+    const store = new MemoryCooldownStore();
+    const t0 = 1_000_000_000;
+    await recordClaim(store, ADDR, IP_A, t0);
+    expect((await checkRateLimit(store, ADDR, IP_A, t0 + 1_000)).ok).toBe(false);
+    await rollbackClaim(store, ADDR, IP_A);
+    expect((await checkRateLimit(store, ADDR, IP_A, t0 + 1_000)).ok).toBe(true);
+  });
+});
+
+describe("reserveInflight (M-3 atomic reserve-or-fail)", () => {
+  it("first reserve wins, a second concurrent reserve for the same address fails", async () => {
+    const store = new MemoryCooldownStore();
+    const a = await reserveInflight(store, ADDR, IP_A);
+    expect(a.ok).toBe(true);
+    // Same address, different IP: still blocked by the address slot.
+    const b = await reserveInflight(store, ADDR, IP_B);
+    expect(b.ok).toBe(false);
+    expect(b.acquired).toEqual([]);
+  });
+
+  it("a second reserve for the same IP (different address) fails", async () => {
+    const store = new MemoryCooldownStore();
+    const a = await reserveInflight(store, ADDR, IP_A);
+    expect(a.ok).toBe(true);
+    const b = await reserveInflight(store, ADDR_OTHER, IP_A);
+    expect(b.ok).toBe(false);
+  });
+
+  it("releasing the reservation lets a new reserve succeed", async () => {
+    const store = new MemoryCooldownStore();
+    const a = await reserveInflight(store, ADDR, IP_A);
+    expect(a.ok).toBe(true);
+    await releaseInflight(store, a.acquired);
+    const b = await reserveInflight(store, ADDR, IP_A);
+    expect(b.ok).toBe(true);
+  });
+
+  it("does not leak the address slot when the IP slot is already held", async () => {
+    const store = new MemoryCooldownStore();
+    // Hold IP_A via ADDR_OTHER.
+    const held = await reserveInflight(store, ADDR_OTHER, IP_A);
+    expect(held.ok).toBe(true);
+    // ADDR tries with the held IP_A — should fail AND not leave ADDR's slot set.
+    const blocked = await reserveInflight(store, ADDR, IP_A);
+    expect(blocked.ok).toBe(false);
+    // Release the holder, then ADDR with a fresh IP should succeed (proving
+    // ADDR's address slot was rolled back, not leaked).
+    await releaseInflight(store, held.acquired);
+    const ok = await reserveInflight(store, ADDR, IP_B);
+    expect(ok.ok).toBe(true);
+  });
+});
+
+describe("consumeHourlyBudget (M-3 global cap)", () => {
+  it("allows up to `budget` and blocks the (budget+1)th", async () => {
+    const store = new MemoryCooldownStore();
+    const budget = 3;
+    const r1 = await consumeHourlyBudget(store, budget);
+    const r2 = await consumeHourlyBudget(store, budget);
+    const r3 = await consumeHourlyBudget(store, budget);
+    const r4 = await consumeHourlyBudget(store, budget);
+    expect([r1.ok, r2.ok, r3.ok]).toEqual([true, true, true]);
+    expect(r4.ok).toBe(false);
+    expect(r4.count).toBe(4);
+  });
+
+  it("refund undoes a consume so the slot is reusable", async () => {
+    const store = new MemoryCooldownStore();
+    const budget = 1;
+    // Consume the only slot, then refund it (as the route does on a zero-mint
+    // rollback). A subsequent consume must succeed because the count is back
+    // to zero.
+    expect((await consumeHourlyBudget(store, budget)).count).toBe(1);
+    await refundHourlyBudget(store);
+    const again = await consumeHourlyBudget(store, budget);
+    expect(again.count).toBe(1);
+    expect(again.ok).toBe(true);
   });
 });
 

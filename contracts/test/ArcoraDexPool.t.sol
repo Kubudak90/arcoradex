@@ -9,8 +9,9 @@ import {IArcoraDexPool} from "../src/interfaces/IArcoraDexPool.sol";
 import {IArcoraDexRegistry} from "../src/interfaces/IArcoraDexRegistry.sol";
 import {IChainlinkAggregator} from "../src/interfaces/IChainlinkAggregator.sol";
 import {MintableERC20} from "../src/testnet/MintableERC20.sol";
+import {FeeOnTransferERC20} from "./mocks/FeeOnTransferERC20.sol";
 import {MockChainlinkFeed} from "../src/testnet/MockChainlinkFeed.sol";
-import {RevertingMockFeed, RevertingDecimalsMockFeed} from "./oracle/RevertingMockFeed.sol";
+import {RevertingMockFeed} from "./oracle/RevertingMockFeed.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 contract ArcoraDexPoolTest is Test {
@@ -169,6 +170,101 @@ contract ArcoraDexPoolTest is Test {
         vm.expectRevert(IArcoraDexPool.DeadlinePassed.selector);
         pool.deposit(address(usdc), 100e6, 0, 1_000);
         vm.stopPrank();
+    }
+
+    // ── L-10: fee-on-transfer / deflationary token accounting ────────
+    /// @notice The pool must credit the *measured* balance delta on inbound
+    /// transfers, not the *requested* amount. A fee-on-transfer token delivers
+    /// less than `amount`; crediting `amount` over-states reserves and breaks the
+    /// `balance == reserves + fees` invariant (can freeze residual liquidity).
+    function test_l10_depositCreditsReceivedNotRequested() public {
+        // 100 bps (1%) fee-on-transfer token, 6 decimals, priced at $1.00.
+        FeeOnTransferERC20 fot = new FeeOnTransferERC20("Fee Token", "FOT", 6, owner, 100);
+        MockChainlinkFeed fFot = new MockChainlinkFeed(8, int256(1e8));
+
+        vm.prank(owner);
+        reg.listToken(address(fot), 6, IChainlinkAggregator(address(fFot)), 50, 3600);
+
+        uint256 amount = 1000e6;
+        vm.prank(owner);
+        fot.mint(alice, amount);
+
+        // 1% burns on transfer-in → pool receives 990e6, not 1000e6.
+        uint256 expectedReceived = amount - (amount * 100) / 10_000;
+        assertEq(expectedReceived, 990e6);
+
+        vm.startPrank(alice);
+        fot.approve(address(pool), amount);
+        pool.deposit(address(fot), amount, 0, block.timestamp);
+        vm.stopPrank();
+
+        // Pool actually holds the post-fee balance...
+        assertEq(fot.balanceOf(address(pool)), expectedReceived, "pool balance must equal received");
+        // ...and reserves must match it exactly (received, not requested).
+        assertEq(pool.reserves(address(fot)), expectedReceived, "reserves must credit received, not requested");
+    }
+
+    /// @notice Swap path of L-10: when a fee-on-transfer token is swapped IN, the
+    /// pool must credit only the *received* (post-fee) amount to its reserves AND
+    /// compute the swap output from that received amount — not the requested
+    /// `amountIn`. Crediting the requested amount would over-state reserves and
+    /// hand the swapper more output than the pool actually received, draining LPs.
+    function test_l10_swapCreditsReceivedInNotAmountIn() public {
+        // 100 bps (1%) fee-on-transfer token IN, 6 decimals, priced at $1.00.
+        FeeOnTransferERC20 fot = new FeeOnTransferERC20("Fee Token", "FOT", 6, owner, 100);
+        MockChainlinkFeed fFot = new MockChainlinkFeed(8, int256(1e8));
+        vm.prank(owner);
+        reg.listToken(address(fot), 6, IChainlinkAggregator(address(fFot)), 50, 3600);
+
+        // Seed both sides with liquidity so the swap can execute. USDC is the
+        // clean token OUT; FOT is seeded via a deposit (deposit credits received).
+        uint256 fotSeed = 10_000e6;
+        vm.prank(owner);
+        fot.mint(alice, fotSeed);
+        vm.startPrank(alice);
+        usdc.approve(address(pool), 5_000e6);
+        pool.deposit(address(usdc), 5_000e6, 0, block.timestamp);
+        fot.approve(address(pool), fotSeed);
+        pool.deposit(address(fot), fotSeed, 0, block.timestamp);
+        vm.stopPrank();
+
+        uint256 amountIn = 1000e6; // requested transfer amount
+        // 1% burns on transfer-in → pool receives 990e6, not 1000e6.
+        uint256 receivedIn = amountIn - (amountIn * 100) / 10_000;
+        assertEq(receivedIn, 990e6);
+
+        // Baseline output a *clean* token of the same size/price would yield:
+        // quote the full requested amountIn (what the pool would credit if the
+        // token had no transfer fee). FOT→USDC, both $1.00, both 6 dec.
+        uint256 cleanOut = pool.quote(address(fot), address(usdc), amountIn);
+        // Expected FOT output is consistent with the received (post-fee) amount.
+        uint256 expectedFotOut = pool.quote(address(fot), address(usdc), receivedIn);
+        assertLt(expectedFotOut, cleanOut, "received-amount quote must be below full-amount quote");
+
+        uint256 reservesBefore = pool.reserves(address(fot));
+        uint256 bobUsdcBefore = usdc.balanceOf(bob); // bob holds a setUp() balance
+
+        // Bob swaps the FOT token IN, USDC OUT, minOut: 0.
+        vm.prank(owner);
+        fot.mint(bob, amountIn);
+        vm.startPrank(bob);
+        fot.approve(address(pool), amountIn);
+        uint256 amountOut = pool.swap(address(fot), address(usdc), amountIn, 0, block.timestamp, bob);
+        vm.stopPrank();
+
+        // (a) reserves(fot) increased by the RECEIVED amount, not the requested.
+        assertEq(
+            pool.reserves(address(fot)) - reservesBefore,
+            receivedIn,
+            "reserves must increase by received (post-fee), not requested amountIn"
+        );
+
+        // (b) output was computed from the received amount: it matches the
+        // received-amount quote, and is strictly lower than a clean-token swap
+        // of the same requested size (output computed from 990e6, not 1000e6).
+        assertEq(amountOut, expectedFotOut, "output must derive from received amount");
+        assertLt(amountOut, cleanOut, "output must be below a fee-free swap of the same requested size");
+        assertEq(usdc.balanceOf(bob) - bobUsdcBefore, amountOut, "recipient receives the computed output");
     }
 
     // ── withdraw ─────────────────────────────────────────────────────
@@ -419,6 +515,47 @@ contract ArcoraDexPoolTest is Test {
         vm.stopPrank();
     }
 
+    // ── I-3: protocol-fee sweep gated by whenNotPaused ───────────────
+    function test_i3_withdrawProtocolFees_revertsWhenPaused() public {
+        _seedAllThree();
+
+        // Accrue real protocol fees in EURC via a swap (PROT_SHARE_DEFAULT = 10%).
+        uint256 amountIn = 100e6;
+        vm.prank(owner);
+        usdc.mint(bob, amountIn);
+        vm.startPrank(bob);
+        usdc.approve(address(pool), amountIn);
+        pool.swap(address(usdc), address(eurc), amountIn, 0, block.timestamp, bob);
+        vm.stopPrank();
+
+        uint256 accrued = pool.protocolFeesAccrued(address(eurc));
+        assertGt(accrued, 0, "expected accrued protocol fees to sweep");
+
+        // Pause the pool: users can no longer exit, so admin must not be able to
+        // sweep protocol fees either (symmetry — finding I-3).
+        vm.prank(owner);
+        pool.pause();
+        assertTrue(pool.paused());
+
+        // Sweep must revert at the whenNotPaused gate, even though fees are accrued
+        // and the call is well-formed.
+        vm.prank(owner);
+        vm.expectRevert(IArcoraDexPool.PoolPaused.selector);
+        pool.withdrawProtocolFees(address(eurc), accrued, owner);
+
+        // After unpause, the same sweep succeeds.
+        vm.prank(owner);
+        pool.unpause();
+        assertFalse(pool.paused());
+
+        uint256 ownerBalBefore = eurc.balanceOf(owner);
+        vm.prank(owner);
+        pool.withdrawProtocolFees(address(eurc), accrued, owner);
+
+        assertEq(eurc.balanceOf(owner), ownerBalBefore + accrued);
+        assertEq(pool.protocolFeesAccrued(address(eurc)), 0);
+    }
+
     function test_swap_recipient_receives() public {
         _seedAllThree();
         address charlie = makeAddr("charlie");
@@ -621,6 +758,53 @@ contract ArcoraDexPoolTest is Test {
         pool.deposit(address(usdc), 50_000_000, 0, block.timestamp + 60);
     }
 
+    // ── L-9: removeToken shrinks the NAV loop ────────────────────────
+    /// @notice After governance deactivates a zero-reserve token and removes it
+    /// from the registry, the Pool's NAV loop must no longer iterate over it and
+    /// NAV / quotes must be unchanged. The loop is order-independent (a sum), so
+    /// the registry's swap-pop reorder is safe.
+    function test_l9_removeToken_navLoopShrinks() public {
+        // Deposit A (USDC) and B (DAI). EURC is listed but never deposited.
+        vm.startPrank(alice);
+        usdc.approve(address(pool), 1000e6);
+        dai.approve(address(pool), 1000e18);
+        pool.deposit(address(usdc), 1000e6, 0, block.timestamp);
+        pool.deposit(address(dai), 1000e18, 0, block.timestamp);
+        vm.stopPrank();
+
+        // Remove EURC (B): it has zero reserves, so removal does not change NAV.
+        // (I-1, when landed, makes deactivation require reserves==0; here EURC was
+        // never deposited, so its reserves are already 0.)
+        assertEq(pool.reserves(address(eurc)), 0, "EURC must have zero reserves before removal");
+
+        uint256 navBefore = pool.totalReservesUSD();
+        uint256 quoteBefore = pool.quote(address(usdc), address(dai), 100e6);
+        uint256 lenBefore = reg.tokensLength();
+
+        vm.startPrank(owner);
+        reg.deactivateToken(address(eurc));
+        reg.removeToken(address(eurc));
+        vm.stopPrank();
+
+        // List shrank and EURC is gone from the registry's token set.
+        assertEq(reg.tokensLength(), lenBefore - 1, "tokensLength must decrease by one");
+        for (uint256 i = 0; i < reg.tokensLength(); i++) {
+            assertTrue(reg.tokens(i) != address(eurc), "EURC must not appear in the token list");
+        }
+
+        // NAV and quotes are unchanged: EURC contributed nothing and the surviving
+        // tokens' contributions are identical regardless of iteration order.
+        assertEq(pool.totalReservesUSD(), navBefore, "NAV must be unchanged after removing a zero-reserve token");
+        assertEq(pool.quote(address(usdc), address(dai), 100e6), quoteBefore, "quote must be unchanged");
+
+        // Prove the loop no longer visits EURC at all: once removed, EURC is fully
+        // unlisted (its _info is cleared), so the registry rejects any further ops
+        // on it. This confirms the NAV loop iterates a strictly smaller token set.
+        vm.prank(owner);
+        vm.expectRevert(abi.encodeWithSelector(IArcoraDexRegistry.TokenNotListed.selector, address(eurc)));
+        reg.setOracle(address(eurc), IChainlinkAggregator(address(fEurc)));
+    }
+
     /// @notice Covers the inner try/catch around `oracle.decimals()` in `_readOracle`.
     /// A feed with a working `latestRoundData()` (passes all freshness checks so
     /// `isFresh` becomes true) but a reverting `decimals()` must cause the Pool to
@@ -637,11 +821,20 @@ contract ArcoraDexPoolTest is Test {
         // Capture NAV with the live feed (baseline — only USDC has reserves here).
         uint256 navBaseline = pool.totalReservesUSD();
 
-        // Step 2: swap in a feed whose latestRoundData() succeeds (fresh round) but
-        // whose decimals() reverts — exercising the inner catch path.
-        RevertingDecimalsMockFeed badDec = new RevertingDecimalsMockFeed();
-        vm.prank(owner);
-        reg.setOracle(address(usdc), IChainlinkAggregator(address(badDec)));
+        // Step 2: model an ALREADY-INSTALLED feed whose latestRoundData() keeps
+        // succeeding (fresh round) but whose decimals() starts reverting at
+        // runtime — exercising the Pool's inner `decimals()` try/catch in
+        // `_readOracle`. We mock the live feed (fUsdc) rather than installing a
+        // RevertingDecimalsMockFeed via setOracle, because I-7 now makes setOracle
+        // probe `decimals()` up front and reject a feed that reverts there; the
+        // inner-catch path defends against a feed that degrades AFTER install,
+        // which is what this regression covers. `RevertingDecimalsMockFeed`
+        // remains a documented analogue of this failure mode.
+        vm.mockCallRevert(
+            address(fUsdc),
+            abi.encodeWithSelector(IChainlinkAggregator.decimals.selector),
+            "decimals unavailable"
+        );
 
         // totalReservesUSD() must not revert; cache fallback keeps NAV non-zero
         // and equal to the baseline (same reserves, same cached price).
@@ -652,5 +845,167 @@ contract ArcoraDexPoolTest is Test {
         vm.prank(owner);
         usdc.mint(address(this), 50_000_000);
         pool.deposit(address(usdc), 50_000_000, 0, block.timestamp + 60);
+    }
+
+    // ── I-1: Registry.deactivateToken reserve-guard ────────────────────
+    /// @dev With the Pool wired into the Registry, deactivating a token while the
+    /// Pool still holds reserves for it must revert `TokenHasReserves`; once the
+    /// reserves are drained to zero, deactivation succeeds. Guards against the
+    /// value-transfer-between-LP-cohorts bug (inactive tokens drop out of NAV).
+    function test_i1_deactivate_revertsWithReserves() public {
+        // Wire the pool so the registry can read its reserves (production wiring).
+        vm.prank(owner);
+        reg.setPool(address(pool));
+
+        // Zero fees so the drain swap below empties USDC reserves to exactly zero.
+        vm.startPrank(owner);
+        pool.setSwapFeeBps(0);
+        pool.setProtocolFeeShareBps(0);
+        vm.stopPrank();
+
+        // Seed USDC (the token under test) and DAI (the drain counter-asset).
+        vm.startPrank(alice);
+        usdc.approve(address(pool), 1_000e6);
+        dai.approve(address(pool), 5_000e18);
+        pool.deposit(address(usdc), 1_000e6, 0, block.timestamp);
+        pool.deposit(address(dai), 5_000e18, 0, block.timestamp);
+        vm.stopPrank();
+
+        uint256 r = pool.reserves(address(usdc));
+        assertGt(r, 0, "USDC reserves must be non-zero after deposit");
+
+        // Deactivation must be blocked while reserves are live.
+        vm.prank(owner);
+        vm.expectRevert(abi.encodeWithSelector(IArcoraDexRegistry.TokenHasReserves.selector, address(usdc)));
+        reg.deactivateToken(address(usdc));
+
+        // Drain all USDC by swapping DAI -> USDC. Both priced at $1.00, fees are 0,
+        // so daiIn = r * 1e12 (18-dec DAI for 6-dec USDC) pulls out exactly r USDC.
+        uint256 daiIn = r * 1e12;
+        vm.prank(owner);
+        dai.mint(bob, daiIn);
+        vm.startPrank(bob);
+        dai.approve(address(pool), daiIn);
+        pool.swap(address(dai), address(usdc), daiIn, 0, block.timestamp, bob);
+        vm.stopPrank();
+
+        assertEq(pool.reserves(address(usdc)), 0, "USDC reserves must be drained to zero");
+
+        // Now deactivation is permitted.
+        vm.prank(owner);
+        reg.deactivateToken(address(usdc));
+        assertFalse(reg.isActive(address(usdc)), "USDC must be inactive after draining + deactivating");
+    }
+
+    // ── I-2: Pool.resetPriceCache forces a fresh price on reactivation ──
+    /// @dev A token that was deactivated (drained) keeps its stale price caches.
+    /// On reactivation, without `resetPriceCache` a swap trades against the ancient
+    /// cached price (the cache-deviation guard demotes the fresh oracle to the
+    /// stale cache). After the owner calls `resetPriceCache`, the next priced op
+    /// takes the fresh-oracle path instead of the stale cache.
+    function test_i2_reactivate_thenResetCache_forcesFreshPrice() public {
+        vm.prank(owner);
+        reg.setPool(address(pool));
+
+        // Zero fees so the drain swap empties EURC reserves to exactly zero.
+        vm.startPrank(owner);
+        pool.setSwapFeeBps(0);
+        pool.setProtocolFeeShareBps(0);
+        vm.stopPrank();
+
+        // Seed EURC ($1.10) and USDC ($1.00). This establishes EURC's caches.
+        vm.startPrank(alice);
+        eurc.approve(address(pool), 5_000e6);
+        usdc.approve(address(pool), 5_000e6);
+        pool.deposit(address(eurc), 5_000e6, 0, block.timestamp);
+        pool.deposit(address(usdc), 5_000e6, 0, block.timestamp);
+        vm.stopPrank();
+
+        assertEq(pool.lastValidPrice(address(eurc)), 1.1e18, "EURC cache must be seeded at $1.10");
+        assertEq(pool.lastAcceptedPrice(address(eurc)), 1.1e18, "EURC accepted baseline must be $1.10");
+
+        // Drain EURC fully by swapping it out (USDC -> EURC pulls all EURC).
+        uint256 rEurc = pool.reserves(address(eurc));
+        // USDC in worth rEurc EURC at $1.00/$1.10: usdcIn = rEurc * 1.10 (same 6 dec).
+        uint256 usdcIn = (rEurc * 11) / 10;
+        vm.prank(owner);
+        usdc.mint(bob, usdcIn);
+        vm.startPrank(bob);
+        usdc.approve(address(pool), usdcIn);
+        pool.swap(address(usdc), address(eurc), usdcIn, 0, block.timestamp, bob);
+        vm.stopPrank();
+        assertEq(pool.reserves(address(eurc)), 0, "EURC reserves must be drained to zero");
+
+        // Deactivate EURC (now permitted: zero reserves).
+        vm.prank(owner);
+        reg.deactivateToken(address(eurc));
+
+        // Oracle moves dramatically while EURC is inactive: $1.10 -> $5.00.
+        // (350%+ jump, far beyond the 150 bps deviation cap.)
+        fEurc.setAnswer(int256(5e8));
+
+        // Reactivate WITHOUT resetting the cache: the stale $1.10 cache survives.
+        vm.prank(owner);
+        reg.reactivateToken(address(eurc));
+        assertEq(pool.lastValidPrice(address(eurc)), 1.1e18, "stale cache must survive reactivation");
+        assertEq(pool.lastAcceptedPrice(address(eurc)), 1.1e18, "stale accepted baseline must survive reactivation");
+
+        // A swap now trades EURC against the STALE cache ($1.10): the fresh $5.00
+        // oracle is demoted by the cache-deviation guard, so the cache is unchanged.
+        vm.prank(owner);
+        eurc.mint(bob, 100e6);
+        vm.startPrank(bob);
+        eurc.approve(address(pool), 100e6);
+        pool.swap(address(eurc), address(usdc), 100e6, 0, block.timestamp, bob);
+        vm.stopPrank();
+        assertEq(pool.lastValidPrice(address(eurc)), 1.1e18, "without reset, swap uses the stale $1.10 cache");
+
+        // Owner resets the EURC caches (paired with reactivation in governance).
+        vm.prank(owner);
+        pool.resetPriceCache(address(eurc));
+        assertEq(pool.lastValidPrice(address(eurc)), 0, "lastValidPrice must be cleared");
+        assertEq(pool.lastValidPriceAt(address(eurc)), 0, "lastValidPriceAt must be cleared");
+        assertEq(pool.lastAcceptedPrice(address(eurc)), 0, "lastAcceptedPrice must be cleared");
+
+        // The next priced op takes the FRESH-oracle path ($5.00), NOT the stale cache.
+        vm.prank(owner);
+        eurc.mint(bob, 100e6);
+        vm.startPrank(bob);
+        eurc.approve(address(pool), 100e6);
+        pool.swap(address(eurc), address(usdc), 100e6, 0, block.timestamp, bob);
+        vm.stopPrank();
+        assertEq(pool.lastValidPrice(address(eurc)), 5e18, "after reset, swap must use the fresh $5.00 oracle");
+        assertEq(pool.lastAcceptedPrice(address(eurc)), 5e18, "after reset, accepted baseline must be the fresh $5.00");
+    }
+
+    // ── PR-4 golden test: price-stack NAV/quote bit-identical net (G-1..G-4) ──
+    // Seeds a deterministic multi-token pool (USDC@$1.00, EURC@$1.10, DAI@$1.00)
+    // and pins the EXACT outputs of totalReservesUSD / quoteDeposit / quoteWithdraw
+    // / quote(swap). These constants were captured on pre-refactor code and MUST
+    // remain bit-identical after the G-1/G-2/G-3/G-4 read-collapse refactor.
+    function test_g_nav_and_quotes_unchanged() public {
+        // Deterministic multi-token seed (all from alice, who is funded in setUp).
+        vm.startPrank(alice);
+        usdc.approve(address(pool), 1000e6);
+        pool.deposit(address(usdc), 1000e6, 0, block.timestamp); // 1000 USDC @ $1.00
+        eurc.approve(address(pool), 600e6);
+        pool.deposit(address(eurc), 600e6, 0, block.timestamp); // 600 EURC @ $1.10
+        dai.approve(address(pool), 2000e18);
+        pool.deposit(address(dai), 2000e18, 0, block.timestamp); // 2000 DAI @ $1.00
+        vm.stopPrank();
+
+        uint256 nav = pool.totalReservesUSD();
+        uint256 qDepUsdc = pool.quoteDeposit(address(usdc), 250e6);
+        uint256 qDepDai = pool.quoteDeposit(address(dai), 750e18);
+        (uint256 qWdAmt, uint256 qWdFee) = pool.quoteWithdraw(address(eurc), 100e24);
+        uint256 qSwap = pool.quote(address(usdc), address(eurc), 500e6);
+
+        // ── Golden constants (captured on pre-refactor code) ──
+        assertEq(nav, 3660e18, "NAV");
+        assertEq(qDepUsdc, 250000000000000000000000249, "quoteDeposit USDC");
+        assertEq(qDepDai, 750000000000000000000000749, "quoteDeposit DAI");
+        assertEq(qWdAmt, 90636363, "quoteWithdraw amountOut");
+        assertEq(qWdFee, 27272, "quoteWithdraw protocolFee");
+        assertEq(qSwap, 453181818, "quote swap USDC->EURC");
     }
 }

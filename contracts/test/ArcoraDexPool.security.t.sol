@@ -6,6 +6,7 @@ import {ArcoraDexPool} from "../src/ArcoraDexPool.sol";
 import {ArcoraDexRegistry} from "../src/ArcoraDexRegistry.sol";
 import {ArcoraDexLP} from "../src/ArcoraDexLP.sol";
 import {IArcoraDexPool} from "../src/interfaces/IArcoraDexPool.sol";
+import {IArcoraDexLP} from "../src/interfaces/IArcoraDexLP.sol";
 import {MockChainlinkFeedV2} from "../src/testnet/MockChainlinkFeedV2.sol";
 import {IChainlinkAggregator} from "../src/interfaces/IChainlinkAggregator.sol";
 import {MockERC20} from "./helpers/MockERC20.sol";
@@ -25,8 +26,8 @@ contract ArcoraDexPoolSecurityTest is Test {
         reg = new ArcoraDexRegistry(DEPLOYER);
         usdc = new MockERC20("USDC", "USDC", 6);
         eurc = new MockERC20("EURC", "EURC", 6);
-        fUsdc = new MockChainlinkFeedV2(8, 100_000_000, DEPLOYER, DEPLOYER); // $1.00
-        fEurc = new MockChainlinkFeedV2(8, 110_000_000, DEPLOYER, DEPLOYER); // $1.10
+        fUsdc = new MockChainlinkFeedV2(8, 100_000_000, DEPLOYER, DEPLOYER, 1, type(int256).max, 0, 0); // $1.00
+        fEurc = new MockChainlinkFeedV2(8, 110_000_000, DEPLOYER, DEPLOYER, 1, type(int256).max, 0, 0); // $1.10
         reg.listToken(address(usdc), 6, IChainlinkAggregator(address(fUsdc)), 50, 3600);
         reg.listToken(address(eurc), 6, IChainlinkAggregator(address(fEurc)), 150, 14400);
         pool = new ArcoraDexPool(address(reg), 5, 2500, DEPLOYER);
@@ -189,7 +190,7 @@ contract ArcoraDexPoolSecurityTest is Test {
 
         // List DAI with a very tight stale window (60s) but never deposit / seed its cache
         MockERC20 dai = new MockERC20("DAI", "DAI", 18);
-        MockChainlinkFeedV2 fDai = new MockChainlinkFeedV2(8, 100_000_000, DEPLOYER, DEPLOYER);
+        MockChainlinkFeedV2 fDai = new MockChainlinkFeedV2(8, 100_000_000, DEPLOYER, DEPLOYER, 1, type(int256).max, 0, 0);
         vm.prank(DEPLOYER);
         reg.listToken(address(dai), 18, IChainlinkAggregator(address(fDai)), 50, 60); // 1-minute window
 
@@ -285,9 +286,14 @@ contract ArcoraDexPoolSecurityTest is Test {
     }
 
     /// @notice Verifies the LP-transfer hook closes the deposit→transfer→withdraw
-    /// JIT bypass. Without the hook, a fresh wallet receiving LP could withdraw
-    /// immediately because its lastMintAt = 0.
+    /// JIT bypass (INV-9). Semantics changed by H-1 (audit 2026-05-31): the hook
+    /// is now a SENDER-GATE rather than a recipient-clock bump. A fresh wallet can
+    /// no longer be used as an escape hatch because the SENDER cannot move LP until
+    /// its own 1h hold elapses (transfer reverts with EarlyTransfer). Once the hold
+    /// is up the transfer succeeds and the recipient's clock is NOT bumped — which
+    /// is safe, because by then the sender could equally have withdrawn itself.
     function test_jit_mev_blocked_by_lp_transfer_hook() public {
+        IArcoraDexLP lp = pool.LP();
         address botA = address(0xB0A);
         address botB = address(0xB0B); // fresh, never deposited
 
@@ -297,28 +303,32 @@ contract ArcoraDexPoolSecurityTest is Test {
         vm.startPrank(botA);
         usdc.approve(address(pool), type(uint256).max);
         pool.deposit(address(usdc), 100_000_000, 0, block.timestamp + 60);
-        uint256 botLp = pool.LP().balanceOf(botA);
+        uint256 botLp = lp.balanceOf(botA);
         uint256 expectedUnlock = block.timestamp + 1 hours;
 
-        // Bot transfers all LP to fresh wallet B (same block as deposit)
-        pool.LP().transfer(botB, botLp);
+        // Same-block transfer to fresh wallet B must now REVERT: the sender (A) is
+        // still within its min-hold, so the JIT escape via transfer is blocked at
+        // the source. (`lp` is cached so expectRevert binds to `transfer`, not `LP()`.)
+        vm.expectRevert(abi.encodeWithSelector(IArcoraDexPool.EarlyTransfer.selector, expectedUnlock, block.timestamp));
+        lp.transfer(botB, botLp);
         vm.stopPrank();
 
-        // The hook should have propagated lastMintAt[A] to lastMintAt[B]
-        assertEq(pool.lastMintAt(botB), pool.lastMintAt(botA), "transfer must propagate lastMintAt");
-
-        // B tries to withdraw — must revert because of inherited lock
-        vm.prank(botB);
-        vm.expectRevert(abi.encodeWithSelector(IArcoraDexPool.EarlyWithdraw.selector, expectedUnlock, block.timestamp));
-        pool.withdraw(address(usdc), botLp, 0, block.timestamp + 60);
-
-        // Warp past the lock
+        // Warp past A's hold so the sender-gate opens.
         vm.warp(block.timestamp + 1 hours);
 
-        // Now B can withdraw
+        // Now the transfer succeeds, and the recipient's clock is NOT bumped
+        // (recipient inherits no lock under the sender-gate model).
+        uint256 botBLockBefore = pool.lastMintAt(botB);
+        vm.prank(botA);
+        lp.transfer(botB, botLp);
+        assertEq(lp.balanceOf(botB), botLp, "post-hold transfer must succeed");
+        assertEq(pool.lastMintAt(botB), botBLockBefore, "transfer must not bump the recipient's lock");
+
+        // B (fresh, lastMintAt == 0) can withdraw immediately — equivalent to A
+        // having withdrawn after its hold, so INV-9 is preserved.
         vm.prank(botB);
         pool.withdraw(address(usdc), botLp, 0, block.timestamp + 60);
-        assertGt(usdc.balanceOf(botB), 0, "post-lock withdraw should succeed");
+        assertGt(usdc.balanceOf(botB), 0, "post-hold withdraw should succeed");
     }
 
     /// @notice Verifies that a second deposit during the hold window extends
@@ -352,6 +362,100 @@ contract ArcoraDexPoolSecurityTest is Test {
         vm.warp(secondDepositAt + 1 hours);
         pool.withdraw(address(usdc), pool.LP().balanceOf(alice), 0, block.timestamp + 60);
         vm.stopPrank();
+    }
+
+    // ── H-1 (audit 2026-05-31): LP min-hold lock weaponizable into withdraw DoS ──
+    // Pre-fix, notifyLPTransfer RAISED the recipient's lastMintAt to the sender's.
+    // An attacker could push a victim's clock forward by dusting (or even
+    // zero-value transferring) LP, denying the victim's pending withdrawal.
+    // Fix: gate the SENDER (a transfer reverts until the sender's own hold has
+    // elapsed) and never bump the recipient's clock. INV-9 still holds because a
+    // sender cannot move LP until their 1h hold is up — at which point they could
+    // have withdrawn themselves, so a fresh recipient withdrawing is equivalent.
+
+    /// @notice H-1: a zero-value transfer must not reach notifyLPTransfer and so
+    /// cannot extend the victim's lock; the victim's pending withdrawal succeeds.
+    function test_h1_zeroValueTransfer_doesNotLockVictim() public {
+        IArcoraDexLP lp = pool.LP();
+        address victim = address(0x71C);
+        address attacker = address(0xA77);
+        usdc.mint(victim, 1_000_000_000);
+        usdc.mint(attacker, 1_000_000_000);
+
+        // Victim deposits and waits out the full hold — ready to withdraw.
+        vm.startPrank(victim);
+        usdc.approve(address(pool), type(uint256).max);
+        pool.deposit(address(usdc), 100_000_000, 0, block.timestamp + 60);
+        uint256 victimLockBefore = pool.lastMintAt(victim);
+        vm.stopPrank();
+        vm.warp(block.timestamp + 1 hours);
+
+        // Attacker deposits (fresh, locked) and fires a zero-value transfer at victim.
+        vm.startPrank(attacker);
+        usdc.approve(address(pool), type(uint256).max);
+        pool.deposit(address(usdc), 100_000_000, 0, block.timestamp + 60);
+        lp.transfer(victim, 0); // zero value: must short-circuit before the hook
+        vm.stopPrank();
+
+        // Victim's lock is untouched and the pending withdrawal still works.
+        assertEq(pool.lastMintAt(victim), victimLockBefore, "zero-value transfer must not bump victim's lock");
+        uint256 victimLp = lp.balanceOf(victim);
+        vm.prank(victim);
+        pool.withdraw(address(usdc), victimLp, 0, block.timestamp + 60);
+        assertGt(usdc.balanceOf(victim), 0, "victim withdrawal must succeed after zero-value griefing attempt");
+    }
+
+    /// @notice H-1: a 1-wei dust transfer from a still-locked sender must revert
+    /// with EarlyTransfer — a locked holder cannot move LP, so cannot grief a victim.
+    function test_h1_dustTransfer_fromLockedSender_reverts() public {
+        IArcoraDexLP lp = pool.LP();
+        address victim = address(0x71C);
+        address attacker = address(0xA77);
+        usdc.mint(victim, 1_000_000_000);
+        usdc.mint(attacker, 1_000_000_000);
+
+        // Victim deposits and waits out the full hold — ready to withdraw.
+        vm.startPrank(victim);
+        usdc.approve(address(pool), type(uint256).max);
+        pool.deposit(address(usdc), 100_000_000, 0, block.timestamp + 60);
+        vm.stopPrank();
+        vm.warp(block.timestamp + 1 hours);
+
+        // Attacker deposits (now within hold) and tries to dust the victim.
+        // `lp` is cached above so the reverting `transfer` is a single external
+        // call — otherwise vm.expectRevert would bind to the `pool.LP()` getter.
+        vm.startPrank(attacker);
+        usdc.approve(address(pool), type(uint256).max);
+        pool.deposit(address(usdc), 100_000_000, 0, block.timestamp + 60);
+        uint256 expectedUnlock = pool.lastMintAt(attacker) + 1 hours;
+        vm.expectRevert(abi.encodeWithSelector(IArcoraDexPool.EarlyTransfer.selector, expectedUnlock, block.timestamp));
+        lp.transfer(victim, 1);
+        vm.stopPrank();
+    }
+
+    /// @notice H-1: once the sender's hold has elapsed the transfer succeeds, and
+    /// it must NOT bump the recipient's lastMintAt (no recipient-clock writes).
+    function test_h1_transfer_afterHold_succeeds_andDoesNotBumpRecipient() public {
+        IArcoraDexLP lp = pool.LP();
+        address alice = address(0xA11);
+        address bob = address(0xB0B); // fresh, never deposited -> lastMintAt == 0
+        usdc.mint(alice, 1_000_000_000);
+
+        vm.startPrank(alice);
+        usdc.approve(address(pool), type(uint256).max);
+        pool.deposit(address(usdc), 100_000_000, 0, block.timestamp + 60);
+        uint256 aliceLp = lp.balanceOf(alice);
+        vm.stopPrank();
+
+        // Warp past alice's hold so the sender-gate opens.
+        vm.warp(block.timestamp + 1 hours);
+
+        uint256 bobLockBefore = pool.lastMintAt(bob);
+        vm.prank(alice);
+        lp.transfer(bob, aliceLp);
+
+        assertEq(lp.balanceOf(bob), aliceLp, "transfer must succeed after the sender's hold elapses");
+        assertEq(pool.lastMintAt(bob), bobLockBefore, "transfer must not bump the recipient's lock");
     }
 
     /// @notice Scenario B (intentional STRICTER-than-swap): live oracle has

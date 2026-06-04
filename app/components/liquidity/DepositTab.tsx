@@ -1,9 +1,9 @@
 "use client";
 import { useMemo, useState } from "react";
-import { useAccount, useReadContract } from "wagmi";
+import { useAccount, useReadContract, useChainId, useSwitchChain } from "wagmi";
 import { erc20Abi } from "viem";
 import { useTokens, useQuoteDeposit, useDeposit } from "@arcoralabs/dex-sdk/react";
-import { fmtUnits, tryParseUnits } from "@arcoralabs/dex-sdk";
+import { fmtUnits, tryParseUnits, arcTestnet } from "@arcoralabs/dex-sdk";
 import { TokenIcon } from "@/components/common/TokenIcon";
 import { TokenPickerModal } from "@/components/swap/TokenPickerModal";
 
@@ -13,6 +13,11 @@ const PCT_CHIPS = [25, 50, 75, 100] as const;
 export function DepositTab() {
   const { activeTokens } = useTokens();
   const { address: account, isConnected } = useAccount();
+  // L-5 (audit 2026-05-31): chain gating (mirrors ConnectButton). arcTestnet.id
+  // === 5042002.
+  const chainId = useChainId();
+  const { switchChain, isPending: switchPending } = useSwitchChain();
+  const wrongChain = isConnected && chainId !== arcTestnet.id;
   const [token, setToken] = useState<`0x${string}` | undefined>();
   const [amountStr, setAmountStr] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -55,7 +60,8 @@ export function DepositTab() {
   }
 
   const insufficient = !!amount && !!balance && amount > (balance as bigint);
-  const ctaDisabled = !isConnected || !amount || amount === 0n || lpQuote == null || insufficient;
+  const ctaDisabled =
+    !isConnected || wrongChain || !amount || amount === 0n || lpQuote == null || insufficient;
 
   return (
     <div className="space-y-3.5">
@@ -112,26 +118,38 @@ export function DepositTab() {
         </span>
       </div>
 
-      <button
-        onClick={onDeposit}
-        disabled={ctaDisabled}
-        className="w-full inline-flex items-center justify-center h-13 rounded-full text-[15px] font-medium mt-1 transition-all"
-        style={
-          ctaDisabled
-            ? { background: "var(--arc-ink-100)", color: "var(--arc-ink-400)", cursor: "not-allowed" }
-            : { background: "var(--grad-arcora)", color: "white", boxShadow: "var(--shadow-glow)" }
-        }
-      >
-        {!isConnected
-          ? "Connect wallet"
-          : !amount || amount === 0n
-            ? "Enter an amount"
-            : insufficient
-              ? `Insufficient ${meta?.symbol} balance`
-              : isPending
-                ? "Depositing…"
-                : `Deposit ${meta?.symbol}`}
-      </button>
+      {/* L-5: switch-chain CTA when on the wrong network. */}
+      {wrongChain ? (
+        <button
+          onClick={() => switchChain({ chainId: arcTestnet.id })}
+          disabled={switchPending}
+          className="w-full inline-flex items-center justify-center h-13 rounded-full text-[15px] font-medium text-white mt-1 transition-all disabled:opacity-50"
+          style={{ background: "var(--grad-arcora)", boxShadow: "var(--shadow-glow)" }}
+        >
+          {switchPending ? "Switching…" : "Switch to Arc Testnet"}
+        </button>
+      ) : (
+        <button
+          onClick={onDeposit}
+          disabled={ctaDisabled}
+          className="w-full inline-flex items-center justify-center h-13 rounded-full text-[15px] font-medium mt-1 transition-all"
+          style={
+            ctaDisabled
+              ? { background: "var(--arc-ink-100)", color: "var(--arc-ink-400)", cursor: "not-allowed" }
+              : { background: "var(--grad-arcora)", color: "white", boxShadow: "var(--shadow-glow)" }
+          }
+        >
+          {!isConnected
+            ? "Connect wallet"
+            : !amount || amount === 0n
+              ? "Enter an amount"
+              : insufficient
+                ? `Insufficient ${meta?.symbol} balance`
+                : isPending
+                  ? "Depositing…"
+                  : `Deposit ${meta?.symbol}`}
+        </button>
+      )}
 
       {result?.event ? (
         <p className="text-xs text-center" style={{ color: "var(--color-success)" }}>

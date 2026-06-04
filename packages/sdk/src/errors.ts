@@ -49,21 +49,20 @@ export class SlippageExceededError extends ArcoraDexError {
 }
 
 /**
- * The pool's oracle path rejected a read for `token`. Surfaced for any of:
- * - `InvalidOracleTimestamp` (Chainlink `updatedAt` is zero or beyond `maxStaleSeconds`)
- * - `InvalidOracleRound` (`answeredInRound < roundId`, or roundId is zero)
+ * The pool's oracle path rejected a read for `token`. Surfaced for:
  * - `NoValidPrice` (no fresh read AND no usable cached fallback)
  *
  * `reason` carries the underlying selector name so callers can distinguish
- * the three sub-cases without needing extra error classes.
+ * sub-cases without needing extra error classes.
+ *
+ * G-5 (audit 2026-05-31): the contract's prior `InvalidOracleTimestamp` /
+ * `InvalidOracleRound` reverts were removed (those Chainlink freshness/round
+ * checks now collapse into `NoValidPrice`), so those reasons are gone here too.
  */
 export class OracleStaleError extends ArcoraDexError {
   constructor(
     public readonly token: `0x${string}`,
-    public readonly reason:
-      | "InvalidOracleTimestamp"
-      | "InvalidOracleRound"
-      | "NoValidPrice" = "NoValidPrice",
+    public readonly reason: "NoValidPrice" = "NoValidPrice",
   ) {
     super(`Oracle read rejected for ${token} (${reason})`);
     this.name = "OracleStaleError";
@@ -100,6 +99,39 @@ export class DeadlinePassedError extends ArcoraDexError {
   constructor() {
     super("Transaction deadline already passed.");
     this.name = "DeadlinePassedError";
+  }
+}
+
+/** The pool rejected a swap because `tokenIn == tokenOut`. */
+export class SameTokenError extends ArcoraDexError {
+  constructor(public readonly token: `0x${string}`) {
+    super(`Same token for both sides of the trade: ${token}`);
+    this.name = "SameTokenError";
+  }
+}
+
+/**
+ * The pool rejected an op because an amount resolved to zero — e.g. a zero
+ * `amount`/`amountIn`, or a fee-on-transfer token that delivered nothing.
+ */
+export class ZeroAmountError extends ArcoraDexError {
+  constructor() {
+    super("Amount must be greater than zero.");
+    this.name = "ZeroAmountError";
+  }
+}
+
+/**
+ * I-9 (audit 2026-05-31): `ensureAllowance` refused to approve a token spend
+ * because the spender (the configured pool) failed the canonical-pool anchor
+ * check — its LP token's immutable `MINTER()` did not equal the spender. This
+ * guards against approving (especially an unlimited approval) to an address
+ * that is not actually the ArcoraDex pool.
+ */
+export class UntrustedSpenderError extends ArcoraDexError {
+  constructor(public readonly spender: `0x${string}`, public readonly reason: string) {
+    super(`Refusing to approve spend to non-canonical pool ${spender}: ${reason}`);
+    this.name = "UntrustedSpenderError";
   }
 }
 
@@ -155,6 +187,10 @@ export function parseContractError(err: unknown): ArcoraDexError {
       return new PoolPausedError();
     case "TokenNotActive":
       return new TokenNotActiveError(args[0] as `0x${string}`);
+    case "SameToken":
+      return new SameTokenError(args[0] as `0x${string}`);
+    case "ZeroAmount":
+      return new ZeroAmountError();
     case "DeadlinePassed":
       return new DeadlinePassedError();
     case "EarlyWithdraw":
@@ -166,13 +202,10 @@ export function parseContractError(err: unknown): ArcoraDexError {
         args[2] as bigint,
         Number(args[3]),
       );
-    // H-3 / H-1 (audit 2026-05-24): map all three oracle-rejection reverts to
-    // OracleStaleError so consumers can `catch (e) { if (e instanceof OracleStaleError) }`
-    // and inspect `.reason` to tell them apart.
-    case "InvalidOracleTimestamp":
-      return new OracleStaleError(args[0] as `0x${string}`, "InvalidOracleTimestamp");
-    case "InvalidOracleRound":
-      return new OracleStaleError(args[0] as `0x${string}`, "InvalidOracleRound");
+    // H-3 / H-1 (audit 2026-05-24): oracle-rejection reverts surface as
+    // OracleStaleError so consumers can `catch (e) { if (e instanceof OracleStaleError) }`.
+    // G-5 (audit 2026-05-31): `InvalidOracleTimestamp` / `InvalidOracleRound`
+    // were removed from the contract; only `NoValidPrice` remains.
     case "NoValidPrice":
       return new OracleStaleError(args[0] as `0x${string}`, "NoValidPrice");
     default:

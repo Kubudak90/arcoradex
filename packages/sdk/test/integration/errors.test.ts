@@ -128,10 +128,46 @@ describe("error path coverage", () => {
 
   it("InsufficientLpOut: live deposit revert decodes to SlippageExceededError (regression test for missing ABI errors)", async () => {
     const { poolAbi } = await import("@/abi/pool");
+    const { erc20Abi } = await import("@/abi/erc20");
     const sdk = writeSdk();
 
-    // The InsufficientLpOut check fires BEFORE transferFrom, so we don't need to mint or approve
-    // — keeps allowance state clean for downstream tests (T8 lesson).
+    // L-10 (audit 2026-06-03): the pool now measures the inbound balance delta,
+    // so `safeTransferFrom` runs BEFORE the `InsufficientLpOut` slippage check.
+    // We must therefore fund + approve so the transfer succeeds and the revert
+    // is reached on the slippage branch (not on a transferFrom allowance error).
+    // exactApproval-equivalent: approve exactly the deposit amount so we don't
+    // leave a lingering MAX allowance for downstream tests.
+    const mintAbi = [
+      {
+        type: "function",
+        name: "mint",
+        inputs: [
+          { name: "to", type: "address" },
+          { name: "amount", type: "uint256" },
+        ],
+        outputs: [],
+        stateMutability: "nonpayable",
+      },
+    ] as const;
+    const mintHash = await sdk.walletClient!.writeContract({
+      address: usdc(),
+      abi: mintAbi,
+      functionName: "mint",
+      args: [sdk.account!.address, 1_000_000n],
+      chain: sdk.chain,
+      account: sdk.account!,
+    });
+    await sdk.publicClient.waitForTransactionReceipt({ hash: mintHash });
+    const approveHash = await sdk.walletClient!.writeContract({
+      address: usdc(),
+      abi: erc20Abi,
+      functionName: "approve",
+      args: [sdk.addresses.pool, 1_000_000n],
+      chain: sdk.chain,
+      account: sdk.account!,
+    });
+    await sdk.publicClient.waitForTransactionReceipt({ hash: approveHash });
+
     // Force the revert with an unreachable minLpOut. Using the full poolAbi (with the
     // InsufficientLpOut error declared) lets viem decode the selector into errorName.
     try {

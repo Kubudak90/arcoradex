@@ -72,6 +72,8 @@ export async function getTokens(
       isActive: raw.isActive,
       oracle: raw.usdOracle,
       maxOracleDeviationBps: Number(raw.maxOracleDeviationBps),
+      // I-8 (audit 2026-05-31): capture the 5th struct field.
+      maxStaleSeconds: Number(raw.maxStaleSeconds),
     };
   });
 

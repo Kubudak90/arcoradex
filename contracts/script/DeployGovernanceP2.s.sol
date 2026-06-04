@@ -159,8 +159,14 @@ contract DeployGovernanceP2 is Script {
         {
             address[] memory proposers = new address[](1);
             proposers[0] = address(governanceSafe);
+            // L-8 (audit 2026-05-31): executor = Governance Safe (controlled
+            // execution), NOT address(0) (open execution where any EOA could
+            // execute a scheduled op after the delay). Execution now requires a
+            // 3/5 Safe tx: less liveness, more control — acceptable here because
+            // the same 3/5 Safe is already the sole proposer, so it is the
+            // trust anchor for both ends of every Timelock op.
             address[] memory executors = new address[](1);
-            executors[0] = address(0);
+            executors[0] = address(governanceSafe);
             timelock = new TimelockController(0, proposers, executors, address(0));
             console2.log("Timelock:", address(timelock));
         }

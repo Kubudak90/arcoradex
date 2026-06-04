@@ -57,7 +57,7 @@ export interface ArcoraDexClient {
   subscribeSwaps:     (h: Parameters<typeof subscribeSwaps>[1],     o?: Parameters<typeof subscribeSwaps>[2])     => Unsubscribe;
   subscribeDeposited: (h: Parameters<typeof subscribeDeposited>[1], o?: Parameters<typeof subscribeDeposited>[2]) => Unsubscribe;
   subscribeWithdrew:  (h: Parameters<typeof subscribeWithdrew>[1],  o?: Parameters<typeof subscribeWithdrew>[2])  => Unsubscribe;
-  subscribePoolStats: (h: Parameters<typeof subscribePoolStats>[1])                                                => Unsubscribe;
+  subscribePoolStats: (h: Parameters<typeof subscribePoolStats>[1], o?: Parameters<typeof subscribePoolStats>[2])    => Unsubscribe;
 
   format: typeof fmt & { tokenLabel: typeof tokenLabel };
   slippage: typeof slip;
@@ -104,7 +104,7 @@ export function createArcoraDex(params: CreateArcoraDexParams): ArcoraDexClient 
     subscribeSwaps:     (h, o) => subscribeSwaps(client, h, o),
     subscribeDeposited: (h, o) => subscribeDeposited(client, h, o),
     subscribeWithdrew:  (h, o) => subscribeWithdrew(client, h, o),
-    subscribePoolStats: (h)    => subscribePoolStats(client, h),
+    subscribePoolStats: (h, o) => subscribePoolStats(client, h, o),
 
     format: { ...fmt, tokenLabel },
     slippage: slip,

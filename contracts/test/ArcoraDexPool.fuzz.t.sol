@@ -29,8 +29,8 @@ contract ArcoraDexPoolFuzz is Test {
     function setUp() public {
         usdc = new MintableERC20("USD Coin", "USDC", 6, owner);
         eurc = new MintableERC20("Euro Coin", "EURC", 6, owner);
-        fUsdc = new MockChainlinkFeedV2(8, int256(1e8), address(this), address(this));
-        fEurc = new MockChainlinkFeedV2(8, int256(11e7), address(this), address(this));
+        fUsdc = new MockChainlinkFeedV2(8, int256(1e8), address(this), address(this), 1, type(int256).max, 0, 0);
+        fEurc = new MockChainlinkFeedV2(8, int256(11e7), address(this), address(this), 1, type(int256).max, 0, 0);
 
         reg = new ArcoraDexRegistry(owner);
         pool = new ArcoraDexPool(address(reg), 30, 1000, owner);

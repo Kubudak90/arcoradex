@@ -51,7 +51,7 @@ contract DeployGovernanceP2_IdempotencyTest is Test {
         // MockChainlinkFeedV2 constructor signature is
         //   (uint8 decimals, int256 initialAnswer, address initialWriter, address initialOwner)
         vm.prank(deployer);
-        feed = new MockChainlinkFeedV2(8, 100_000_000, deployer, deployer);
+        feed = new MockChainlinkFeedV2(8, 100_000_000, deployer, deployer, 1, type(int256).max, 0, 0);
     }
 
     /// First migration via the harness, then a second harness call that must

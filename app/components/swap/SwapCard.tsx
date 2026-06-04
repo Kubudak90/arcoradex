@@ -1,6 +1,6 @@
 "use client";
 import { useMemo, useState } from "react";
-import { useAccount, useReadContract } from "wagmi";
+import { useAccount, useReadContract, useChainId, useSwitchChain } from "wagmi";
 import { erc20Abi } from "viem";
 import {
   useTokens,
@@ -8,7 +8,7 @@ import {
   useSwap,
   usePoolStats,
 } from "@arcoralabs/dex-sdk/react";
-import { fmtUnits, tryParseUnits } from "@arcoralabs/dex-sdk";
+import { fmtUnits, tryParseUnits, arcTestnet } from "@arcoralabs/dex-sdk";
 import { TokenIcon } from "@/components/common/TokenIcon";
 import { TokenPickerModal } from "./TokenPickerModal";
 import { SlippageMenu } from "./SlippageMenu";
@@ -20,6 +20,13 @@ export function SwapCard() {
   const { activeTokens } = useTokens();
   const { address: account, isConnected } = useAccount();
   const { stats: poolStats } = usePoolStats();
+  // L-5 (audit 2026-05-31): gate the CTA on the connected chain. Mirrors
+  // ConnectButton's wrongChain check (arcTestnet.id === 5042002). Without this
+  // the user could trigger a swap while on the wrong network and the tx would
+  // hit a non-existent contract / wrong pool.
+  const chainId = useChainId();
+  const { switchChain, isPending: switchPending } = useSwitchChain();
+  const wrongChain = isConnected && chainId !== arcTestnet.id;
 
   const [tokenIn, setTokenIn] = useState<`0x${string}` | undefined>();
   const [tokenOut, setTokenOut] = useState<`0x${string}` | undefined>();
@@ -104,7 +111,7 @@ export function SwapCard() {
 
   const insufficient = !!amountIn && !!balanceIn && amountIn > (balanceIn as bigint);
   const ctaDisabled =
-    !isConnected || !amountIn || amountIn === 0n || quoted == null || insufficient;
+    !isConnected || wrongChain || !amountIn || amountIn === 0n || quoted == null || insufficient;
 
   return (
     <div>
@@ -241,25 +248,38 @@ export function SwapCard() {
           <Row l="Network fee" r="~$0.001" />
         </div>
 
-        {/* CTA */}
-        <button
-          onClick={() => !ctaDisabled && setConfirmOpen(true)}
-          disabled={ctaDisabled}
-          className="w-full inline-flex items-center justify-center h-13 rounded-full text-[15px] font-medium mt-3 transition-all"
-          style={
-            ctaDisabled
-              ? { background: "var(--arc-ink-100)", color: "var(--arc-ink-400)", cursor: "not-allowed" }
-              : { background: "var(--grad-arcora)", color: "white", boxShadow: "var(--shadow-glow)" }
-          }
-        >
-          {!isConnected
-            ? "Connect wallet"
-            : !amountIn || amountIn === 0n
-              ? "Enter an amount"
-              : insufficient
-                ? `Insufficient ${inMeta?.symbol} balance`
-                : `Swap ${inMeta?.symbol} → ${outMeta?.symbol}`}
-        </button>
+        {/* CTA. L-5: when connected to the wrong chain, swap the action for a
+            "Switch to Arc Testnet" button (mirrors ConnectButton) so the user
+            can't dispatch a swap against the wrong network. */}
+        {wrongChain ? (
+          <button
+            onClick={() => switchChain({ chainId: arcTestnet.id })}
+            disabled={switchPending}
+            className="w-full inline-flex items-center justify-center h-13 rounded-full text-[15px] font-medium text-white mt-3 transition-all disabled:opacity-50"
+            style={{ background: "var(--grad-arcora)", boxShadow: "var(--shadow-glow)" }}
+          >
+            {switchPending ? "Switching…" : "Switch to Arc Testnet"}
+          </button>
+        ) : (
+          <button
+            onClick={() => !ctaDisabled && setConfirmOpen(true)}
+            disabled={ctaDisabled}
+            className="w-full inline-flex items-center justify-center h-13 rounded-full text-[15px] font-medium mt-3 transition-all"
+            style={
+              ctaDisabled
+                ? { background: "var(--arc-ink-100)", color: "var(--arc-ink-400)", cursor: "not-allowed" }
+                : { background: "var(--grad-arcora)", color: "white", boxShadow: "var(--shadow-glow)" }
+            }
+          >
+            {!isConnected
+              ? "Connect wallet"
+              : !amountIn || amountIn === 0n
+                ? "Enter an amount"
+                : insufficient
+                  ? `Insufficient ${inMeta?.symbol} balance`
+                  : `Swap ${inMeta?.symbol} → ${outMeta?.symbol}`}
+          </button>
+        )}
 
         {/* Status messages */}
         {result?.event ? (

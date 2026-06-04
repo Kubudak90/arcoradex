@@ -61,7 +61,7 @@ contract P2GovernanceTest is Test {
         vm.startPrank(DEPLOYER);
         reg = new ArcoraDexRegistry(DEPLOYER);
         usdc = new MockERC20("USDC", "USDC", 6);
-        fUsdc = new MockChainlinkFeedV2(8, 100_000_000, DEPLOYER, DEPLOYER);
+        fUsdc = new MockChainlinkFeedV2(8, 100_000_000, DEPLOYER, DEPLOYER, 1, type(int256).max, 0, 0);
         reg.listToken(address(usdc), 6, IChainlinkAggregator(address(fUsdc)), 50, 3600);
         pool = new ArcoraDexPool(address(reg), 5, 2500, DEPLOYER);
 
@@ -95,11 +95,14 @@ contract P2GovernanceTest is Test {
         );
         pauseGuardianSafe = Safe(payable(address(factory.createProxyWithNonce(address(safeSingleton), pgSetup, 2))));
 
-        // TimelockController: minDelay = 0 (setup), proposers = [govSafe], executors = [0x0] (open)
+        // TimelockController: minDelay = 0 (setup), proposers = [govSafe].
+        // L-8 (audit 2026-05-31): executor = Governance Safe (controlled
+        // execution), NOT address(0) (open). Mirrors DeployGovernanceP2.s.sol:
+        // every scheduled op must be executed by the 3/5 Safe, not a random EOA.
         address[] memory proposers = new address[](1);
         proposers[0] = address(governanceSafe);
         address[] memory executors = new address[](1);
-        executors[0] = address(0);
+        executors[0] = address(governanceSafe);
         timelock = new TimelockController(0, proposers, executors, address(0));
 
         // Transfer Pool + Registry ownership to Timelock (in setup mode)
@@ -206,6 +209,40 @@ contract P2GovernanceTest is Test {
         require(governanceSafe.execCall(to, data, keys), "gov exec failed");
     }
 
+    /// @dev L-8: like _govExec, but asserts the inner call reverts. With
+    /// safeTxGas=0 and gasPrice=0, a failed inner call makes Safe.execTransaction
+    /// revert with "GS013" (Safe v1.4). Used to pin that a not-yet-ready Timelock
+    /// op cannot be executed even via the Safe. Signatures are built BEFORE the
+    /// expectRevert so the cheatcode wraps only the final execTransaction call
+    /// (the helper's nonce()/getTransactionHash() reads must not consume it).
+    function _govExecExpectFail(address to, bytes memory data) internal {
+        bytes32 safeTxHash = governanceSafe.getTransactionHash(
+            to, 0, data, Enum.Operation.Call, 0, 0, 0, address(0), payable(address(0)), governanceSafe.nonce()
+        );
+        // Build sorted packed sigs from the first 3 gov signers (3/5 threshold).
+        uint256[3] memory keys = [govKeys[0], govKeys[1], govKeys[2]];
+        address[3] memory signers;
+        bytes[3] memory sigs;
+        for (uint256 i = 0; i < 3; i++) {
+            signers[i] = vm.addr(keys[i]);
+            (uint8 v, bytes32 r, bytes32 s) = vm.sign(keys[i], safeTxHash);
+            sigs[i] = abi.encodePacked(r, s, v);
+        }
+        // Sort by signer address ascending (Safe requires this).
+        for (uint256 i = 1; i < 3; i++) {
+            for (uint256 j = i; j > 0 && signers[j - 1] > signers[j]; j--) {
+                (signers[j - 1], signers[j]) = (signers[j], signers[j - 1]);
+                (sigs[j - 1], sigs[j]) = (sigs[j], sigs[j - 1]);
+            }
+        }
+        bytes memory packed = bytes.concat(sigs[0], sigs[1], sigs[2]);
+
+        vm.expectRevert(bytes("GS013"));
+        governanceSafe.execTransaction(
+            to, 0, data, Enum.Operation.Call, 0, 0, 0, address(0), payable(address(0)), packed
+        );
+    }
+
     /// @dev Calls Safe.execTransaction with the first 2 PG signers (meets the 2/3 threshold).
     function _pgExec(address to, bytes memory data) internal {
         uint256[] memory keys = new uint256[](2);
@@ -226,6 +263,8 @@ contract P2GovernanceTest is Test {
     function test_governance_proposes_executes_setSwapFeeBps() public {
         uint16 newFee = 10;
         bytes memory call = abi.encodeCall(pool.setSwapFeeBps, (newFee));
+        bytes memory execCall =
+            abi.encodeCall(TimelockController.execute, (address(pool), 0, call, bytes32(0), bytes32(0)));
 
         // Schedule via governance
         _govExec(
@@ -235,13 +274,15 @@ contract P2GovernanceTest is Test {
             )
         );
 
-        // Cannot execute before delay
-        vm.expectRevert();
-        timelock.execute(address(pool), 0, call, bytes32(0), bytes32(0));
+        // L-8: cannot execute before delay — even via the Safe (the op is not
+        // ready). _govExecExpectFail asserts the inner Timelock call reverts
+        // (Safe.execTransaction returns false / reverts on a failed inner call).
+        _govExecExpectFail(address(timelock), execCall);
 
-        // Warp 48h, execute
+        // Warp 48h. L-8: execution now routes through the 3/5 Safe (the sole
+        // EXECUTOR_ROLE holder), not a bare EOA timelock.execute(...).
         vm.warp(block.timestamp + TIMELOCK_DELAY + 1);
-        timelock.execute(address(pool), 0, call, bytes32(0), bytes32(0));
+        _govExec(address(timelock), execCall);
 
         assertEq(pool.swapFeeBps(), newFee);
     }
@@ -278,7 +319,11 @@ contract P2GovernanceTest is Test {
             )
         );
         vm.warp(block.timestamp + TIMELOCK_DELAY + 1);
-        timelock.execute(address(pool), 0, unpauseCall, bytes32(0), bytes32(0));
+        // L-8: execute via the Safe (sole EXECUTOR_ROLE holder), not a bare EOA.
+        _govExec(
+            address(timelock),
+            abi.encodeCall(TimelockController.execute, (address(pool), 0, unpauseCall, bytes32(0), bytes32(0)))
+        );
 
         assertEq(pool.paused(), false);
     }
@@ -299,14 +344,26 @@ contract P2GovernanceTest is Test {
         );
 
         vm.warp(block.timestamp + TIMELOCK_DELAY + 1);
-        timelock.execute(address(reg), 0, call, bytes32(0), bytes32(0));
+        // L-8: execute via the Safe (sole EXECUTOR_ROLE holder), not a bare EOA.
+        _govExec(
+            address(timelock),
+            abi.encodeCall(TimelockController.execute, (address(reg), 0, call, bytes32(0), bytes32(0)))
+        );
 
         assertEq(reg.tokenInfo(address(usdc)).maxStaleSeconds, newStale);
     }
 
-    function test_executor_open_anyone_can_execute_after_delay() public {
+    /// L-8 (audit 2026-05-31): the executor is now the Governance Safe, NOT the
+    /// open role (address(0)). This test pins the closed-executor behaviour that
+    /// replaced the old open-executor test (`test_executor_open_anyone_can_execute_after_delay`):
+    /// after the delay, a random EOA CANNOT execute (AccessControl revert), but
+    /// the 3/5 Safe CAN. This is the intentional liveness/control trade-off:
+    /// execution now requires a 3/5 Safe tx.
+    function test_executor_closed_onlySafe_can_execute_after_delay() public {
         uint16 newFee = 7;
         bytes memory call = abi.encodeCall(pool.setSwapFeeBps, (newFee));
+        bytes memory execCall =
+            abi.encodeCall(TimelockController.execute, (address(pool), 0, call, bytes32(0), bytes32(0)));
         _govExec(
             address(timelock),
             abi.encodeCall(
@@ -315,10 +372,21 @@ contract P2GovernanceTest is Test {
         );
 
         vm.warp(block.timestamp + TIMELOCK_DELAY + 1);
-        // Random non-Safe address executes
-        vm.prank(address(0xABCD));
-        timelock.execute(address(pool), 0, call, bytes32(0), bytes32(0));
 
+        // Random non-Safe EOA is NOT an executor — execution must revert even
+        // though the op is ready (closed executor; was permitted under the old
+        // open-executor model this test replaces). Read EXECUTOR_ROLE() before
+        // the prank so the staticcall doesn't consume the prank.
+        bytes32 execRole = timelock.EXECUTOR_ROLE();
+        bytes memory expectedErr =
+            abi.encodeWithSignature("AccessControlUnauthorizedAccount(address,bytes32)", address(0xABCD), execRole);
+        vm.prank(address(0xABCD));
+        vm.expectRevert(expectedErr);
+        timelock.execute(address(pool), 0, call, bytes32(0), bytes32(0));
+        assertEq(pool.swapFeeBps(), 5, "fee unchanged: random EOA could not execute");
+
+        // The Governance Safe (sole EXECUTOR_ROLE holder) executes successfully.
+        _govExec(address(timelock), execCall);
         assertEq(pool.swapFeeBps(), newFee);
     }
 }

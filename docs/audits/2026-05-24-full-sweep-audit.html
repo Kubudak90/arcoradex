@@ -1,0 +1,506 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ArcoraDEX Full-Sweep Audit — 2026-05-24</title>
+<style>
+  :root {
+    --bg: #fafaf9;
+    --surface: #ffffff;
+    --ink: #1c1917;
+    --ink-2: #44403c;
+    --ink-3: #78716c;
+    --line: #e7e5e4;
+    --line-2: #d6d3d1;
+    --crit: #b91c1c;
+    --crit-bg: #fef2f2;
+    --high: #c2410c;
+    --high-bg: #fff7ed;
+    --med: #a16207;
+    --med-bg: #fefce8;
+    --ok: #15803d;
+    --ok-bg: #f0fdf4;
+    --info: #1d4ed8;
+    --info-bg: #eff6ff;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: var(--sans);
+    color: var(--ink);
+    background: var(--bg);
+    font-size: 14.5px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  .page {
+    max-width: 1080px;
+    margin: 0 auto;
+    padding: 48px 56px 96px;
+    background: var(--surface);
+    min-height: 100vh;
+  }
+  header.top {
+    border-bottom: 2px solid var(--ink);
+    padding-bottom: 24px;
+    margin-bottom: 36px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    gap: 24px;
+    flex-wrap: wrap;
+  }
+  .title-block h1 {
+    margin: 0 0 6px;
+    font-size: 28px;
+    letter-spacing: -0.02em;
+    font-weight: 700;
+  }
+  .title-block .sub {
+    color: var(--ink-3);
+    font-size: 14px;
+    font-weight: 500;
+  }
+  .meta {
+    text-align: right;
+    font-size: 12.5px;
+    color: var(--ink-3);
+    font-family: var(--mono);
+    line-height: 1.7;
+  }
+  .meta b { color: var(--ink); font-weight: 600; }
+  h2 {
+    font-size: 19px;
+    margin: 40px 0 14px;
+    letter-spacing: -0.01em;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--line);
+  }
+  h2 .count {
+    font-size: 13px;
+    color: var(--ink-3);
+    font-weight: 400;
+    margin-left: 8px;
+    font-family: var(--mono);
+  }
+  h3 {
+    font-size: 15.5px;
+    margin: 22px 0 8px;
+    font-weight: 600;
+  }
+  p { margin: 8px 0; }
+  code, .mono {
+    font-family: var(--mono);
+    font-size: 0.88em;
+    background: #f5f5f4;
+    padding: 1.5px 5px;
+    border-radius: 4px;
+    color: var(--ink-2);
+    border: 1px solid var(--line);
+  }
+  pre {
+    background: #1c1917;
+    color: #fafaf9;
+    padding: 14px 16px;
+    border-radius: 8px;
+    overflow-x: auto;
+    font-size: 12.5px;
+    line-height: 1.55;
+    margin: 12px 0;
+  }
+  pre code { background: none; border: none; color: inherit; padding: 0; }
+
+  /* Summary cards */
+  .summary {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 10px;
+    margin: 24px 0 36px;
+  }
+  .card {
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 14px 16px;
+    background: var(--surface);
+  }
+  .card .n {
+    font-size: 28px;
+    font-weight: 700;
+    line-height: 1;
+    font-family: var(--mono);
+    letter-spacing: -0.02em;
+  }
+  .card .l {
+    font-size: 11.5px;
+    color: var(--ink-3);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-top: 6px;
+    font-weight: 600;
+  }
+  .card.crit { background: var(--crit-bg); border-color: #fecaca; }
+  .card.crit .n { color: var(--crit); }
+  .card.high { background: var(--high-bg); border-color: #fed7aa; }
+  .card.high .n { color: var(--high); }
+  .card.med  { background: var(--med-bg);  border-color: #fde68a; }
+  .card.med  .n { color: var(--med); }
+  .card.fp   { background: #f5f5f4; }
+  .card.fp   .n { color: var(--ink-3); }
+  .card.ok   { background: var(--ok-bg);   border-color: #bbf7d0; }
+  .card.ok   .n { color: var(--ok); }
+
+  /* Tables */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 12px 0 20px;
+    font-size: 13.5px;
+  }
+  th, td {
+    text-align: left;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+  }
+  th {
+    background: #f5f5f4;
+    font-weight: 600;
+    font-size: 12.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--ink-2);
+    border-bottom: 1.5px solid var(--line-2);
+  }
+  td.id { font-family: var(--mono); font-weight: 600; white-space: nowrap; color: var(--ink-2); }
+  td.surface { white-space: nowrap; }
+
+  /* Severity chips */
+  .chip {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 99px;
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    line-height: 1.6;
+    font-family: var(--sans);
+  }
+  .chip.crit { background: var(--crit-bg); color: var(--crit); border: 1px solid #fecaca; }
+  .chip.high { background: var(--high-bg); color: var(--high); border: 1px solid #fed7aa; }
+  .chip.med  { background: var(--med-bg);  color: var(--med);  border: 1px solid #fde68a; }
+  .chip.ok   { background: var(--ok-bg);   color: var(--ok);   border: 1px solid #bbf7d0; }
+  .chip.fp   { background: #f5f5f4; color: var(--ink-3); border: 1px solid var(--line-2); }
+  .chip.info { background: var(--info-bg); color: var(--info); border: 1px solid #bfdbfe; }
+
+  .chip.surf {
+    background: #f5f5f4;
+    color: var(--ink-2);
+    border: 1px solid var(--line);
+    text-transform: none;
+    font-weight: 600;
+    letter-spacing: 0;
+  }
+
+  /* Callout boxes */
+  .callout {
+    border-left: 4px solid var(--ink-3);
+    background: #f5f5f4;
+    padding: 14px 18px;
+    border-radius: 4px;
+    margin: 16px 0;
+  }
+  .callout.crit { border-color: var(--crit); background: var(--crit-bg); }
+  .callout.fp   { border-color: var(--ink-3); }
+  .callout.ok   { border-color: var(--ok); background: var(--ok-bg); }
+  .callout p:first-child { margin-top: 0; }
+  .callout p:last-child  { margin-bottom: 0; }
+  .callout h3 { margin-top: 0; }
+
+  ol.steps {
+    padding-left: 22px;
+    margin: 8px 0;
+  }
+  ol.steps li { margin: 6px 0; }
+  ul { padding-left: 22px; margin: 8px 0; }
+  ul li { margin: 4px 0; }
+
+  /* Print */
+  @media print {
+    body { background: white; font-size: 11.5px; }
+    .page { max-width: none; padding: 18mm 16mm 22mm; min-height: 0; }
+    h2 { page-break-after: avoid; }
+    table, .callout { page-break-inside: avoid; }
+    pre { white-space: pre-wrap; word-break: break-word; }
+    a { color: inherit; text-decoration: none; }
+    .summary { grid-template-columns: repeat(5, 1fr); }
+  }
+
+  /* Footer */
+  footer.bottom {
+    margin-top: 56px;
+    padding-top: 18px;
+    border-top: 1px solid var(--line);
+    color: var(--ink-3);
+    font-size: 12px;
+    font-family: var(--mono);
+    display: flex;
+    justify-content: space-between;
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+<header class="top">
+  <div class="title-block">
+    <h1>ArcoraDEX — Full-Sweep Audit</h1>
+    <div class="sub">Contracts · SDK · App · CI/Ops — branch <code>phase3/oracle-hardening</code></div>
+  </div>
+  <div class="meta">
+    <div><b>Date:</b> 2026-05-24 (rev 2)</div>
+    <div><b>Chain:</b> Arc Testnet (5042002)</div>
+    <div><b>Method:</b> 4× parallel review agents + counter-audit</div>
+    <div><b>Verification:</b> git ls-files / gh api / source read</div>
+  </div>
+</header>
+
+<!-- ========== REV NOTE ========== -->
+
+<div class="callout">
+  <h3>Revision note — rev 2</h3>
+  <p>İlk pass'te üç bulgu hatalıydı ve counter-audit ile tespit edildi; rapordan çıkarıldı (aşağıda <b>Retracted</b> bölümü). Yerlerine <code>gh api</code> ile yapılan canlı kontrolden gelen <b>iki gerçek CI hatası</b> eklendi (<code>OPS-A</code>, <code>OPS-B</code>). False-positive demotion'lar değişmedi.</p>
+</div>
+
+<!-- ========== SUMMARY ========== -->
+
+<div class="summary">
+  <div class="card crit"><div class="n">0</div><div class="l">Critical</div></div>
+  <div class="card high"><div class="n">11</div><div class="l">High</div></div>
+  <div class="card med"><div class="n">15</div><div class="l">Medium</div></div>
+  <div class="card fp"><div class="n">2</div><div class="l">False positives</div></div>
+  <div class="card fp"><div class="n">3</div><div class="l">Retracted</div></div>
+</div>
+
+<!-- ========== FALSE POSITIVES ========== -->
+
+<h2>False positives <span class="count">(2)</span></h2>
+
+<p>İki reviewer agent disk'te <code>.env</code> dosyaları gördü ve commit edilmiş varsaydı. <code>git ls-files</code> ile doğrulandı: <b>her ikisi de tracked değil, history'de kayıt yok</b>.</p>
+
+<table>
+  <thead>
+    <tr><th>İddia</th><th>Doğrulama</th><th>Sonuç</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>FAUCET_PRIVATE_KEY</code> repo'da committed<br><span class="chip surf">app C1</span> <span class="chip surf">ci C-1</span></td>
+      <td><code>.vercel/</code> root <code>.gitignore</code>'da; <code>git ls-files .vercel/</code> boş; <code>git log -- .vercel/.env.production.local</code> boş. Dosya <code>vercel pull</code> ile üretilen local artifact.</td>
+      <td><span class="chip fp">Not a leak</span></td>
+    </tr>
+    <tr>
+      <td><code>DEPLOYER_PRIVATE_KEY</code> repo'da committed<br><span class="chip surf">ci C-2</span></td>
+      <td><code>contracts/.env</code> ve <code>contracts/.env.*</code> root <code>.gitignore</code>'da; <code>git ls-files contracts/.env</code> boş; history'de yok. Testnet-throwaway key zaten user policy gereği.</td>
+      <td><span class="chip fp">Not a leak</span></td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ========== RETRACTED ========== -->
+
+<h2>Retracted <span class="count">(3)</span></h2>
+
+<p>Counter-audit aşağıdaki üç bulguyu çürüttü; raporun aktif scope'undan çıkarıldılar.</p>
+
+<table>
+  <thead>
+    <tr><th style="width:80px">ID</th><th>Orijinal iddia</th><th>Gerçek</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td class="id">OPS-1</td>
+      <td><b>(critical)</b> GitHub Actions user-level disabled; <code>total_count=0</code>; workflows hiç çalışmamış</td>
+      <td><code>gh api repos/Kubudak90/arcoradex/actions/permissions</code> → <code>enabled:true, allowed_actions:all</code>. <code>actions/runs?per_page=5</code> → <code>total_count=2</code>, son iki run <code>contracts</code> + <code>slither</code> 2026-05-22'de tetiklenmiş. Tetikleme çalışıyor; sonuçlar <b>failing</b> — yeni bulgular <code>OPS-A</code> ve <code>OPS-B</code>'ye taşındı.</td>
+    </tr>
+    <tr>
+      <td class="id">H-9</td>
+      <td>(high) <code>guard-record.mjs:35</code>'teki <code>REGISTRY = 0x9914...</code> memory'deki <code>0x8748...</code> ile uyuşmuyor → yanlış kontrata bakıyor</td>
+      <td>Dosyada satır 31 + comment: <i>"aggregators are resolved from Registry at startup so the script automatically tracks whatever oracle the Registry currently points at"</i>. <code>0x9914...</code> bu repo için aktif V3 Registry; memory'deki <code>0x8748...</code> farklı deployment epoch'una ait. Hardcode yok, mismatch de yok.</td>
+    </tr>
+    <tr>
+      <td class="id">M-6</td>
+      <td>(medium) <code>usePoolStats</code> <code>queryKey</code> her render'da yeni tuple → gereksiz <code>invalidateQueries</code></td>
+      <td><code>usePoolStats.ts:21</code>'de zaten <code>useMemo</code> ile stable primitive deps: <code>[sdk.chain.id, sdk.addresses.pool]</code>. Reviewer agent kaynağı yanlış okumuş.</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ========== HIGH ========== -->
+
+<h2>High <span class="count">(11)</span></h2>
+
+<p><b>Live CI status</b> (<code>gh api</code> 2026-05-24): <code>contracts</code> ve <code>slither</code> workflow'larının 2026-05-22'deki son run'ları <b>fail</b>. <code>app.yml</code> ve <code>sdk.yml</code> hiç tetiklenmemiş — sebep PR #29-#32'lerin path filter'ları, push'lar bu dosyalara dokunmadı (bu beklenen davranış).</p>
+
+<table>
+  <thead>
+    <tr><th style="width:42px">#</th><th style="width:80px">Surface</th><th>Bulgu</th><th>Fix</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td class="id">H-1</td>
+      <td><span class="chip surf">contracts</span></td>
+      <td><code>ArcoraDexPool._readUsdPrice1e18Mut</code> (<code>:142-179</code>) — <code>lastValidPrice</code> cache'i kendi staleness eşiği OLMADAN fallback olarak kullanılıyor. Oracle kalıcı düşerse pool 30 gün önceki fiyatla sonsuza dek çalışır.</td>
+      <td><code>TokenInfo</code>'ya <code>maxCacheAgeSeconds</code> ekle; <code>block.timestamp - lastValidPriceAt[token] &gt; max</code> ise <code>NoValidPrice</code> revert.</td>
+    </tr>
+    <tr>
+      <td class="id">H-2</td>
+      <td><span class="chip surf">sdk</span></td>
+      <td><code>EarlyWithdrawError</code> <code>errors.ts:91</code>'de tanımlı ama <code>src/index.ts:21-34</code> export bloğunda yok. Consumer'lar <code>instanceof EarlyWithdrawError</code> yapamıyor.</td>
+      <td>Export bloğuna tek satır ekle.</td>
+    </tr>
+    <tr>
+      <td class="id">H-3</td>
+      <td><span class="chip surf">sdk</span></td>
+      <td><code>parseContractError</code> switch'inde <code>InvalidOracleTimestamp</code> ve <code>InvalidOracleRound</code> case'leri yok. P3 oracle revert'leri generic <code>ArcoraDexError</code>'a düşüyor.</td>
+      <td>İki <code>case</code> ekle → <code>OracleStaleError</code> instance döndür.</td>
+    </tr>
+    <tr>
+      <td class="id">H-4</td>
+      <td><span class="chip surf">sdk</span></td>
+      <td>wagmi <code>writeContract</code> simulate'i atlıyor → revert receipt'e <code>status:"reverted"</code> olarak düşüyor, SDK <code>decodeWithdrewEvent</code> "event not found" generic error fırlatıyor. Typed-error yolu sadece <code>privateKeyToAccount</code> path'inde.</td>
+      <td>Write action'larında <code>status === "reverted"</code> guard'ı + <code>simulateContract</code> ile revert reason recovery → <code>parseContractError</code>.</td>
+    </tr>
+    <tr>
+      <td class="id">H-5</td>
+      <td><span class="chip surf">app</span></td>
+      <td><code>app/lib/wagmi.ts:13-22</code> lokal <code>arcTestnet</code> tanımlıyor; diğer 4 dosya SDK'dan import ediyor. İki farklı obje aynı <code>id</code> ile bundle'da. Bonus: lokal tanımda <code>nativeCurrency.symbol = "USDC"</code> (semantik yanlış görünüyor).</td>
+      <td>Lokal <code>defineChain</code> sil, SDK export'unu her yerde kullan.</td>
+    </tr>
+    <tr>
+      <td class="id">H-6</td>
+      <td><span class="chip surf">app</span></td>
+      <td>Faucet TOCTOU — <code>checkRateLimit</code>(<code>:76</code>) ile <code>recordClaim</code>(<code>:142</code>) atomik değil. Aynı serverless instance'da iki eşzamanlı POST → ikisi de geçer, 14 mint tx atılır.</td>
+      <td>Per-key in-flight <code>Set</code>: <code>checkRateLimit</code> sonrası key reserve, <code>finally</code>'de release.</td>
+    </tr>
+    <tr>
+      <td class="id">H-7</td>
+      <td><span class="chip surf">app</span></td>
+      <td><code>/api/faucet</code> Origin/Referer enforcement yok. BotID per-page-load signal — cross-origin frame relay'leyebilir.</td>
+      <td>Route üstünde <code>origin.startsWith(NEXT_PUBLIC_APP_URL)</code> kontrolü.</td>
+    </tr>
+    <tr>
+      <td class="id">H-8</td>
+      <td><span class="chip surf">ops</span></td>
+      <td><code>arcoradex-feeds.service</code> ve <code>arcoradex-guard-record.service</code> ikisi de <code>/run/arcora/keeper.env</code> paylaşıyor; ikisinde de <code>ExecStopPost=rm -f</code>. Timer'lar drift'le faz hizasına gelirse race.</td>
+      <td>Per-tenant path: <code>keeper-feeds.env</code> / <code>keeper-guard.env</code>.</td>
+    </tr>
+    <tr>
+      <td class="id">H-10</td>
+      <td><span class="chip surf">ops</span></td>
+      <td><code>ops/keepalive/.env.example</code> 7 primary feed listeliyor, <code>P3_SECONDARY_*</code> yok. Fresh provision → secondary feed'ler sessizce stale → OracleAggregator divergence guard görmüyor.</td>
+      <td><code>.env.example</code>'a 7 secondary ekle.</td>
+    </tr>
+    <tr>
+      <td class="id">OPS-A</td>
+      <td><span class="chip surf">ci</span></td>
+      <td><code>contracts.yml</code> 2026-05-22'den beri her push'ta fail. Failing step: <code>forge fmt --check</code> (job <code>test</code>, step #5). Main red 2+ gündür — cosmetic ama gate doğru çalışıyor, code style commit'i eksik.</td>
+      <td><code>cd contracts && forge fmt</code> + commit. Tek satır PR.</td>
+    </tr>
+    <tr>
+      <td class="id">OPS-B</td>
+      <td><span class="chip surf">ci</span></td>
+      <td><code>slither.yml</code> son run'da Slither analysis fail (medium+ bulgu var) <b>ve</b> SARIF upload da fail oldu — yani <code>M-14</code>'te teorik dediğim "fail-on:medium + continue-on-error:false → SARIF düşmez" davranışı canlı gerçekleşiyor. GitHub Security tab boş, gerçek bulgular gözle görünür değil.</td>
+      <td>(i) Slither step'e <code>continue-on-error: true</code>, (ii) merge'i ayrı required status check ile gate'le, (iii) hangi medium'ların fail'e yol açtığını local'de <code>slither contracts/ --sarif results.sarif</code> ile çıkar.</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ========== MEDIUM ========== -->
+
+<h2>Medium <span class="count">(15)</span></h2>
+
+<h3>Contracts (4)</h3>
+<table>
+  <thead><tr><th style="width:42px">#</th><th>Bulgu</th></tr></thead>
+  <tbody>
+    <tr><td class="id">M-1</td><td>Eski P3 (P3.5 değil) <code>BatchBuilder</code> <code>SALT = bytes32(0)</code> — <code>scheduleBatch</code> front-run griefing açık. P3.5 düzeltti; eski script'ler retire edilmeli ya da backport.</td></tr>
+    <tr><td class="id">M-2</td><td>TRYC/BRLC <code>DeployArcoraDexV3.s.sol:90-91</code>'de <code>maxDeviationBps = 5000</code> (50%) listed, P3 batch 2%'ye çekene kadar 48h attack window. Listing-time 200'e çekersek window kapanır.</td></tr>
+    <tr><td class="id">M-3</td><td>V1 <code>MockChainlinkFeed</code> invariant testlerde <code>roundId = 1</code> sabit — <code>answeredInRound &gt;= roundId</code> branch'i hiç falsify edilmemiş. V2 mock'a geçilmeli.</td></tr>
+    <tr><td class="id">M-4</td><td><code>CumulativeDeviationGuard.record()</code> permissionless — window-anchor adversary riski (event-only design mitigates, ama off-chain monitor re-validation bu repo'da spesifiye edilmemiş).</td></tr>
+  </tbody>
+</table>
+
+<h3>SDK (3)</h3>
+<table>
+  <thead><tr><th style="width:42px">#</th><th>Bulgu</th></tr></thead>
+  <tbody>
+    <tr><td class="id">M-5</td><td><code>useAllowance</code> <code>sdk.account</code>'a bağlı — wagmi reconnect cascade'ine fragile. Direkt <code>useAccount().address</code> kullan.</td></tr>
+    <tr><td class="id">M-7</td><td><code>useDebouncedValue.ts</code> <code>"use client"</code> directive'i eksik — RSC bağlamında import edilirse hard runtime error.</td></tr>
+    <tr><td class="id">M-8</td><td>Test coverage gap: <code>ArcoraDexProvider</code>, <code>useArcoraDex</code>, <code>useDebouncedValue</code> için test yok (counter-audit notu: M-3 gibi bu da kısmen kapsamı abartılmış; <code>useDebouncedValue</code> testi yok, diğerleri zayıf coverage'lı).</td></tr>
+  </tbody>
+</table>
+
+<h3>App (4)</h3>
+<table>
+  <thead><tr><th style="width:42px">#</th><th>Bulgu</th></tr></thead>
+  <tbody>
+    <tr><td class="id">M-9</td><td><code>FaucetButton.FailureNotice</code> <code>role="alert"</code> / <code>aria-live</code> yok — screen reader üç failure state'ini announce etmez.</td></tr>
+    <tr><td class="id">M-10</td><td><code>ReservesTable</code> PR #29 refactor'una dahil edilmemiş, hâlâ <code>useEffect + setState</code> pattern'ı. <code>useQuery</code>'ye taşı.</td></tr>
+    <tr><td class="id">M-11</td><td><code>FaucetButton.TOKEN_LIST</code> server'daki <code>FAUCET_TOKENS</code>'ın hard-coded duplicate'i — drift risk. Tek kaynaktan import.</td></tr>
+    <tr><td class="id">M-12</td><td><code>vercel.json</code>'da <code>/api/faucet</code> için <code>maxDuration</code> yok — 7 sequential mint + 8s receipt timeout Hobby plan default 10s'i aşabilir.</td></tr>
+  </tbody>
+</table>
+
+<h3>CI / Ops (4)</h3>
+<table>
+  <thead><tr><th style="width:42px">#</th><th>Bulgu</th></tr></thead>
+  <tbody>
+    <tr><td class="id">M-13</td><td>Tüm action'lar tag-pinned (<code>@v4</code>, <code>@v3</code>, <code>@nightly</code>), SHA-pinned değil — supply chain saldırı yüzeyi.</td></tr>
+    <tr><td class="id">M-14</td><td><code>slither.yml</code> <code>continue-on-error:false</code> + <code>fail-on:medium</code> kombinasyonu medium bulunan run'larda SARIF upload'ını bypass edebilir.</td></tr>
+    <tr><td class="id">M-15</td><td><code>slither.yml</code> path filter'ı <code>.gitmodules</code>'u tutmuyor → <code>contracts/lib/</code> submodule bump'ları slither'ı tetiklemez.</td></tr>
+    <tr><td class="id">M-16</td><td><code>sdk.yml</code> + <code>app.yml</code> path filter'ları <code>pnpm-workspace.yaml</code> ve <code>tsconfig*.json</code>'u kapsamıyor.</td></tr>
+  </tbody>
+</table>
+
+<!-- ========== VERIFIED CLEAN ========== -->
+
+<h2>Verified clean</h2>
+
+<div class="callout ok">
+  <p><b>Contracts:</b> Reentrancy/CEI tüm yazma path'lerinde temiz · pause-guardian role separation (<code>unpause</code> sadece Timelock) · oracle staleness + round validation (4 koşul birden) · P3 batch identity (schedule/execute simetrisi) · virtual-shares EIP-4626 inflation defence · JIT/MEV min-hold + LP transfer hook · 4 invariant test · P3.5 non-zero salt (G-3 fix) · Timelock 48h delay lockdown.</p>
+  <p><b>SDK:</b> bigint precision (no premature <code>Number()</code>) · EIP-55 boundary checks · 6/18 decimals handling · tree-shaking (<code>splitting + treeshake + sideEffects</code>) · subscription cleanup (<code>watchContractEvent</code> / <code>watchBlockNumber</code> unsubscribe).</p>
+  <p><b>App:</b> NEXT_PUBLIC_* secret leak yüzeyi temiz · BotID server/client boundary izole · <code>protect</code> path/route eşleşmesi doğru · wagmi <code>ssr: true</code> · Radix Dialog a11y temeli · <code>WC_PROJECT_ID</code> graceful skip.</p>
+  <p><b>CI / Ops:</b> <code>pull_request_target</code> hiçbir workflow'da yok · <code>set +x</code> Vault script'inde · <code>--frozen-lockfile</code> her install'da · oneshot service'lerde restart loop yok · Vault AppRole secret stdin üzerinden geçiyor.</p>
+</div>
+
+<!-- ========== ACTION PLAN ========== -->
+
+<h2>Önerilen sıralama</h2>
+
+<p>Counter-audit'ın önerdiği sıra: <code>H-1</code> → <code>H-4</code> → <code>H-2/H-3</code> → <code>H-6</code> → <code>H-8/H-10</code>. Bunun üzerine CI bulgularını ekleyerek:</p>
+
+<ol class="steps">
+  <li><b>Quick fix (5 dakika)</b> → <code>OPS-A</code>: <code>cd contracts && forge fmt && git commit</code>. Main red 2 gündür, tek satır PR ile temizlenir.</li>
+  <li><b>Phase F1 PR (oracle hardening close-out)</b> → <code>H-1</code> (cache TTL) + <code>H-3</code> (parseContractError oracle case'leri) + <code>H-4</code> (wagmi revert recovery).</li>
+  <li><b>Phase F2 PR (SDK + app API hygiene)</b> → <code>H-2</code> (EarlyWithdrawError export) + <code>H-5</code> (arcTestnet drift) + <code>H-6</code> (faucet TOCTOU) + <code>H-7</code> (Origin check, severity dispute notunu PR description'a ekle).</li>
+  <li><b>Ops PR</b> → <code>H-8</code> (per-tenant systemd env path) + <code>H-10</code> (P3_SECONDARY_* in .env.example).</li>
+  <li><b>CI hardening PR</b> → <code>OPS-B</code> (slither continue-on-error) + <code>M-13/M-15/M-16</code> (action SHA-pin + path filter genişletme).</li>
+  <li>Geriye kalan medium'lar opportunistic; <code>M-9</code> + <code>M-10</code> + <code>M-11</code> küçük tek-PR bundle olabilir.</li>
+</ol>
+
+<div class="callout">
+  <h3>Counter-audit metodolojisi notu</h3>
+  <p>Reviewer agent'lar (4×) <code>grep</code> + statik dosya okuma ile çalıştı; <code>gh api</code> (live CI) ve <code>git ls-files</code> (gerçek tracking) sorgulamadılar. Rev 2'deki üç retract bunun doğrudan sonucu. Önümüzdeki audit pass'lerinde reviewer prompt'larına <i>"claim verifying her CRITICAL/HIGH için en az bir live API veya git query çalıştır"</i> kuralı eklenmeli.</p>
+</div>
+
+<footer class="bottom">
+  <div>generated 2026-05-24 · rev 2 (counter-audit applied) · branch phase3/oracle-hardening</div>
+  <div>docs/audits/2026-05-24-full-sweep-audit.html</div>
+</footer>
+
+</div>
+</body>
+</html>

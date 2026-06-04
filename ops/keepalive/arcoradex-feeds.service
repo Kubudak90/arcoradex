@@ -6,6 +6,11 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+# L-3/L-4 (audit 2026-05-31): explicit start-timeout backstop. The script's own
+# per-fetch (AbortController) and per-tx (waitForTransactionReceipt) timeouts
+# should fire first; this is the systemd-level SIGKILL ceiling so a hung run
+# never lingers past one tick.
+TimeoutStartSec=120
 User=arcora
 Group=arcora
 RuntimeDirectory=arcora

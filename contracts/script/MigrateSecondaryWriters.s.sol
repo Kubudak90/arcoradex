@@ -7,15 +7,24 @@ import {MockChainlinkFeedV2} from "../src/testnet/MockChainlinkFeedV2.sol";
 import {SafeSigHelpers} from "../test/governance/SafeSigHelpers.sol";
 
 /// @notice Migrates the `writer` role of the 7 P3 secondary MockChainlinkFeedV2
-/// feeds from the deployer EOA to the keeper EOA, so the keeper can push prices
-/// to the secondary feeds (enabling healthy two-source aggregation).
+/// feeds from the deployer EOA to a SEPARATE secondary-keeper EOA, so the
+/// keeper can push prices to the secondary feeds (enabling healthy two-source
+/// aggregation).
+///
+/// H-2 (audit 2026-05-31): the secondary feeds MUST use a DISTINCT writer key
+/// (`KEEPER_SECONDARY`) from the primary feeds' writer (`KEEPER_ADDRESS`/
+/// `KEEPER_EOA`). If both legs share one key, a single compromised keeper can
+/// move the OracleAggregator's primary AND secondary inputs in lock-step,
+/// defeating the two-source divergence check. Separate keys mean a single
+/// compromise can move at most one leg, so the divergence guard still trips.
 ///
 /// The Governance Safe owns the secondary feeds; `setWriter` is `onlyOwner`, so
 /// each call is a Safe transaction executed via SafeSigHelpers.
 ///
 /// Required env: DEPLOYER_PRIVATE_KEY (relays the Safe txs, pays gas),
-/// KEEPER_ADDRESS (the new writer), P3_SECONDARY_<SYM> x7 (sourced from
-/// the DeployOraclesP3.s.sol broadcast output — same vars used by P3 governance scripts).
+/// KEEPER_SECONDARY (the new SECONDARY-feed writer — MUST differ from the
+/// primary keeper), P3_SECONDARY_<SYM> x7 (sourced from the
+/// DeployOraclesP3.s.sol broadcast output — same vars used by P3 governance scripts).
 contract MigrateSecondaryWriters is Script {
     using SafeSigHelpers for Safe;
 
@@ -25,8 +34,15 @@ contract MigrateSecondaryWriters is Script {
     function run() external {
         require(block.chainid == 5042002, "Arc testnet only");
         uint256 deployerKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
-        address keeper = vm.envAddress("KEEPER_ADDRESS");
-        require(keeper != address(0), "KEEPER_ADDRESS is zero");
+        // H-2: SEPARATE secondary writer key (distinct from the primary keeper).
+        address keeper = vm.envAddress("KEEPER_SECONDARY");
+        require(keeper != address(0), "KEEPER_SECONDARY is zero");
+        // Guard against accidentally re-using the primary keeper for the
+        // secondary feeds, which would collapse the two-source separation.
+        // KEEPER_ADDRESS (primary) is optional here; only checked if present.
+        try vm.envAddress("KEEPER_ADDRESS") returns (address primaryKeeper) {
+            require(keeper != primaryKeeper, "KEEPER_SECONDARY must differ from KEEPER_ADDRESS (H-2)");
+        } catch {}
 
         address[7] memory secondaries = [
             vm.envAddress("P3_SECONDARY_USDC"),

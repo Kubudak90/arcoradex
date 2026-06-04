@@ -117,12 +117,18 @@ The aggregator never fabricates a price outside the `[min(pAns, sAns), max(pAns,
 
 **Test coverage.** `contracts/test/oracle/P3Aggregator.t.sol` — `test_aggregator_returns_average_within_divergence_cap`, `test_aggregator_reverts_on_sources_diverge`, `test_aggregator_returns_primary_when_secondary_reverts`, `test_aggregator_reverts_when_both_sources_revert`, `test_aggregator_falls_back_when_source_returns_zero_answer`, `test_aggregator_divergence_exactly_at_cap_passes`, `test_aggregator_reverts_when_both_sources_return_zero`, `test_sourceHealth_reports_degraded`. **No fuzz coverage over arbitrary answer pairs** — suggested target for Spearbit.
 
-> **Audit 2026-05-19 correction (C-5):** The `answeredInRound >= roundId` check
-> is inert under the production aggregator + mock-feed configuration: the
-> aggregator returns hard-coded `roundId = 1` / `answeredInRound = 1`, and both
-> `MockChainlinkFeedV2` and `MockChainlinkFeed` return constant `1` as well. The
-> staleness defense for the deployed system reduces to the `updatedAt` check
-> only. Phase D introduces a monotonic `roundId` so this invariant is restored.
+> **Audit 2026-05-19 (C-5), resolved:** Earlier the aggregator returned a
+> hard-coded `roundId = 1` / `answeredInRound = 1`, making the
+> `answeredInRound >= roundId` round-completeness check inert. This has been
+> fixed. The aggregator now returns a **real, monotonic** roundId: in the
+> two-source-healthy path it forwards `max(pR, sR)` for both `roundId` and
+> `answeredInRound` (so the Pool's `roundOk` check is meaningful), and in
+> single-source (degraded) mode it returns `roundId = answeredInRound = 0` as an
+> explicit not-fresh signal (INV-7 single-source case; see also the `roundId ==
+> 0` convention on `IChainlinkAggregator.latestRoundData`). `MockChainlinkFeedV2`
+> likewise increments its `roundId` on each `setAnswer`. The deployed system's
+> staleness defense is therefore no longer reduced to the `updatedAt` check
+> alone.
 
 ---
 

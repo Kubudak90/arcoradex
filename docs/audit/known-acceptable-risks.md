@@ -208,7 +208,10 @@ part of the P2 governance spec.
 - The fee-collector role is not separated from the Governance Safe in v1 (deferred
   per roadmap §4 out-of-scope note). A compromised governance Safe could therefore
   extract accrued protocol fees in addition to the above. This is a known accepted
-  risk (see R7 below).
+  risk (see R7 below). After the I-3 fix, `withdrawProtocolFees` is gated by
+  `whenNotPaused`, so the owner cannot sweep protocol fees while the pool is paused —
+  admin fee extraction is frozen exactly when users are (symmetric with
+  `deposit`/`withdraw`/`swap`).
 
 **No-Timelock asymmetry (added 2026-05-19, finding C-10):** `OracleAggregator`
 and `CumulativeDeviationGuard` are owned by the Governance Safe **directly,

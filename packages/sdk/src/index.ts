@@ -31,6 +31,9 @@ export {
   TokenNotActiveError,
   DeadlinePassedError,
   EarlyWithdrawError,
+  SameTokenError,
+  ZeroAmountError,
+  UntrustedSpenderError,
   parseContractError,
 } from "./errors";
 export { quoteSwap } from "./actions/quoteSwap";
@@ -50,7 +53,8 @@ export type { WithdrawArgs } from "./actions/withdraw";
 export { ensureAllowance } from "./allowance";
 export type { EnsureAllowanceResult } from "./allowance";
 export { subscribeSwaps } from "./subscriptions/subscribeSwaps";
-export type { Unsubscribe } from "./subscriptions/subscribeSwaps";
+export type { Unsubscribe, SubscribeOptions } from "./subscriptions/subscribeSwaps";
 export { subscribeDeposited } from "./subscriptions/subscribeDeposited";
 export { subscribeWithdrew } from "./subscriptions/subscribeWithdrew";
 export { subscribePoolStats } from "./subscriptions/subscribePoolStats";
+export type { SubscribePoolStatsOptions } from "./subscriptions/subscribePoolStats";

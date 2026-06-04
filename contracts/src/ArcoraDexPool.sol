@@ -98,10 +98,15 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
     ///      All oracle failure modes (bad round, bad timestamp, negative answer,
     ///      staleness) fold into isFresh=false so callers can use the cache
     ///      rather than reverting — preserving pool availability (spec §3.4).
-    function _readOracle(address token) internal view returns (uint256 price1e18, uint8 tokenDecimals, bool isFresh) {
-        // Justification [calls-loop]: REGISTRY.tokenInfo is called inside the NAV loop; the token set is small and owner-permissioned (bounded), so the gas cost is acceptable and there is no reentrancy risk from a view-only registry call.
-        // slither-disable-next-line calls-loop
-        IArcoraDexRegistry.TokenInfo memory info = REGISTRY.tokenInfo(token);
+    /// @dev G-1 (audit): `info` is threaded in by the caller so a token's registry
+    ///      config (`REGISTRY.tokenInfo`) is read exactly ONCE per call chain instead
+    ///      of being re-fetched in every internal pricing helper. The caller is
+    ///      responsible for fetching `info = REGISTRY.tokenInfo(token)` for `token`.
+    function _readOracle(address token, IArcoraDexRegistry.TokenInfo memory info)
+        internal
+        view
+        returns (uint256 price1e18, uint8 tokenDecimals, bool isFresh)
+    {
         if (!info.isActive) revert TokenNotActive(token);
         tokenDecimals = info.decimals;
 
@@ -120,6 +125,7 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
             isFresh = roundOk && timestampOk && ageOk && answerOk;
             if (isFresh) {
                 // Justification [calls-loop]: decimals() call is inside the NAV loop; the oracle count is bounded by the small permissioned token set, and there is no reentrancy risk from this view call.
+                // G-3 (deferred): oracle.decimals() is read once per _readOracle; the cross-path repeat (same token priced in both the NAV loop and the guard path within one tx) is left for a future PR — would require an oracleDecimals field in the stored TokenInfo struct (storage/ABI/deploy coupling, out of scope here).
                 // slither-disable-next-line calls-loop
                 try info.usdOracle.decimals() returns (uint8 oracleDec) {
                     if (oracleDec == 18) price1e18 = uint256(answer);
@@ -142,9 +148,12 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
     ///      the existing cache (by more than maxOracleDeviationBps) is treated as
     ///      not-fresh and falls back to the cache, preventing a compromised oracle
     ///      from poisoning the cache within a single block.
-    function _readUsdPrice1e18Mut(address token) internal returns (uint256 price1e18, uint8 tokenDecimals) {
+    function _readUsdPrice1e18Mut(address token, IArcoraDexRegistry.TokenInfo memory info)
+        internal
+        returns (uint256 price1e18, uint8 tokenDecimals)
+    {
         bool isFresh;
-        (price1e18, tokenDecimals, isFresh) = _readOracle(token);
+        (price1e18, tokenDecimals, isFresh) = _readOracle(token, info);
 
         uint256 cached = lastValidPrice[token];
 
@@ -153,10 +162,7 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         if (isFresh && cached != 0) {
             // Cache-deviation guard: a fresh oracle reading that diverges too far
             // from the previous cache cannot poison the cache. Fall through to
-            // the cached value below.
-            // Justification [calls-loop]: REGISTRY.tokenInfo called here when _readUsdPrice1e18Mut runs inside the NAV loop; the permissioned, small-count token set bounds the gas and there is no reentrancy risk from a view-only registry call.
-            // slither-disable-next-line calls-loop
-            IArcoraDexRegistry.TokenInfo memory info = REGISTRY.tokenInfo(token);
+            // the cached value below. (G-1: `info` is threaded in — no re-fetch.)
             // Justification [timestamp]: see above — diff arithmetic on oracle-derived values that flow from block.timestamp staleness check.
             // slither-disable-next-line timestamp
             uint256 diff = price1e18 > cached ? price1e18 - cached : cached - price1e18;
@@ -200,18 +206,20 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
 
     /// @dev View-only equivalent: returns cached fallback price without updating it.
     ///      Applies the same cache-deviation guard as _readUsdPrice1e18Mut.
-    function _readUsdPrice1e18View(address token) internal view returns (uint256 price1e18, uint8 tokenDecimals) {
+    function _readUsdPrice1e18View(address token, IArcoraDexRegistry.TokenInfo memory info)
+        internal
+        view
+        returns (uint256 price1e18, uint8 tokenDecimals)
+    {
         bool isFresh;
-        (price1e18, tokenDecimals, isFresh) = _readOracle(token);
+        (price1e18, tokenDecimals, isFresh) = _readOracle(token, info);
 
         uint256 cached = lastValidPrice[token];
 
         // Justification [timestamp]: isFresh is derived from block.timestamp in _readOracle for Chainlink staleness detection; miner timestamp manipulation is negligible relative to the configured maxStaleSeconds window.
         // slither-disable-next-line timestamp
         if (isFresh && cached != 0) {
-            // Justification [calls-loop]: REGISTRY.tokenInfo is called here when this view function is invoked inside the NAV loop; the token set is small and owner-permissioned so gas cost is bounded and no reentrancy risk exists from a view-only call.
-            // slither-disable-next-line calls-loop
-            IArcoraDexRegistry.TokenInfo memory info = REGISTRY.tokenInfo(token);
+            // G-1: `info` is threaded in by the caller — no REGISTRY.tokenInfo re-fetch.
             // Justification [timestamp]: see above — diff arithmetic on oracle-derived values that flow from block.timestamp staleness check.
             // slither-disable-next-line timestamp
             uint256 diff = price1e18 > cached ? price1e18 - cached : cached - price1e18;
@@ -261,14 +269,19 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
     /// over-revert property for fresh-but-cache-rejected oracle jumps.
     // Justification [cyclomatic-complexity]: the high complexity (13) reflects the two-tier oracle defence design — fresh/stale oracle branch, raw-vs-lastAccepted ratchet, cache-deviation guard, and stale-branch fallback check all in a single read to avoid multiple SLOADs. Refactoring into sub-functions would require duplicating storage reads; the complexity is inherent to the spec (§3.4) and is documented in the function-level comment above.
     // slither-disable-next-line cyclomatic-complexity
-    function _readUsdPrice1e18WithGuard(address token) internal view returns (uint256 price1e18, uint8 tokenDecimals) {
-        IArcoraDexRegistry.TokenInfo memory info = REGISTRY.tokenInfo(token);
+    function _readUsdPrice1e18WithGuard(address token, IArcoraDexRegistry.TokenInfo memory info)
+        internal
+        view
+        returns (uint256 price1e18, uint8 tokenDecimals)
+    {
+        // G-1: `info` is threaded in by the caller — REGISTRY.tokenInfo is read once
+        // per call chain, not re-fetched here.
         uint256 prev = lastAcceptedPrice[token];
 
         // Single oracle read.
         uint256 rawPrice1e18;
         bool isFresh;
-        (rawPrice1e18, tokenDecimals, isFresh) = _readOracle(token);
+        (rawPrice1e18, tokenDecimals, isFresh) = _readOracle(token, info);
 
         // Fresh-branch: check raw oracle against lastAcceptedPrice FIRST. This
         // is the STRICTER path — even if the cache-deviation guard below would
@@ -332,11 +345,22 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         }
     }
 
-    /// @dev Stateful: reads oracle, runs PriceGuard against last accepted, updates last accepted.
+    /// @dev G-1: address-only overload — fetches `tokenInfo` ONCE and delegates to
+    ///      the threaded variant. Used by `swap`, where materialising the TokenInfo
+    ///      struct directly in the caller's frame would exceed the EVM stack limit
+    ///      (no via-ir). The single fetch still satisfies G-1's intra-chain dedupe.
     function _readAndGuardPrice(address token) internal returns (uint256 price1e18, uint8 tokenDecimals) {
-        IArcoraDexRegistry.TokenInfo memory info = REGISTRY.tokenInfo(token);
+        return _readAndGuardPrice(token, REGISTRY.tokenInfo(token));
+    }
+
+    /// @dev Stateful: reads oracle, runs PriceGuard against last accepted, updates last accepted.
+    function _readAndGuardPrice(address token, IArcoraDexRegistry.TokenInfo memory info)
+        internal
+        returns (uint256 price1e18, uint8 tokenDecimals)
+    {
+        // G-1: `info` is threaded in by the caller — single REGISTRY.tokenInfo read.
         uint16 maxDevBps;
-        (price1e18, tokenDecimals) = _readUsdPrice1e18Mut(token);
+        (price1e18, tokenDecimals) = _readUsdPrice1e18Mut(token, info);
         maxDevBps = info.maxOracleDeviationBps;
         uint256 prev = lastAcceptedPrice[token];
         if (prev != 0) {
@@ -355,30 +379,50 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
     /// @dev Stateful: refreshes cache on every fresh oracle read.
     function _totalReservesUSDMut() internal returns (uint256 navE18) {
         uint256 n = REGISTRY.tokensLength();
-        for (uint256 i = 0; i < n; i++) {
-            // Justification [calls-loop]: REGISTRY.tokens and isActive are called in the NAV loop; token count is small and permissioned so gas is bounded, and no reentrancy is possible from view-only registry calls.
+        for (uint256 i; i < n;) {
+            // Justification [calls-loop]: REGISTRY.tokens and tokenInfo are called in the NAV loop; token count is small and permissioned so gas is bounded, and no reentrancy is possible from view-only registry calls.
             // slither-disable-next-line calls-loop
             address t = REGISTRY.tokens(i);
-            // Justification [calls-loop]: see above — REGISTRY.isActive is a view-only call inside the same bounded NAV loop.
+            // G-2: fetch tokenInfo ONCE per iteration and branch on info.isActive
+            // locally — `tokenInfo` already carries `isActive`, so the separate
+            // REGISTRY.isActive(t) call is eliminated. Inactive tokens are skipped
+            // in the NAV loop (semantics preserved). The threaded `info` is reused
+            // by the price reader so its config is not re-fetched.
+            // Justification [calls-loop]: see above — REGISTRY.tokenInfo is a view-only call inside the same bounded NAV loop.
             // slither-disable-next-line calls-loop
-            if (!REGISTRY.isActive(t)) continue;
-            (uint256 p, uint8 d) = _readUsdPrice1e18Mut(t);
-            navE18 += (reserves[t] * p) / (10 ** d);
+            IArcoraDexRegistry.TokenInfo memory info = REGISTRY.tokenInfo(t);
+            if (info.isActive) {
+                (uint256 p, uint8 d) = _readUsdPrice1e18Mut(t, info);
+                navE18 += (reserves[t] * p) / (10 ** d);
+            }
+            // G-4: counter increment cannot overflow (bounded by tokensLength).
+            unchecked {
+                ++i;
+            }
         }
     }
 
     /// @dev View shim used by external view functions and external quote*() callers.
     function totalReservesUSD() public view override returns (uint256 navE18) {
         uint256 n = REGISTRY.tokensLength();
-        for (uint256 i = 0; i < n; i++) {
-            // Justification [calls-loop]: REGISTRY.tokens and isActive are called in the NAV loop; token count is small and permissioned so gas is bounded, and no reentrancy is possible from view-only registry calls.
+        for (uint256 i; i < n;) {
+            // Justification [calls-loop]: REGISTRY.tokens and tokenInfo are called in the NAV loop; token count is small and permissioned so gas is bounded, and no reentrancy is possible from view-only registry calls.
             // slither-disable-next-line calls-loop
             address t = REGISTRY.tokens(i);
-            // Justification [calls-loop]: see above — REGISTRY.isActive is a view-only call inside the same bounded NAV loop.
+            // G-2: fetch tokenInfo ONCE per iteration and branch on info.isActive
+            // locally — eliminates the separate REGISTRY.isActive(t) call. Inactive
+            // tokens are skipped (semantics preserved); the threaded `info` is reused.
+            // Justification [calls-loop]: see above — REGISTRY.tokenInfo is a view-only call inside the same bounded NAV loop.
             // slither-disable-next-line calls-loop
-            if (!REGISTRY.isActive(t)) continue;
-            (uint256 p, uint8 d) = _readUsdPrice1e18View(t);
-            navE18 += (reserves[t] * p) / (10 ** d);
+            IArcoraDexRegistry.TokenInfo memory info = REGISTRY.tokenInfo(t);
+            if (info.isActive) {
+                (uint256 p, uint8 d) = _readUsdPrice1e18View(t, info);
+                navE18 += (reserves[t] * p) / (10 ** d);
+            }
+            // G-4: counter increment cannot overflow (bounded by tokensLength).
+            unchecked {
+                ++i;
+            }
         }
     }
 
@@ -392,10 +436,29 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         returns (uint256 lpMinted)
     {
         if (amount == 0) revert ZeroAmount();
+        // G-1: the address-only overload fetches this token's registry config ONCE
+        // and threads it through the price stack (avoids holding the TokenInfo
+        // struct in deposit's frame, which would exceed the EVM stack limit).
         (uint256 priceIn, uint8 dIn) = _readAndGuardPrice(token);
+
+        // Audit L-10 (2026-06-03): credit the MEASURED balance delta, not the
+        // requested `amount`. A fee-on-transfer / deflationary / rebasing token
+        // delivers less than `amount`; crediting `amount` over-states reserves and
+        // breaks the `balance == reserves + fees` invariant. We snapshot
+        // balanceOf(this) around the inbound transfer and thread the `received`
+        // amount through the USD/LP-mint math so accounting stays consistent.
+        // Note: navBefore (read below for the proportional branch) is computed
+        // BEFORE we credit reserves[token], so the depositor's own funds — already
+        // sitting in the contract balance after this transfer — do not inflate
+        // navBefore (NAV is derived from reserves[], not balanceOf).
+        uint256 balBefore = IERC20(token).balanceOf(address(this));
+        IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
+        uint256 received = IERC20(token).balanceOf(address(this)) - balBefore;
+        if (received == 0) revert ZeroAmount();
+
         // Justification [divide-before-multiply]: usdIn intentionally truncates to a USD-normalised integer before the LP ratio multiplication; reordering would overflow uint256 for large token amounts and large prices.
         // slither-disable-next-line divide-before-multiply
-        uint256 usdIn = (amount * priceIn) / (10 ** dIn);
+        uint256 usdIn = (received * priceIn) / (10 ** dIn);
 
         uint256 supply = LP.totalSupply();
         uint256 navBefore;
@@ -418,8 +481,7 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         // slither-disable-next-line timestamp
         if (lpMinted < minLpOut) revert InsufficientLpOut(lpMinted, minLpOut);
 
-        IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
-        reserves[token] += amount;
+        reserves[token] += received;
 
         if (supply == 0) {
             LP.mint(DEAD_ADDRESS, MINIMUM_LIQUIDITY);
@@ -429,7 +491,7 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         // slither-disable-next-line reentrancy-benign
         lastMintAt[msg.sender] = block.timestamp;
 
-        emit Deposited(msg.sender, token, amount, lpMinted, navBefore, navBefore + usdIn);
+        emit Deposited(msg.sender, token, received, lpMinted, navBefore, navBefore + usdIn);
     }
 
     function withdraw(address tokenOut, uint256 lpAmount, uint256 minTokenOut, uint256 deadline)
@@ -454,6 +516,8 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         uint256 protFeeAmt;
         uint256 navAfter;
         {
+            // G-1: address-only overload — single registry-config read for the
+            // withdrawn token, threaded down the chain.
             (uint256 priceOut, uint8 dOut) = _readAndGuardPrice(tokenOut);
             // Justification [divide-before-multiply]: usdNet is the fee-discounted USD amount (one BPS division); amountOut then converts back to token units by multiplying by scale — two independent fixed-point normalisations that must remain sequential.
             // slither-disable-next-line divide-before-multiply
@@ -504,13 +568,30 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         if (amountIn == 0) revert ZeroAmount();
         if (recipient == address(0)) revert ZeroAddress();
 
+        // Audit L-10 (2026-06-03): pull the input first and credit the MEASURED
+        // balance delta, not the requested `amountIn`. A fee-on-transfer /
+        // deflationary token delivers less than `amountIn`; the output, fees and
+        // reserves credit must all be derived from `receivedIn` so the
+        // `balance == reserves + fees` invariant holds for tokenIn. The inbound
+        // transfer is hoisted above the output math (the nonReentrant guard makes
+        // this pull-then-compute ordering safe).
+        uint256 inBalBefore = IERC20(tokenIn).balanceOf(address(this));
+        IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), amountIn);
+        uint256 receivedIn = IERC20(tokenIn).balanceOf(address(this)) - inBalBefore;
+        if (receivedIn == 0) revert ZeroAmount();
+
         uint256 protFee;
         uint256 lpFeeUsd1e18;
         {
+            // G-1: the address-only overload fetches `tokenInfo` ONCE per token and
+            // threads it down the chain. Going through the overload (instead of
+            // materialising the TokenInfo struct in swap's own frame) keeps swap
+            // under the EVM stack limit without via-ir, while still collapsing the
+            // previously-redundant per-chain registry reads.
             (uint256 pIn, uint8 dIn) = _readAndGuardPrice(tokenIn);
             (uint256 pOut, uint8 dOut) = _readAndGuardPrice(tokenOut);
 
-            uint256 gross = _grossOut(amountIn, pIn, pOut, dIn, dOut);
+            uint256 gross = _grossOut(receivedIn, pIn, pOut, dIn, dOut);
             // Justification [divide-before-multiply]: fee is the BPS-discounted portion of gross (one division); protFee then takes a further BPS share of fee — two sequential fee-tier extractions where intermediate truncation is the intended rounding behaviour.
             // slither-disable-next-line divide-before-multiply
             uint256 fee = (gross * swapFeeBps) / BPS;
@@ -529,15 +610,14 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         // slither-disable-next-line timestamp
         if (r < amountOut + protFee) revert InsufficientLiquidity(tokenOut, amountOut + protFee, r);
 
-        // CEI
-        IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), amountIn);
-        reserves[tokenIn] = reserves[tokenIn] + amountIn;
+        // CEI: input already pulled above (L-10); credit the measured delta.
+        reserves[tokenIn] = reserves[tokenIn] + receivedIn;
         reserves[tokenOut] = r - (amountOut + protFee);
         protocolFeesAccrued[tokenOut] += protFee;
 
         IERC20(tokenOut).safeTransfer(recipient, amountOut);
 
-        emit Swapped(msg.sender, tokenIn, tokenOut, amountIn, amountOut, lpFeeUsd1e18, protFee, recipient);
+        emit Swapped(msg.sender, tokenIn, tokenOut, receivedIn, amountOut, lpFeeUsd1e18, protFee, recipient);
     }
 
     // ── Quote views ──────────────────────────────────────────────────
@@ -560,15 +640,20 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
     {
         if (tokenIn == tokenOut) revert SameToken(tokenIn);
         if (amountIn == 0) revert ZeroAmount();
-        (uint256 pIn, uint8 dIn) = _readUsdPrice1e18WithGuard(tokenIn);
-        (uint256 pOut, uint8 dOut) = _readUsdPrice1e18WithGuard(tokenOut);
+        // G-1: one registry-config read per token, threaded into the guard reader.
+        IArcoraDexRegistry.TokenInfo memory infoIn = REGISTRY.tokenInfo(tokenIn);
+        IArcoraDexRegistry.TokenInfo memory infoOut = REGISTRY.tokenInfo(tokenOut);
+        (uint256 pIn, uint8 dIn) = _readUsdPrice1e18WithGuard(tokenIn, infoIn);
+        (uint256 pOut, uint8 dOut) = _readUsdPrice1e18WithGuard(tokenOut, infoOut);
         uint256 gross = _grossOut(amountIn, pIn, pOut, dIn, dOut);
         amountOut = gross - (gross * swapFeeBps) / BPS;
     }
 
     function quoteDeposit(address token, uint256 amount) external view override returns (uint256 lpOut) {
         if (amount == 0) revert ZeroAmount();
-        (uint256 pIn, uint8 dIn) = _readUsdPrice1e18WithGuard(token);
+        // G-1: single registry-config read, threaded into the guard reader.
+        IArcoraDexRegistry.TokenInfo memory info = REGISTRY.tokenInfo(token);
+        (uint256 pIn, uint8 dIn) = _readUsdPrice1e18WithGuard(token, info);
         // Justification [divide-before-multiply]: usdIn is the USD-normalised token amount (one division); subsequent LP ratio multiplication is a separate fixed-point step — mirrors the live deposit path exactly and cannot be merged without overflow.
         // slither-disable-next-line divide-before-multiply
         uint256 usdIn = (amount * pIn) / (10 ** dIn);
@@ -595,7 +680,9 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         returns (uint256 amountOut, uint256 protocolFee)
     {
         if (lpAmount == 0) revert ZeroAmount();
-        (uint256 pOut, uint8 dOut) = _readUsdPrice1e18WithGuard(tokenOut);
+        // G-1: single registry-config read, threaded into the guard reader.
+        IArcoraDexRegistry.TokenInfo memory info = REGISTRY.tokenInfo(tokenOut);
+        (uint256 pOut, uint8 dOut) = _readUsdPrice1e18WithGuard(tokenOut, info);
         {
             uint256 supply = LP.totalSupply();
             uint256 navBefore = totalReservesUSD();
@@ -628,7 +715,13 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         protocolFeeShareBps = newBps;
     }
 
-    function withdrawProtocolFees(address token, uint256 amount, address to) external override onlyOwner nonReentrant {
+    function withdrawProtocolFees(address token, uint256 amount, address to)
+        external
+        override
+        onlyOwner
+        whenNotPaused
+        nonReentrant
+    {
         if (amount == 0) revert ZeroAmount();
         if (to == address(0)) revert ZeroAddress();
         uint256 acc = protocolFeesAccrued[token];
@@ -653,19 +746,23 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         emit Unpaused(msg.sender);
     }
 
-    /// @notice Hook invoked by ArcoraDexLP on every transfer to propagate
-    /// the deposit-side min-hold lock. The recipient inherits the stricter
-    /// of (their existing lock, the sender's lock) — preventing the
-    /// deposit→transfer→withdraw JIT bypass.
-    /// @dev Only the LP contract may call this.
-    function notifyLPTransfer(address from, address to) external override {
+    /// @notice Hook invoked by ArcoraDexLP on non-zero wallet-to-wallet transfers
+    /// to enforce the deposit-side min-hold lock (H-1 audit 2026-05-31).
+    /// @dev Sender-gate: the transfer reverts unless the SENDER's own min-hold has
+    /// elapsed. The recipient's `lastMintAt` is intentionally NOT modified. This
+    /// closes the deposit→transfer→withdraw JIT bypass (INV-9) — a holder cannot
+    /// move LP until their 1h hold is up, by which point they could have withdrawn
+    /// themselves — while preventing the pre-fix recipient-clock bump from being
+    /// weaponised into a withdrawal denial-of-service against an arbitrary victim.
+    /// Only the LP contract may call this.
+    /// @dev `to` is unnamed: the recipient's clock is intentionally never read or
+    /// written under the sender-gate model (the parameter is kept for the interface).
+    function notifyLPTransfer(address from, address) external override {
         if (msg.sender != address(LP)) revert NotLP();
-        uint256 fromLock = lastMintAt[from];
-        // Justification [timestamp]: lastMintAt stores block.timestamp from the deposit; comparing it here to propagate the stricter hold lock to LP transfer recipients is intentional and miner manipulation (~15 s) cannot bypass a 3600-second hold window.
+        uint256 unlockAt = lastMintAt[from] + MIN_HOLD_SECONDS;
+        // Justification [timestamp]: lastMintAt stores block.timestamp from the sender's deposit; gating the transfer on the sender's 1-hour hold is intentional and miner manipulation (~15 s) cannot bypass a 3600-second hold window.
         // slither-disable-next-line timestamp
-        if (fromLock > lastMintAt[to]) {
-            lastMintAt[to] = fromLock;
-        }
+        if (block.timestamp < unlockAt) revert EarlyTransfer(unlockAt, block.timestamp);
     }
 
     function setPauseGuardian(address newGuardian) external override onlyOwner {
@@ -686,13 +783,47 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         emit MaxCacheAgeSet(token, maxAgeSeconds);
     }
 
+    /// @notice Clear `token`'s stale price caches so it cannot trade against an
+    /// ancient cached price (I-2). Owner-only (the governance Timelock).
+    /// @dev Zeroes all three cache mappings: `lastAcceptedPrice` (the deviation
+    /// ratchet baseline), `lastValidPrice` (the cached fallback price) and
+    /// `lastValidPriceAt` (its write timestamp). Intended to be called in the SAME
+    /// Timelock batch as `Registry.reactivateToken(token)` — or after re-listing a
+    /// previously-removed token — because reactivation/re-listing alone leaves the
+    /// stale cache in place.
+    ///
+    /// Consequence: after the reset, the next priced op for `token` takes the
+    /// fresh-oracle path (cache==0 ⇒ no fallback, no cache-deviation guard). If the
+    /// oracle is not currently fresh, that op reverts `NoValidPrice(token)` until
+    /// the keeper pushes a fresh reading (or the owner calls `syncAcceptedPrice`).
+    /// This fail-closed behaviour is intended: trading halts rather than resuming
+    /// on a stale price.
+    function resetPriceCache(address token) external override onlyOwner {
+        lastAcceptedPrice[token] = 0;
+        lastValidPrice[token] = 0;
+        lastValidPriceAt[token] = 0;
+        emit PriceCacheReset(token);
+    }
+
+    /// @notice Owner-only escape hatch that re-baselines `token`'s deviation
+    /// ratchet (`lastAcceptedPrice`) to the current oracle price, bypassing the
+    /// per-read deviation guard so the operator can force-accept an out-of-band
+    /// price after a large legitimate move.
+    /// @dev I-6: the effect on the price cache depends on oracle freshness — it
+    /// is NOT a symmetric "reset both" operation:
+    /// - Fresh oracle branch: writes the fresh price into BOTH the cache
+    ///   (`lastValidPrice` + `lastValidPriceAt = block.timestamp`) and the
+    ///   `lastAcceptedPrice` baseline. Only here is the cache age reset.
+    /// - Stale oracle branch: re-baselines `lastAcceptedPrice` ONLY, seeded from
+    ///   the EXISTING `lastValidPrice` cache (reverts `NoValidPrice` if the cache
+    ///   was never seeded). The cache value and its age (`lastValidPriceAt`) are
+    ///   left untouched — this call does NOT refresh a stale cache.
     function syncAcceptedPrice(address token) external override onlyOwner returns (uint256 price1e18) {
-        // Owner-only escape hatch: bypasses the cache-deviation guard so the operator
-        // can force-accept an out-of-band price after a large legitimate move and
-        // simultaneously reset both the cache and the lastAcceptedPrice baseline.
         uint8 tokenDecimals;
         bool isFresh;
-        (price1e18, tokenDecimals, isFresh) = _readOracle(token);
+        // G-1: single registry-config read for this token.
+        IArcoraDexRegistry.TokenInfo memory info = REGISTRY.tokenInfo(token);
+        (price1e18, tokenDecimals, isFresh) = _readOracle(token, info);
         // Justification [timestamp]: isFresh is derived from block.timestamp oracle staleness in _readOracle; miner manipulation (~15 s) cannot meaningfully affect the owner-only syncAcceptedPrice escape hatch.
         // slither-disable-next-line timestamp
         if (!isFresh) {

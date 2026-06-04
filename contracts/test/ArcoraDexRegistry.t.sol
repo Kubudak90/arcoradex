@@ -107,6 +107,39 @@ contract ArcoraDexRegistryTest is Test {
         reg.setOracle(address(usdc), IChainlinkAggregator(address(feed)));
     }
 
+    // ── I-7: setOracle defense-in-depth decimals guard ─────────────────
+    /// @dev The Pool reads `oracle.decimals()` at runtime to scale answers to
+    /// 1e18. A feed reporting > 18 decimals is out of the supported domain and
+    /// would mis-scale prices, so `setOracle` rejects it up front. Repointing the
+    /// feed is an instant operation (the next priced op reads the new feed), so
+    /// this guard is the last line of defense against a misconfigured repoint.
+    function test_i7_setOracle_rejectsOver18Decimals() public {
+        vm.prank(owner);
+        reg.listToken(address(usdc), 6, IChainlinkAggregator(address(feed)), 50, 3600);
+
+        // A feed that reports 19 decimals — out of the supported [1, 18] domain.
+        MockChainlinkFeed badFeed = new MockChainlinkFeed(19, int256(1e8));
+
+        vm.prank(owner);
+        vm.expectRevert(abi.encodeWithSelector(IArcoraDexRegistry.OracleDecimalsTooHigh.selector, uint8(19)));
+        reg.setOracle(address(usdc), IChainlinkAggregator(address(badFeed)));
+
+        // The original feed is unchanged after the rejected repoint.
+        assertEq(address(reg.tokenInfo(address(usdc)).usdOracle), address(feed));
+    }
+
+    /// @dev Boundary: a feed reporting exactly 18 decimals is accepted.
+    function test_i7_setOracle_accepts18Decimals() public {
+        vm.prank(owner);
+        reg.listToken(address(usdc), 6, IChainlinkAggregator(address(feed)), 50, 3600);
+
+        MockChainlinkFeed feed18 = new MockChainlinkFeed(18, int256(1e18));
+        vm.prank(owner);
+        reg.setOracle(address(usdc), IChainlinkAggregator(address(feed18)));
+
+        assertEq(address(reg.tokenInfo(address(usdc)).usdOracle), address(feed18));
+    }
+
     // ── setDeviation ───────────────────────────────────────────────
     function test_setDeviation_updates() public {
         vm.prank(owner);
@@ -132,6 +165,19 @@ contract ArcoraDexRegistryTest is Test {
         vm.prank(owner);
         vm.expectRevert(abi.encodeWithSelector(IArcoraDexRegistry.TokenNotListed.selector, address(usdc)));
         reg.deactivateToken(address(usdc));
+    }
+
+    // ── I-1: deactivate reserve-guard ───────────────────────────────
+    /// @dev Back-compat: on a bare registry with no `setPool`, deactivate must
+    /// still work even if some (unknown) pool holds reserves — the guard is keyed
+    /// on the registry's own `pool` reference, which is unset here.
+    function test_i1_deactivate_allowedWhenPoolUnset() public {
+        vm.startPrank(owner);
+        reg.listToken(address(usdc), 6, IChainlinkAggregator(address(feed)), 50, 3600);
+        assertEq(reg.pool(), address(0), "pool must be unset in the bare fixture");
+        reg.deactivateToken(address(usdc));
+        vm.stopPrank();
+        assertFalse(reg.isActive(address(usdc)));
     }
 
     // ── ownership transfer (Ownable2Step) ──────────────────────────
@@ -175,5 +221,62 @@ contract ArcoraDexRegistryTest is Test {
         vm.prank(owner);
         reg.setMaxStaleSeconds(address(usdc), 7200);
         assertEq(reg.tokenInfo(address(usdc)).maxStaleSeconds, 7200);
+    }
+
+    // ── L-9: MAX_TOKENS cap + removeToken (bound NAV loop) ─────────────
+    /// @dev Lists `MAX_TOKENS` distinct 6-decimal tokens, each with its own $1.00
+    /// feed, then asserts the next listToken reverts MaxTokensReached.
+    function test_l9_listToken_revertsAtMaxTokens() public {
+        uint256 cap = reg.MAX_TOKENS();
+        vm.startPrank(owner);
+        for (uint256 i = 0; i < cap; i++) {
+            MintableERC20 tok = new MintableERC20("Tok", "TOK", 6, owner);
+            MockChainlinkFeed f = new MockChainlinkFeed(8, int256(1e8));
+            reg.listToken(address(tok), 6, IChainlinkAggregator(address(f)), 50, 3600);
+        }
+        assertEq(reg.tokensLength(), cap);
+
+        // The (cap + 1)-th listing must revert.
+        MintableERC20 overflowTok = new MintableERC20("Over", "OVR", 6, owner);
+        MockChainlinkFeed overflowFeed = new MockChainlinkFeed(8, int256(1e8));
+        vm.expectRevert(IArcoraDexRegistry.MaxTokensReached.selector);
+        reg.listToken(address(overflowTok), 6, IChainlinkAggregator(address(overflowFeed)), 50, 3600);
+        vm.stopPrank();
+    }
+
+    function test_l9_removeToken_dropsFromList() public {
+        // List a second token so removal of the first is observable as a swap-pop.
+        MintableERC20 dai = new MintableERC20("Dai", "DAI", 18, owner);
+        MockChainlinkFeed fDai = new MockChainlinkFeed(8, int256(1e8));
+
+        vm.startPrank(owner);
+        reg.listToken(address(usdc), 6, IChainlinkAggregator(address(feed)), 50, 3600);
+        reg.listToken(address(dai), 18, IChainlinkAggregator(address(fDai)), 50, 3600);
+        assertEq(reg.tokensLength(), 2);
+
+        // Must be deactivated before removal (I-1 guards that reserves are drained).
+        reg.deactivateToken(address(usdc));
+        reg.removeToken(address(usdc));
+        vm.stopPrank();
+
+        // List shrank and usdc is gone; dai survived (moved into the freed slot).
+        assertEq(reg.tokensLength(), 1);
+        assertEq(reg.tokens(0), address(dai));
+
+        // _info cleared: oracle reset to zero, so it reads as not-listed.
+        IArcoraDexRegistry.TokenInfo memory info = reg.tokenInfo(address(usdc));
+        assertEq(address(info.usdOracle), address(0));
+        assertEq(info.decimals, 0);
+        assertFalse(info.isActive);
+        assertFalse(reg.isActive(address(usdc)));
+    }
+
+    function test_l9_removeToken_revertsIfActive() public {
+        vm.startPrank(owner);
+        reg.listToken(address(usdc), 6, IChainlinkAggregator(address(feed)), 50, 3600);
+        // Token is active → removal must revert.
+        vm.expectRevert(abi.encodeWithSelector(IArcoraDexRegistry.TokenStillActive.selector, address(usdc)));
+        reg.removeToken(address(usdc));
+        vm.stopPrank();
     }
 }
