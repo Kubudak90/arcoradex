@@ -80,13 +80,13 @@ contract MigrateFeedsToV2 is Script {
             // on-chain [0.90, 1.10], jump 300 bps
             return (one * 90 / 100, one * 110 / 100, 300, 0);
         } else if (token == EURC) {
-            // keeper [1.00,1.30] devBps 150 -> on-chain [0.90, 1.40], jump 500 bps
+            // keeper [1.02,1.20] devBps 150 -> on-chain [0.90, 1.40], jump 500 bps
             return (one * 90 / 100, one * 140 / 100, 500, 0);
         } else if (token == TRYC) {
-            // keeper [0.01,0.10] devBps 150 -> on-chain [0.005, 0.15], jump 500 bps
+            // keeper [0.020,0.040] devBps 150 -> on-chain [0.005, 0.15], jump 500 bps
             return (one * 5 / 1000, one * 15 / 100, 500, 0);
         } else if (token == BRLC) {
-            // keeper [0.10,0.30] devBps 150 -> on-chain [0.05, 0.40], jump 500 bps
+            // keeper [0.15,0.22] devBps 150 -> on-chain [0.05, 0.40], jump 500 bps
             return (one * 5 / 100, one * 40 / 100, 500, 0);
         }
         revert("MigrateFeedsToV2: no band configured for token (H-2)");

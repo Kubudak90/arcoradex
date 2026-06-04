@@ -192,8 +192,12 @@ async function main() {
             if (answer <= 0n) throw new Error(`aggregator answer <= 0 (${answer})`);
             const price1e18 = answer * 10_000_000_000n; // 1e8 -> 1e18
 
-            // L-4: explicit nonce + fee ceiling + confirmation timeout.
-            const nonce = nonceRef.value++;
+            // L-4: explicit nonce + fee ceiling + confirmation timeout. Consume
+            // the nonce ONLY after the send resolves — a writeContract that
+            // throws (before a tx enters the mempool) must NOT advance the local
+            // counter, or the gap would make every later tx in this run fail
+            // until it fills.
+            const nonce = nonceRef.value;
             const hash = await walletClient.writeContract({
                 address: GUARD, abi: GUARD_ABI, functionName: "record",
                 args: [t.token, price1e18],
@@ -201,6 +205,7 @@ async function main() {
                 maxFeePerGas: gasCeiling.maxFeePerGas,
                 maxPriorityFeePerGas: gasCeiling.maxPriorityFeePerGas,
             });
+            nonceRef.value += 1; // tx is in the mempool — the nonce is now spent.
             await publicClient.waitForTransactionReceipt({ hash, timeout: TX_TIMEOUT_MS });
             log(`${t.symbol}: recorded price1e18=${price1e18} (nonce=${nonce}) tx=${hash}`);
             recorded++;

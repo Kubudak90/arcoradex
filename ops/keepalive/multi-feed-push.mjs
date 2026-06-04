@@ -243,8 +243,11 @@ async function pushFeedAddress(publicClient, walletClient, label, feedAddr, usd,
         }
 
         // L-4: explicit nonce (re-priceable / collision-free across runs),
-        // explicit fee ceiling, and a confirmation timeout.
-        const nonce = nonceRef.value++;
+        // explicit fee ceiling, and a confirmation timeout. Consume the nonce
+        // ONLY after the send resolves — a writeContract that throws (before a
+        // tx enters the mempool) must NOT advance the local counter, or the gap
+        // would make every later tx in this run fail until it fills.
+        const nonce = nonceRef.value;
         const hash = await walletClient.writeContract({
             address: feedAddr,
             abi: FEED_ABI,
@@ -254,6 +257,7 @@ async function pushFeedAddress(publicClient, walletClient, label, feedAddr, usd,
             maxFeePerGas: gasCeiling.maxFeePerGas,
             maxPriorityFeePerGas: gasCeiling.maxPriorityFeePerGas,
         });
+        nonceRef.value += 1; // tx is in the mempool — the nonce is now spent.
         await publicClient.waitForTransactionReceipt({ hash, timeout: TX_TIMEOUT_MS });
         const reason = capped
             ? `capped@${maxDevBps}bps (target=${targetAnswer})`
