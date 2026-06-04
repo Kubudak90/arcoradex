@@ -11,10 +11,14 @@ import { privateKeyToAccount } from "viem/accounts";
 import { arcTestnet } from "@arcoralabs/dex-sdk";
 import { checkBotId } from "botid/server";
 import {
-  MemoryCooldownStore,
+  createCooldownStore,
   checkRateLimit,
   recordClaim,
   rollbackClaim,
+  reserveInflight,
+  releaseInflight,
+  consumeHourlyBudget,
+  refundHourlyBudget,
   extractClientIp,
 } from "@/lib/faucet-rate-limit";
 import { FAUCET_TOKENS } from "@/lib/faucet-tokens";
@@ -23,21 +27,14 @@ export const runtime = "nodejs";
 
 const MINT_ABI = parseAbi(["function mint(address to, uint256 amount)"]);
 
-// Cooldown is keyed by both recipient address AND client IP — fresh-wallet
-// spam from a single client gets caught by the per-IP key. In-memory store is
-// per-instance and resets on cold start; acceptable for testnet (Vercel BotID
-// is the real defense vs. botnets, the cooldown is best-effort UX bound).
-const cooldownStore = new MemoryCooldownStore();
-
-// H-6 (audit 2026-05-24): close the per-instance TOCTOU window between
-// checkRateLimit and recordClaim. Two near-simultaneous POSTs for the same
-// recipient or IP would both pass the rate-limit read before either's write
-// landed, ending up with two 7-tx mint batches. Module-scoped Sets serve as
-// an in-process mutex; cross-instance races are still possible but require
-// the same recipient to land on two different Vercel function invocations
-// within the same ~10 s window (uncommon on Fluid Compute warm-paths).
-const inFlightAddrs = new Set<string>();
-const inFlightIps = new Set<string>();
+// M-3 (audit 2026-05-31): cooldown + in-flight reservation now go through a
+// cross-instance store (Upstash Redis when UPSTASH_REDIS_REST_URL/TOKEN are
+// set, in-memory fallback otherwise). The store is keyed by both recipient
+// address AND client IP, plus a global hourly mint-budget. Reservation uses an
+// atomic SET-NX so two concurrent POSTs on different Vercel instances can no
+// longer both run the 7-tx mint loop — the previous module-scoped Sets only
+// guarded a single instance.
+const cooldownStore = createCooldownStore();
 
 interface FaucetSuccess {
   ok: true;
@@ -100,9 +97,9 @@ export async function POST(req: Request): Promise<NextResponse<FaucetSuccess | F
   }
   const recipient = getAddress(body.address);
 
-  // Rate limit: per-recipient AND per-IP (best-effort, in-memory).
+  // Rate limit: per-recipient AND per-IP (cross-instance via the store).
   const ip = extractClientIp(req);
-  const rl = checkRateLimit(cooldownStore, recipient, ip);
+  const rl = await checkRateLimit(cooldownStore, recipient, ip);
   if (!rl.ok) {
     const hours = Math.max(1, Math.ceil(rl.retryAfterSec / 3600));
     const error =
@@ -115,30 +112,41 @@ export async function POST(req: Request): Promise<NextResponse<FaucetSuccess | F
     );
   }
 
-  // H-6 (audit 2026-05-24): atomically reserve the rate-limit slots BEFORE
-  // broadcasting. Without this, two concurrent POSTs both pass checkRateLimit
-  // and both run the mint loop. Reservation is per-instance only — see the
-  // module-level comment for the cross-instance caveat.
-  const addrKey = recipient.toLowerCase();
-  if (inFlightAddrs.has(addrKey) || (ip != null && inFlightIps.has(ip))) {
+  // M-3 (audit 2026-05-31): atomically reserve the in-flight slots BEFORE
+  // broadcasting. On Upstash this is a SET-NX so two concurrent POSTs (even on
+  // different Vercel instances) for the same address/IP cannot both proceed —
+  // closing the cross-instance TOCTOU window the old per-instance Sets left
+  // open. Reservation keys auto-expire so a crashed request can't lock a slot.
+  const reservation = await reserveInflight(cooldownStore, recipient, ip);
+  if (!reservation.ok) {
     return NextResponse.json(
       { ok: false, error: "A claim for this address or network is already in progress. Try again shortly." },
       { status: 429 },
     );
   }
-  inFlightAddrs.add(addrKey);
-  if (ip != null) inFlightIps.add(ip);
-
-  // M-2 (audit 2026-05-31): record the claim BEFORE broadcasting. Previously
-  // recordClaim ran only on the success path, so a mid-batch failure (e.g.
-  // token #4 reverts) returned 502 WITHOUT recording — letting the same
-  // recipient/IP immediately re-POST and re-mint the tokens that DID land,
-  // unbounded. We now record up-front and roll the claim back only if ZERO
-  // tokens were broadcast, so a partial failure still consumes the cooldown.
-  recordClaim(cooldownStore, recipient, ip);
 
   const txHashes: Record<string, `0x${string}`> = {};
   try {
+    // M-3: consume one unit of the global hourly mint budget — a blunt
+    // circuit-breaker bounding total faucet output per hour regardless of how
+    // many distinct addresses/IPs ask. Refunded below if zero tokens broadcast.
+    const budget = await consumeHourlyBudget(cooldownStore);
+    if (!budget.ok) {
+      await refundHourlyBudget(cooldownStore);
+      return NextResponse.json(
+        { ok: false, error: "Faucet is busy right now (hourly limit reached). Try again later." },
+        { status: 429 },
+      );
+    }
+
+    // M-2 (audit 2026-05-31): record the claim BEFORE broadcasting. Previously
+    // recordClaim ran only on the success path, so a mid-batch failure (e.g.
+    // token #4 reverts) returned 502 WITHOUT recording — letting the same
+    // recipient/IP immediately re-POST and re-mint the tokens that DID land,
+    // unbounded. We now record up-front and roll the claim back only if ZERO
+    // tokens were broadcast, so a partial failure still consumes the cooldown.
+    await recordClaim(cooldownStore, recipient, ip);
+
     // Build clients
     const account = privateKeyToAccount(key as `0x${string}`);
     const transport = http(process.env.NEXT_PUBLIC_RPC_URL || "https://rpc.testnet.arc.network");
@@ -175,9 +183,10 @@ export async function POST(req: Request): Promise<NextResponse<FaucetSuccess | F
       // M-2: roll the claim back ONLY if nothing was broadcast. If even one
       // token landed, keep the cooldown — the re-mint window is what we're
       // closing. Net: one batch per cooldown window regardless of partial
-      // failure.
+      // failure. On total failure we also refund the hourly budget slot.
       if (Object.keys(txHashes).length === 0) {
-        rollbackClaim(cooldownStore, recipient, ip);
+        await rollbackClaim(cooldownStore, recipient, ip);
+        await refundHourlyBudget(cooldownStore);
       }
 
       return NextResponse.json(
@@ -199,7 +208,8 @@ export async function POST(req: Request): Promise<NextResponse<FaucetSuccess | F
 
     return NextResponse.json({ ok: true, recipient, txHashes }, { status: 200 });
   } finally {
-    inFlightAddrs.delete(addrKey);
-    if (ip != null) inFlightIps.delete(ip);
+    // Always release the in-flight reservation so the next claim isn't blocked
+    // for the full reservation TTL.
+    await releaseInflight(cooldownStore, reservation.acquired);
   }
 }
