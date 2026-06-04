@@ -17,6 +17,14 @@ import {IChainlinkAggregator} from "../src/interfaces/IChainlinkAggregator.sol";
 /// (P3_5BatchBuilder) use a non-zero salt and are the canonical scripts
 /// for any future Timelock work. Retained for git history of the
 /// 2026-05-17 deployment trail; do NOT extend or invoke this batch.
+///
+/// @dev L-7 (audit 2026-05-31): RETIRED. This builder targets the SUPERSEDED
+/// V1 OracleAggregators; scheduling/executing this batch would regress the
+/// live Registry and re-open closed oracle bugs. The two entrypoints that
+/// drive this builder — P3GovernanceActions.run() and ExecuteP3Batch.run() —
+/// now `revert` at their first statement (the hard guards are the
+/// enforcement). The builder functions below are left intact only so those
+/// retired scripts still compile; they MUST NOT be invoked by any new script.
 abstract contract P3BatchBuilder is Script {
     ArcoraDexRegistry constant REGISTRY = ArcoraDexRegistry(0x9914436E5245bF3c0d4D4338e0a8b8F5Ab5505aB);
 

@@ -81,6 +81,17 @@ contract DeployArcoraDexV3 is Script {
         console2.log("LP:      ", address(lp));
         console2.log("");
 
+        // 2b. I-1 (carried from PR-2.3): wire the Registry -> Pool reserve guard
+        // so deactivateToken cannot strand reserves (the guard is a no-op until
+        // setPool is called). Done here while the deployer still owns the
+        // Registry; once ownership moves to the Timelock (DeployGovernanceP2),
+        // any re-wire requires a governance proposal.
+        // NOTE(PR-9): the LIVE Registry was deployed before this line existed,
+        // so PR-9 must additionally schedule a Timelock setPool(pool) on the
+        // already-deployed Registry to activate the guard on the live system.
+        reg.setPool(address(pool));
+        console2.log("Registry.setPool(pool) wired (I-1 reserve guard active)");
+
         // 3. List all 7 stables on the new Registry
         _list(reg, USDC, 6, FEED_USDC, 50, 3600, "USDC");
         _list(reg, USDT, 6, FEED_USDT, 50, 3600, "USDT");

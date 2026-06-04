@@ -16,6 +16,15 @@ contract ExecuteP3Batch is P3BatchBuilder {
     TimelockController constant TIMELOCK = TimelockController(payable(0x36444f653E7746d69aD5d91dA920f5Cd2F9C6E83));
 
     function run() external {
+        // ── L-7 (audit 2026-05-31): HARD RETIREMENT GUARD ──
+        // Executes the retired P3 batch (P3BatchBuilder, SALT = bytes32(0))
+        // that would re-point the live Registry at the SUPERSEDED V1
+        // OracleAggregators, re-opening closed oracle bugs. The canonical path
+        // is P3.5 (ExecuteP3_5Batch). Kept for the deployment trail only; MUST
+        // NOT be executable.
+        revert("P3 retired - superseded by P3.5; see docs/audits/2026-05-31-wide-audit.md L-7");
+
+        // solhint-disable-next-line no-unreachable
         require(block.chainid == 5042002, "Arc testnet only");
         uint256 deployerKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
 
