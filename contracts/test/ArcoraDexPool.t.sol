@@ -515,6 +515,47 @@ contract ArcoraDexPoolTest is Test {
         vm.stopPrank();
     }
 
+    // ── I-3: protocol-fee sweep gated by whenNotPaused ───────────────
+    function test_i3_withdrawProtocolFees_revertsWhenPaused() public {
+        _seedAllThree();
+
+        // Accrue real protocol fees in EURC via a swap (PROT_SHARE_DEFAULT = 10%).
+        uint256 amountIn = 100e6;
+        vm.prank(owner);
+        usdc.mint(bob, amountIn);
+        vm.startPrank(bob);
+        usdc.approve(address(pool), amountIn);
+        pool.swap(address(usdc), address(eurc), amountIn, 0, block.timestamp, bob);
+        vm.stopPrank();
+
+        uint256 accrued = pool.protocolFeesAccrued(address(eurc));
+        assertGt(accrued, 0, "expected accrued protocol fees to sweep");
+
+        // Pause the pool: users can no longer exit, so admin must not be able to
+        // sweep protocol fees either (symmetry — finding I-3).
+        vm.prank(owner);
+        pool.pause();
+        assertTrue(pool.paused());
+
+        // Sweep must revert at the whenNotPaused gate, even though fees are accrued
+        // and the call is well-formed.
+        vm.prank(owner);
+        vm.expectRevert(IArcoraDexPool.PoolPaused.selector);
+        pool.withdrawProtocolFees(address(eurc), accrued, owner);
+
+        // After unpause, the same sweep succeeds.
+        vm.prank(owner);
+        pool.unpause();
+        assertFalse(pool.paused());
+
+        uint256 ownerBalBefore = eurc.balanceOf(owner);
+        vm.prank(owner);
+        pool.withdrawProtocolFees(address(eurc), accrued, owner);
+
+        assertEq(eurc.balanceOf(owner), ownerBalBefore + accrued);
+        assertEq(pool.protocolFeesAccrued(address(eurc)), 0);
+    }
+
     function test_swap_recipient_receives() public {
         _seedAllThree();
         address charlie = makeAddr("charlie");

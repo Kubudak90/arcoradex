@@ -654,7 +654,13 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         protocolFeeShareBps = newBps;
     }
 
-    function withdrawProtocolFees(address token, uint256 amount, address to) external override onlyOwner nonReentrant {
+    function withdrawProtocolFees(address token, uint256 amount, address to)
+        external
+        override
+        onlyOwner
+        whenNotPaused
+        nonReentrant
+    {
         if (amount == 0) revert ZeroAmount();
         if (to == address(0)) revert ZeroAddress();
         uint256 acc = protocolFeesAccrued[token];
