@@ -142,6 +142,33 @@ export function decidePriceSanity(usd, feed) {
 }
 
 // ---------------------------------------------------------------------------
+// L-2: FX reference-drift decision (pure). Given a primary USD value and an
+// independent second source's USD value, decide whether they agree within a bps
+// tolerance. If the independent source is absent (offline / not wired), the
+// decision is `no-reference` — the caller chooses whether to push (it MUST NOT
+// silently treat a missing reference as agreement).
+// ---------------------------------------------------------------------------
+
+/// Decides FX reference drift. Returns:
+///   { ok: true, driftBps }                          — sources agree within tol
+///   { ok: false, reason: "ref-drift", driftBps }    — disagree beyond tol
+///   { ok: false, reason: "no-reference" }           — independent source absent
+///   { ok: false, reason: "no-value" }               — primary value absent/bad
+export function decideFxReferenceDrift(primaryUsd, referenceUsd, toleranceBps) {
+    if (typeof referenceUsd !== "number" || !Number.isFinite(referenceUsd) || referenceUsd <= 0) {
+        return { ok: false, reason: "no-reference" };
+    }
+    if (typeof primaryUsd !== "number" || !Number.isFinite(primaryUsd) || primaryUsd <= 0) {
+        return { ok: false, reason: "no-value" };
+    }
+    const driftBps = (Math.abs(primaryUsd - referenceUsd) * 10_000) / referenceUsd;
+    if (driftBps > toleranceBps) {
+        return { ok: false, reason: "ref-drift", driftBps, toleranceBps };
+    }
+    return { ok: true, driftBps };
+}
+
+// ---------------------------------------------------------------------------
 // Per-tick maxDevBps ratchet/clamp math (pure). Mirrors the registry's
 // per-token maxOracleDeviationBps: caps |new - prev| ≤ prev × maxDevBps / 10000.
 // Works in 1e8 BigInt fixed-point exactly like the on-chain answer.
@@ -202,4 +229,48 @@ export function selectWalletForRole(role, wallets) {
     if (role === "primary") return wallets.primary;
     if (role === "secondary") return wallets.secondary;
     throw new Error(`unknown feed role: ${role}`);
+}
+
+// ---------------------------------------------------------------------------
+// guard-monitor dedupe/debounce + re-validation decision (pure). A
+// permissionless `CircuitBreakerTripped` event is an UNTRUSTED hint (the
+// CumulativeDeviationGuard NatSpec is explicit: `record` is unauthenticated, so
+// an adversary can spam events or anchor windows). The monitor must (a) debounce
+// repeated events for the same token within a cooldown window, and (b)
+// re-validate the flagged price against an INDEPENDENT feed before deciding to
+// page. A spammed event with no independent confirmation must NOT page; a
+// genuine deviation confirmed by the independent feed MUST page.
+// ---------------------------------------------------------------------------
+
+/// Decides whether an observed CircuitBreakerTripped event should page.
+/// Inputs:
+///   - event: { token, deviationBps, timestamp } (untrusted, from chain)
+///   - independent: { confirmed: bool, observedDeviationBps?: number } — the
+///       result of re-validating against an independent feed. `confirmed:false`
+///       means the independent feed does NOT see the deviation (likely spam).
+///   - state: { lastPagedAt: Map<token, ms> } — mutable dedupe state.
+///   - now: current epoch ms.
+///   - cooldownMs: minimum gap between pages for the same token.
+/// Returns { page: bool, reason }.
+///
+/// Order matters: the independent-confirmation gate is checked FIRST so a
+/// spammed (unconfirmed) event can neither page NOR consume the dedupe slot —
+/// i.e. spam cannot suppress a later genuine page for the same token.
+export function decidePage(event, independent, state, now, cooldownMs) {
+    const token = String(event.token).toLowerCase();
+    if (!independent || independent.confirmed !== true) {
+        return { page: false, reason: "unconfirmed-by-independent-feed" };
+    }
+    const last = state.lastPagedAt.get(token);
+    if (last !== undefined && now - last < cooldownMs) {
+        return { page: false, reason: "debounced", sinceLastMs: now - last };
+    }
+    // Confirmed + outside cooldown → page, and record the time.
+    state.lastPagedAt.set(token, now);
+    return { page: true, reason: "confirmed-deviation" };
+}
+
+/// Fresh dedupe state for decidePage.
+export function newPageState() {
+    return { lastPagedAt: new Map() };
 }

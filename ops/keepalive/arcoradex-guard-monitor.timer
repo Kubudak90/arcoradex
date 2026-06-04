@@ -1,0 +1,15 @@
+[Unit]
+Description=ArcoraDEX guard-monitor — re-validate guard trips every 15 minutes
+
+[Timer]
+# Tighter cadence than the 30-min keepers: a real circuit-breaker trip should
+# page promptly. LOOKBACK_BLOCKS in the script must comfortably cover this
+# interval so no trip event is missed between runs.
+OnBootSec=10min
+OnUnitActiveSec=15min
+AccuracySec=30s
+Persistent=true
+Unit=arcoradex-guard-monitor.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,33 @@
+[Unit]
+Description=ArcoraDEX — re-validate CumulativeDeviationGuard CircuitBreakerTripped events and page (Arc testnet)
+Documentation=https://github.com/Kubudak90/arcoradex
+After=network-online.target vault.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# L-3/L-4 (audit 2026-05-31): explicit start-timeout backstop. The script's own
+# per-fetch (AbortController) timeouts should fire first; this is the
+# systemd-level SIGKILL ceiling so a hung run never lingers past one tick.
+TimeoutStartSec=120
+User=arcora
+Group=arcora
+RuntimeDirectory=arcora
+RuntimeDirectoryMode=0700
+WorkingDirectory=/home/arcora/arcoradex-feeds
+Environment=KEEPER_TENANT=arcoradex
+# guard-monitor is READ-ONLY on-chain (it never signs a tx — pausing is a manual
+# Pause-Guardian Safe action), so it needs no keeper key from Vault. It only
+# needs the .env (RPC, addresses, COINGECKO_API_KEY, ALERT_WEBHOOK_URL).
+EnvironmentFile=/home/arcora/arcoradex-feeds/.env
+ExecStart=/usr/bin/node /home/arcora/arcoradex-feeds/guard-monitor.mjs
+Nice=10
+StandardOutput=journal
+StandardError=journal
+PrivateTmp=true
+ProtectSystem=strict
+NoNewPrivileges=true
+# Exit code 3 = "paged" (a real, independently-confirmed deviation). SuccessExitStatus
+# keeps systemd from flagging that as a unit failure; the PAGE log line + webhook
+# are the operator signal. A genuine fatal (exit 1) still surfaces as failed.
+SuccessExitStatus=3

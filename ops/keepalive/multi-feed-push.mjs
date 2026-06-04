@@ -32,6 +32,7 @@ import {
     buildTransport,
     resolveGasCeiling,
     decidePriceSanity,
+    decideFxReferenceDrift,
     clampToMaxDev,
     priceTo1e8,
     assertDistinctKeys,
@@ -72,15 +73,32 @@ const arcTestnet = defineChain({
 // USD pegs, 150 bps for FX pegs) without bricking swaps when the live
 // market drifts faster than one tick: the keeper takes multiple ticks
 // to walk the on-chain answer toward the true price.
+//
+// L-2 (audit 2026-05-31): the FX legs (EURC/TRYC/BRLC) now carry a real
+// peg-drift guard (peg + maxPegDriftBps against a slow-moving reference) AND a
+// tightened band (a few-hundred-bps window around the trusted reference instead
+// of the prior 3x-10x windows). They are additionally cross-checked against an
+// INDEPENDENT FX source (see fetchFxReference): a push is skipped when the two
+// disagree beyond FX_REF_TOLERANCE_BPS. The `fx` field is the ISO currency the
+// independent source is queried for.
+//
+// NOTE (L-2 / H-2): pushing one source's value to BOTH the primary and secondary
+// feeds defeats the on-chain divergence guard (absDiff=0 trivially passes). The
+// off-chain reference cross-check below is the interim defense; the proper fix is
+// to source the SECONDARY feed from a genuinely independent provider. The FX
+// `peg` anchors are slow-moving — refresh them when the trusted reference moves.
 const FEEDS = [
-    { symbol: "USDC",  feed: process.env.FEED_USDC,  secondary: process.env.P3_SECONDARY_USDC,  hardcodedAnswer1e8: 100_000_000n, band: { min: 1.00, max: 1.00 }, maxDevBps: 50,  peg: 1.00, maxPegDriftBps: 200 },
-    { symbol: "USDT",  feed: process.env.FEED_USDT,  secondary: process.env.P3_SECONDARY_USDT,  coingeckoId: "tether",          band: { min: 0.95, max: 1.05 }, maxDevBps: 50,  peg: 1.00, maxPegDriftBps: 200 },
-    { symbol: "PYUSD", feed: process.env.FEED_PYUSD, secondary: process.env.P3_SECONDARY_PYUSD, coingeckoId: "paypal-usd",      band: { min: 0.95, max: 1.05 }, maxDevBps: 50,  peg: 1.00, maxPegDriftBps: 200 },
-    { symbol: "DAI",   feed: process.env.FEED_DAI,   secondary: process.env.P3_SECONDARY_DAI,   coingeckoId: "dai",             band: { min: 0.95, max: 1.05 }, maxDevBps: 50,  peg: 1.00, maxPegDriftBps: 200 },
-    { symbol: "EURC",  feed: process.env.FEED_EURC,  secondary: process.env.P3_SECONDARY_EURC,  coingeckoVsCurrency: "eur",     band: { min: 1.00, max: 1.30 }, maxDevBps: 150, peg: null, maxPegDriftBps: null },
-    { symbol: "TRYC",  feed: process.env.FEED_TRYC,  secondary: process.env.P3_SECONDARY_TRYC,  coingeckoVsCurrency: "try",     band: { min: 0.01, max: 0.10 }, maxDevBps: 150, peg: null, maxPegDriftBps: null },
-    { symbol: "BRLC",  feed: process.env.FEED_BRLC,  secondary: process.env.P3_SECONDARY_BRLC,  coingeckoVsCurrency: "brl",     band: { min: 0.10, max: 0.30 }, maxDevBps: 150, peg: null, maxPegDriftBps: null },
+    { symbol: "USDC",  feed: process.env.FEED_USDC,  secondary: process.env.P3_SECONDARY_USDC,  hardcodedAnswer1e8: 100_000_000n, band: { min: 1.00, max: 1.00 }, maxDevBps: 50,  peg: 1.00, maxPegDriftBps: 200, fx: null },
+    { symbol: "USDT",  feed: process.env.FEED_USDT,  secondary: process.env.P3_SECONDARY_USDT,  coingeckoId: "tether",          band: { min: 0.95, max: 1.05 }, maxDevBps: 50,  peg: 1.00, maxPegDriftBps: 200, fx: null },
+    { symbol: "PYUSD", feed: process.env.FEED_PYUSD, secondary: process.env.P3_SECONDARY_PYUSD, coingeckoId: "paypal-usd",      band: { min: 0.95, max: 1.05 }, maxDevBps: 50,  peg: 1.00, maxPegDriftBps: 200, fx: null },
+    { symbol: "DAI",   feed: process.env.FEED_DAI,   secondary: process.env.P3_SECONDARY_DAI,   coingeckoId: "dai",             band: { min: 0.95, max: 1.05 }, maxDevBps: 50,  peg: 1.00, maxPegDriftBps: 200, fx: null },
+    { symbol: "EURC",  feed: process.env.FEED_EURC,  secondary: process.env.P3_SECONDARY_EURC,  coingeckoVsCurrency: "eur",     band: { min: 1.02, max: 1.20 },   maxDevBps: 150, peg: 1.08,  maxPegDriftBps: 800,  fx: "eur" },
+    { symbol: "TRYC",  feed: process.env.FEED_TRYC,  secondary: process.env.P3_SECONDARY_TRYC,  coingeckoVsCurrency: "try",     band: { min: 0.020, max: 0.040 }, maxDevBps: 150, peg: 0.030, maxPegDriftBps: 1500, fx: "try" },
+    { symbol: "BRLC",  feed: process.env.FEED_BRLC,  secondary: process.env.P3_SECONDARY_BRLC,  coingeckoVsCurrency: "brl",     band: { min: 0.15, max: 0.22 },   maxDevBps: 150, peg: 0.18,  maxPegDriftBps: 1000, fx: "brl" },
 ];
+
+// L-2: tolerance for primary(CoinGecko)-vs-independent FX source agreement.
+const FX_REF_TOLERANCE_BPS = numEnv(process.env.FX_REF_TOLERANCE_BPS, 200);
 
 const FEED_ABI = parseAbi([
     "function setAnswer(int256 newAnswer) external",
@@ -145,6 +163,56 @@ async function fetchAllPrices(feeds, apiKey) {
         }
     }
 
+    return out;
+}
+
+/// L-2: fetch an INDEPENDENT FX reference (USD per 1 unit of each fiat) from a
+/// genuinely separate provider than CoinGecko. Default provider is
+/// exchangerate.host (free, no key). Returns a map keyed by feed symbol of the
+/// USD value implied by the independent source, for comparison against the
+/// CoinGecko-derived value in main().
+///
+/// A missing/timed-out reference leaves the symbol absent → decideFxReferenceDrift
+/// returns `no-reference` and the caller treats that conservatively (fail safe).
+///
+/// FX_REFERENCE_SOURCE controls the provider:
+///   - "exchangerate.host" (default): live independent FX source. NOTE: verify
+///     at deploy time that the free /latest endpoint still returns `rates`
+///     without a key; if it requires a key or is unavailable, either supply one
+///     upstream, set FX_REFERENCE_SOURCE=none (band+peg-drift remain active), or
+///     wire another provider via the TODO below.
+///   - "none": disable the cross-check (band + peg-drift only).
+///   - other: unknown → treated as no reference (logged).
+async function fetchFxReference(feeds) {
+    const out = new Map();
+    const source = (process.env.FX_REFERENCE_SOURCE || "exchangerate.host").toLowerCase();
+    if (source === "none") return out;
+
+    const fxFeeds = feeds.filter((f) => f.fx);
+    if (fxFeeds.length === 0) return out;
+    const currencies = [...new Set(fxFeeds.map((f) => f.fx.toUpperCase()))];
+
+    if (source === "exchangerate.host") {
+        try {
+            // base=USD → rates[XYZ] = units of XYZ per 1 USD. We want USD per 1
+            // unit of XYZ → invert, matching the CoinGecko-derived `usd` value.
+            const url = `https://api.exchangerate.host/latest?base=USD&symbols=${currencies.join(",")}`;
+            const json = await fetchJson(url, { timeoutMs: FETCH_TIMEOUT_MS });
+            const rates = json?.rates || {};
+            for (const f of fxFeeds) {
+                const rate = rates[f.fx.toUpperCase()];
+                if (typeof rate === "number" && rate > 0) out.set(f.symbol, 1 / rate);
+            }
+        } catch (err) {
+            log(`fx-reference (exchangerate.host): ERROR ${err?.message || err} — FX cross-check degraded`);
+        }
+        return out;
+    }
+
+    // TODO(L-2): wire additional independent providers here (e.g. an ECB/bank
+    // reference, or a second exchange API) and ideally drive the SECONDARY feed
+    // from one of them so the on-chain divergence guard is no longer blind.
+    log(`fx-reference: unknown FX_REFERENCE_SOURCE='${source}' — FX cross-check disabled`);
     return out;
 }
 
@@ -265,6 +333,8 @@ async function main() {
     const cappedFeedsThisRun = new Map(); // symbol -> { primary: bool, secondary: bool }
 
     const prices = await fetchAllPrices(FEEDS, apiKey);
+    const fxReference = await fetchFxReference(FEEDS);
+    const fxCrossCheckEnabled = (process.env.FX_REFERENCE_SOURCE || "").toLowerCase() !== "none";
 
     for (const f of FEEDS) {
         const usd = prices.get(f.symbol);
@@ -281,6 +351,26 @@ async function main() {
                 errored += 2;
             }
             continue;
+        }
+
+        // L-2: FX legs cross-check against an independent reference. A
+        // disagreement beyond tolerance — or a missing reference when the
+        // cross-check is enabled — skips the push (fail safe; the wide band is no
+        // longer the sole defense).
+        if (f.fx && fxCrossCheckEnabled) {
+            const ref = fxReference.get(f.symbol);
+            const fxDecision = decideFxReferenceDrift(usd, ref, FX_REF_TOLERANCE_BPS);
+            if (!fxDecision.ok) {
+                if (fxDecision.reason === "ref-drift") {
+                    log(`${f.symbol}: CoinGecko usd=${usd} vs independent ref=${ref} drifts ${fxDecision.driftBps.toFixed(1)} bps (tol=${FX_REF_TOLERANCE_BPS}) — skip both feeds`);
+                } else if (fxDecision.reason === "no-reference") {
+                    log(`${f.symbol}: no independent FX reference available — skip both feeds (set FX_REFERENCE_SOURCE=none to push on band+peg only)`);
+                } else {
+                    log(`${f.symbol}: FX cross-check failed (${fxDecision.reason}) — skip both feeds`);
+                }
+                errored += 2;
+                continue;
+            }
         }
 
         for (const [role, addr] of [["primary", f.feed], ["secondary", f.secondary]]) {
