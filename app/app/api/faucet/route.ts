@@ -27,6 +27,13 @@ export const runtime = "nodejs";
 
 const MINT_ABI = parseAbi(["function mint(address to, uint256 amount)"]);
 
+// L-11 (audit 2026-05-31): treat either Node's NODE_ENV or Vercel's VERCEL_ENV
+// as the production signal so the fail-closed origin check fires on real
+// deploys (Vercel sets VERCEL_ENV) and on any other prod build.
+function isProduction(): boolean {
+  return process.env.NODE_ENV === "production" || process.env.VERCEL_ENV === "production";
+}
+
 // M-3 (audit 2026-05-31): cooldown + in-flight reservation now go through a
 // cross-instance store (Upstash Redis when UPSTASH_REDIS_REST_URL/TOKEN are
 // set, in-memory fallback otherwise). The store is keyed by both recipient
@@ -51,7 +58,6 @@ export async function POST(req: Request): Promise<NextResponse<FaucetSuccess | F
   // H-7 (audit 2026-05-24): same-origin enforcement. The browser sends Origin
   // automatically on cross-origin POSTs; rejecting unknown origins blocks the
   // basic cross-site exploit surface even before the BotID signal is read.
-  // In dev (NEXT_PUBLIC_APP_URL unset) the check is skipped.
   const allowedOrigin = process.env.NEXT_PUBLIC_APP_URL;
   if (allowedOrigin) {
     const origin = req.headers.get("origin");
@@ -64,6 +70,16 @@ export async function POST(req: Request): Promise<NextResponse<FaucetSuccess | F
         { status: 403 },
       );
     }
+  } else if (isProduction()) {
+    // L-11 (audit 2026-05-31): fail CLOSED in production. Previously an unset
+    // NEXT_PUBLIC_APP_URL skipped the origin check entirely (fail-open), so a
+    // misconfigured prod deploy silently accepted cross-site POSTs. In prod we
+    // now reject rather than skip; dev (where the allowlist is normally unset)
+    // stays permissive so local testing isn't blocked.
+    return NextResponse.json(
+      { ok: false, error: "Faucet origin allowlist is not configured." },
+      { status: 403 },
+    );
   }
 
   // Vercel BotID — server check first. The matching <BotIdClient> in

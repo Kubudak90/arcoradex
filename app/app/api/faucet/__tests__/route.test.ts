@@ -153,3 +153,84 @@ describe("POST /api/faucet", () => {
     expect(res2.status).toBe(429);
   });
 });
+
+describe("L-11: origin allowlist fail-closed in production", () => {
+  const ORIGINAL_NODE_ENV = process.env.NODE_ENV;
+  const ORIGINAL_VERCEL_ENV = process.env.VERCEL_ENV;
+
+  // Next narrows process.env.NODE_ENV to a readonly union; cast through a
+  // mutable record so the test can flip it between prod/dev.
+  const mutableEnv = process.env as Record<string, string | undefined>;
+
+  beforeEach(() => {
+    process.env.FAUCET_PRIVATE_KEY = "0x" + "1".repeat(64);
+    delete process.env.NEXT_PUBLIC_APP_URL;
+    writeContract.mockReset().mockImplementation(async () => ("0x" + "a".repeat(64)) as `0x${string}`);
+    getTransactionCount.mockReset().mockResolvedValue(0);
+    waitForTransactionReceipt.mockReset().mockResolvedValue({ status: "success" });
+    checkBotId.mockReset().mockResolvedValue({ isBot: false });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    // Restore env (assignment works in the node test env).
+    mutableEnv.NODE_ENV = ORIGINAL_NODE_ENV;
+    if (ORIGINAL_VERCEL_ENV === undefined) delete process.env.VERCEL_ENV;
+    else process.env.VERCEL_ENV = ORIGINAL_VERCEL_ENV;
+  });
+
+  it("prod (VERCEL_ENV=production) + unset allowlist → 403", async () => {
+    process.env.VERCEL_ENV = "production";
+    delete process.env.NEXT_PUBLIC_APP_URL;
+    const { POST } = await loadRoute();
+
+    const res = await POST(mkReq({ address: RECIPIENT }));
+    const body = (await res.json()) as { ok: boolean; error: string };
+    expect(res.status).toBe(403);
+    expect(body.ok).toBe(false);
+    // The mint loop must NOT have run — fail-closed before broadcasting.
+    expect(writeContract).not.toHaveBeenCalled();
+  });
+
+  it("prod (NODE_ENV=production) + unset allowlist → 403", async () => {
+    mutableEnv.NODE_ENV = "production";
+    delete process.env.VERCEL_ENV;
+    delete process.env.NEXT_PUBLIC_APP_URL;
+    const { POST } = await loadRoute();
+
+    const res = await POST(mkReq({ address: RECIPIENT }));
+    expect(res.status).toBe(403);
+    expect(writeContract).not.toHaveBeenCalled();
+  });
+
+  it("dev + unset allowlist → request is allowed (origin check skipped)", async () => {
+    mutableEnv.NODE_ENV = "development";
+    delete process.env.VERCEL_ENV;
+    delete process.env.NEXT_PUBLIC_APP_URL;
+    const { POST } = await loadRoute();
+
+    const res = await POST(mkReq({ address: RECIPIENT }));
+    // Not 403 — the dev path is permissive and proceeds to mint.
+    expect(res.status).toBe(200);
+    expect(writeContract).toHaveBeenCalled();
+  });
+
+  it("prod + matching allowlist origin → allowed", async () => {
+    process.env.VERCEL_ENV = "production";
+    process.env.NEXT_PUBLIC_APP_URL = "https://app.test";
+    const { POST } = await loadRoute();
+
+    const req = new Request("https://app.test/api/faucet", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-forwarded-for": IP,
+        origin: "https://app.test",
+      },
+      body: JSON.stringify({ address: RECIPIENT }),
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(200);
+  });
+});
