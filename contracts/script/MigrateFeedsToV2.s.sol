@@ -101,8 +101,7 @@ contract MigrateFeedsToV2 is Script {
         // H-2 (audit 2026-05-31): finalize the per-token on-chain band (superset
         // of the keeper's off-chain band; see _bandFor). Defense-in-depth
         // backstop — the keeper's own guards remain primary.
-        (int256 minAnswer, int256 maxAnswer, uint32 maxJumpBps, uint32 minUpdateSeconds) =
-            _bandFor(token, oracleDec);
+        (int256 minAnswer, int256 maxAnswer, uint32 maxJumpBps, uint32 minUpdateSeconds) = _bandFor(token, oracleDec);
         MockChainlinkFeedV2 newFeed = new MockChainlinkFeedV2(
             oracleDec, currentAnswer, keeperEOA, deployer, minAnswer, maxAnswer, maxJumpBps, minUpdateSeconds
         );

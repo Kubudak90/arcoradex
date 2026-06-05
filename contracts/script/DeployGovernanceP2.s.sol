@@ -181,11 +181,7 @@ contract DeployGovernanceP2 is Script {
 
         // setPauseGuardian
         _scheduleAndExec(
-            governanceSafe,
-            govKeys,
-            timelock,
-            address(pool),
-            abi.encodeCall(pool.setPauseGuardian, (address(s.pgSafe)))
+            governanceSafe, govKeys, timelock, address(pool), abi.encodeCall(pool.setPauseGuardian, (address(s.pgSafe)))
         );
 
         // Lockdown: updateDelay to the configured final delay.

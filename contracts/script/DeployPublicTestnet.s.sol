@@ -139,34 +139,104 @@ contract DeployPublicTestnet is Script {
     function _cfg() internal pure returns (TokenCfg[7] memory c) {
         // USD-pegged: registry dev 50 / stale 3600; agg div 50 / cum 200; band [0.90,1.10] (USDC [0.95,1.05]).
         c[0] = TokenCfg(
-            "USDC", 0x3BFa09fF6467639f0981948385bA1018Ac07d22C, 6, 50, 3600, 50, 200,
-            100_000_000, 95_000_000, 105_000_000, 300, 100_000_000
+            "USDC",
+            0x3BFa09fF6467639f0981948385bA1018Ac07d22C,
+            6,
+            50,
+            3600,
+            50,
+            200,
+            100_000_000,
+            95_000_000,
+            105_000_000,
+            300,
+            100_000_000
         );
         c[1] = TokenCfg(
-            "USDT", 0x342B6e4fD6896f0BCc80f8e9799e2bce65b9844B, 6, 50, 3600, 50, 200,
-            100_000_000, 90_000_000, 110_000_000, 300, 100_000_000
+            "USDT",
+            0x342B6e4fD6896f0BCc80f8e9799e2bce65b9844B,
+            6,
+            50,
+            3600,
+            50,
+            200,
+            100_000_000,
+            90_000_000,
+            110_000_000,
+            300,
+            100_000_000
         );
         c[2] = TokenCfg(
-            "PYUSD", 0xfdB2c86d010698401f0b969348DC58b6659B96a3, 6, 50, 3600, 50, 200,
-            100_000_000, 90_000_000, 110_000_000, 300, 100_000_000
+            "PYUSD",
+            0xfdB2c86d010698401f0b969348DC58b6659B96a3,
+            6,
+            50,
+            3600,
+            50,
+            200,
+            100_000_000,
+            90_000_000,
+            110_000_000,
+            300,
+            100_000_000
         );
         c[3] = TokenCfg(
-            "DAI", 0xFf7d46fe2f672BB6dc1586613303c7b012aCafFE, 18, 50, 3600, 50, 200,
-            100_000_000, 90_000_000, 110_000_000, 300, 100 ether
+            "DAI",
+            0xFf7d46fe2f672BB6dc1586613303c7b012aCafFE,
+            18,
+            50,
+            3600,
+            50,
+            200,
+            100_000_000,
+            90_000_000,
+            110_000_000,
+            300,
+            100 ether
         );
         // EURC: registry dev 150 / stale 14400; agg div 100 / cum 300; band [0.90,1.40] jump 500.
         c[4] = TokenCfg(
-            "EURC", 0xe08EF7Cb507706D8ff287A41Cf607Fb2d03473BD, 6, 150, 14_400, 100, 300,
-            108_000_000, 90_000_000, 140_000_000, 500, 86_000_000
+            "EURC",
+            0xe08EF7Cb507706D8ff287A41Cf607Fb2d03473BD,
+            6,
+            150,
+            14_400,
+            100,
+            300,
+            108_000_000,
+            90_000_000,
+            140_000_000,
+            500,
+            86_000_000
         );
         // soft-FX: registry dev 200 / stale 86400; agg div 200 / cum 500.
         c[5] = TokenCfg(
-            "TRYC", 0xD564EBcCFAE91f2E234b3074B0ad75eF7A820e61, 6, 200, 86_400, 200, 500,
-            2_900_000, 500_000, 15_000_000, 500, 1_800_000_000
+            "TRYC",
+            0xD564EBcCFAE91f2E234b3074B0ad75eF7A820e61,
+            6,
+            200,
+            86_400,
+            200,
+            500,
+            2_900_000,
+            500_000,
+            15_000_000,
+            500,
+            1_800_000_000
         );
         c[6] = TokenCfg(
-            "BRLC", 0xa13c0935A98e2c175b31A4054f698819271a8FfC, 6, 200, 86_400, 200, 500,
-            20_000_000, 5_000_000, 40_000_000, 500, 516_000_000
+            "BRLC",
+            0xa13c0935A98e2c175b31A4054f698819271a8FfC,
+            6,
+            200,
+            86_400,
+            200,
+            500,
+            20_000_000,
+            5_000_000,
+            40_000_000,
+            500,
+            516_000_000
         );
     }
 
@@ -348,12 +418,8 @@ contract DeployPublicTestnet is Script {
             d.freshGovernance = true;
             // L-8 sanity: executor is the Gov Safe, NOT address(0); the old
             // public-mnemonic Gov Safe has no role on the fresh Timelock.
-            require(
-                s.timelock.hasRole(s.timelock.EXECUTOR_ROLE(), d.govSafe), "fresh Timelock: Gov Safe not executor"
-            );
-            require(
-                s.timelock.hasRole(s.timelock.PROPOSER_ROLE(), d.govSafe), "fresh Timelock: Gov Safe not proposer"
-            );
+            require(s.timelock.hasRole(s.timelock.EXECUTOR_ROLE(), d.govSafe), "fresh Timelock: Gov Safe not executor");
+            require(s.timelock.hasRole(s.timelock.PROPOSER_ROLE(), d.govSafe), "fresh Timelock: Gov Safe not proposer");
             console2.log("  Governance Safe (oracle owner):", d.govSafe);
             console2.log("  Timelock (Pool/Registry target):", d.timelock);
             console2.log("");
@@ -415,13 +481,14 @@ contract DeployPublicTestnet is Script {
     function _listTokens(Deployed memory d, TokenCfg[7] memory cfg) internal {
         console2.log("--- Listing tokens (oracle = bounded primary feed) ---");
         for (uint256 i = 0; i < 7; i++) {
-            d.registry.listToken(
-                cfg[i].token,
-                cfg[i].tokenDecimals,
-                IChainlinkAggregator(d.boundedPrimary[i]),
-                cfg[i].registryDeviationBps,
-                cfg[i].registryMaxStaleSeconds
-            );
+            d.registry
+                .listToken(
+                    cfg[i].token,
+                    cfg[i].tokenDecimals,
+                    IChainlinkAggregator(d.boundedPrimary[i]),
+                    cfg[i].registryDeviationBps,
+                    cfg[i].registryMaxStaleSeconds
+                );
             console2.log(string.concat("  Listed ", cfg[i].symbol), cfg[i].token);
         }
         console2.log("");

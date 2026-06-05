@@ -311,7 +311,8 @@ contract PoolHandler is Test {
             vm.prank(actor);
             MintableERC20(token).approve(address(pool), amount);
             vm.prank(actor);
-            try pool.deposit(token, amount, 0, block.timestamp + 1) {} catch {
+            try pool.deposit(token, amount, 0, block.timestamp + 1) {}
+            catch {
                 return; // deposit itself failed (e.g. paused / deviation) — nothing to probe
             }
             uint256 received = MintableERC20(token).balanceOf(address(pool)) - poolBalBefore;
@@ -373,7 +374,8 @@ contract PoolHandler is Test {
             vm.prank(actor);
             MintableERC20(token).approve(address(pool), amount);
             vm.prank(actor);
-            try pool.deposit(token, amount, 0, block.timestamp + 1) {} catch {
+            try pool.deposit(token, amount, 0, block.timestamp + 1) {}
+            catch {
                 return;
             }
             uint256 received = MintableERC20(token).balanceOf(address(pool)) - poolBalBefore;

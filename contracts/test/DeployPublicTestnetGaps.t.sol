@@ -64,22 +64,63 @@ contract DeployPublicTestnetGapsTest is Test, DeployPublicTestnet {
     function _legacy() internal pure returns (Legacy[7] memory L) {
         // USDC — DeployArcoraDexV3: dev 50 / stale 3600; DeployOraclesP3: div 50 / cum 200;
         // MigrateFeedsToV2._bandFor(USDC): [0.95,1.05] jump 300; SEED_USDC = 100e6.
-        L[0] = Legacy(0x3BFa09fF6467639f0981948385bA1018Ac07d22C, 6, 50, 3600, 50, 200, 95_000_000, 105_000_000, 300, 100_000_000);
+        L[0] = Legacy(
+            0x3BFa09fF6467639f0981948385bA1018Ac07d22C, 6, 50, 3600, 50, 200, 95_000_000, 105_000_000, 300, 100_000_000
+        );
         // USDT — dev 50/3600; div 50/cum 200; _bandFor: [0.90,1.10] jump 300; SEED 100e6.
-        L[1] = Legacy(0x342B6e4fD6896f0BCc80f8e9799e2bce65b9844B, 6, 50, 3600, 50, 200, 90_000_000, 110_000_000, 300, 100_000_000);
+        L[1] = Legacy(
+            0x342B6e4fD6896f0BCc80f8e9799e2bce65b9844B, 6, 50, 3600, 50, 200, 90_000_000, 110_000_000, 300, 100_000_000
+        );
         // PYUSD — dev 50/3600; div 50/cum 200; _bandFor: [0.90,1.10] jump 300; SEED 100e6.
-        L[2] = Legacy(0xfdB2c86d010698401f0b969348DC58b6659B96a3, 6, 50, 3600, 50, 200, 90_000_000, 110_000_000, 300, 100_000_000);
+        L[2] = Legacy(
+            0xfdB2c86d010698401f0b969348DC58b6659B96a3, 6, 50, 3600, 50, 200, 90_000_000, 110_000_000, 300, 100_000_000
+        );
         // DAI — dev 50/3600; div 50/cum 200; _bandFor: [0.90,1.10] jump 300; SEED_DAI = 100e18.
-        L[3] = Legacy(0xFf7d46fe2f672BB6dc1586613303c7b012aCafFE, 18, 50, 3600, 50, 200, 90_000_000, 110_000_000, 300, 100 ether);
+        L[3] = Legacy(
+            0xFf7d46fe2f672BB6dc1586613303c7b012aCafFE, 18, 50, 3600, 50, 200, 90_000_000, 110_000_000, 300, 100 ether
+        );
         // EURC — DeployArcoraDexV3: dev 150 / stale 14400; DeployOraclesP3: div 100 / cum 300;
         // _bandFor(EURC): [0.90,1.40] jump 500; SEED_EURC = 86e6.
-        L[4] = Legacy(0xe08EF7Cb507706D8ff287A41Cf607Fb2d03473BD, 6, 150, 14_400, 100, 300, 90_000_000, 140_000_000, 500, 86_000_000);
+        L[4] = Legacy(
+            0xe08EF7Cb507706D8ff287A41Cf607Fb2d03473BD,
+            6,
+            150,
+            14_400,
+            100,
+            300,
+            90_000_000,
+            140_000_000,
+            500,
+            86_000_000
+        );
         // TRYC — dev 200 / stale 86400; div 200 / cum 500; _bandFor(TRYC): [0.005,0.15] jump 500;
         // SEED_TRYC = 1_800_000_000.
-        L[5] = Legacy(0xD564EBcCFAE91f2E234b3074B0ad75eF7A820e61, 6, 200, 86_400, 200, 500, 500_000, 15_000_000, 500, 1_800_000_000);
+        L[5] = Legacy(
+            0xD564EBcCFAE91f2E234b3074B0ad75eF7A820e61,
+            6,
+            200,
+            86_400,
+            200,
+            500,
+            500_000,
+            15_000_000,
+            500,
+            1_800_000_000
+        );
         // BRLC — dev 200 / stale 86400; div 200 / cum 500; _bandFor(BRLC): [0.05,0.40] jump 500;
         // SEED_BRLC = 516_000_000.
-        L[6] = Legacy(0xa13c0935A98e2c175b31A4054f698819271a8FfC, 6, 200, 86_400, 200, 500, 5_000_000, 40_000_000, 500, 516_000_000);
+        L[6] = Legacy(
+            0xa13c0935A98e2c175b31A4054f698819271a8FfC,
+            6,
+            200,
+            86_400,
+            200,
+            500,
+            5_000_000,
+            40_000_000,
+            500,
+            516_000_000
+        );
     }
 
     // ───────────────────────────────────────────────────────────────────────
@@ -116,10 +157,12 @@ contract DeployPublicTestnetGapsTest is Test, DeployPublicTestnet {
         // USDC (index 0): band [0.95, 1.05] at 8 decimals.
         TokenCfg memory c = cfg[0];
 
-        MockChainlinkFeedV2 boundedPrimary =
-            new MockChainlinkFeedV2(FEED_DECIMALS, c.initialPrice, keeperPrimary, address(this), c.minAnswer, c.maxAnswer, c.maxJumpBps, 0);
-        MockChainlinkFeedV2 secondary =
-            new MockChainlinkFeedV2(FEED_DECIMALS, c.initialPrice, keeperSecondary, address(this), c.minAnswer, c.maxAnswer, c.maxJumpBps, 0);
+        MockChainlinkFeedV2 boundedPrimary = new MockChainlinkFeedV2(
+            FEED_DECIMALS, c.initialPrice, keeperPrimary, address(this), c.minAnswer, c.maxAnswer, c.maxJumpBps, 0
+        );
+        MockChainlinkFeedV2 secondary = new MockChainlinkFeedV2(
+            FEED_DECIMALS, c.initialPrice, keeperSecondary, address(this), c.minAnswer, c.maxAnswer, c.maxJumpBps, 0
+        );
 
         AggWiring memory w = _aggWiring(c, address(boundedPrimary), address(secondary));
         OracleAggregator agg = new OracleAggregator(
@@ -135,7 +178,9 @@ contract DeployPublicTestnetGapsTest is Test, DeployPublicTestnet {
         // Bounds enforced on the live PRIMARY: an out-of-band push reverts.
         vm.prank(keeperPrimary);
         vm.expectRevert(
-            abi.encodeWithSelector(MockChainlinkFeedV2.AnswerOutOfBounds.selector, int256(200_000_000), c.minAnswer, c.maxAnswer)
+            abi.encodeWithSelector(
+                MockChainlinkFeedV2.AnswerOutOfBounds.selector, int256(200_000_000), c.minAnswer, c.maxAnswer
+            )
         );
         boundedPrimary.setAnswer(200_000_000); // $2.00 — above the 1.05 ceiling
 
@@ -173,10 +218,26 @@ contract DeployPublicTestnetGapsTest is Test, DeployPublicTestnet {
             cfg[i].token = address(tok);
             cfg[i].tokenDecimals = 6;
 
-            MockChainlinkFeedV2 boundedPrimary =
-                new MockChainlinkFeedV2(FEED_DECIMALS, cfg[i].initialPrice, keeperPrimary, deployer, cfg[i].minAnswer, cfg[i].maxAnswer, cfg[i].maxJumpBps, 0);
-            MockChainlinkFeedV2 secondary =
-                new MockChainlinkFeedV2(FEED_DECIMALS, cfg[i].initialPrice, keeperSecondary, deployer, cfg[i].minAnswer, cfg[i].maxAnswer, cfg[i].maxJumpBps, 0);
+            MockChainlinkFeedV2 boundedPrimary = new MockChainlinkFeedV2(
+                FEED_DECIMALS,
+                cfg[i].initialPrice,
+                keeperPrimary,
+                deployer,
+                cfg[i].minAnswer,
+                cfg[i].maxAnswer,
+                cfg[i].maxJumpBps,
+                0
+            );
+            MockChainlinkFeedV2 secondary = new MockChainlinkFeedV2(
+                FEED_DECIMALS,
+                cfg[i].initialPrice,
+                keeperSecondary,
+                deployer,
+                cfg[i].minAnswer,
+                cfg[i].maxAnswer,
+                cfg[i].maxJumpBps,
+                0
+            );
 
             d.boundedPrimary[i] = address(boundedPrimary);
             d.p3Secondary[i] = address(secondary);
@@ -192,8 +253,21 @@ contract DeployPublicTestnetGapsTest is Test, DeployPublicTestnet {
             d.p3_5Aggregator[i] = address(agg);
 
             // List the token on BOTH registries against the bounded primary.
-            d.registry.listToken(address(tok), 6, IChainlinkAggregator(address(boundedPrimary)), cfg[i].registryDeviationBps, cfg[i].registryMaxStaleSeconds);
-            liveLike.listToken(address(tok), 6, IChainlinkAggregator(address(boundedPrimary)), cfg[i].registryDeviationBps, cfg[i].registryMaxStaleSeconds);
+            d.registry
+                .listToken(
+                    address(tok),
+                    6,
+                    IChainlinkAggregator(address(boundedPrimary)),
+                    cfg[i].registryDeviationBps,
+                    cfg[i].registryMaxStaleSeconds
+                );
+            liveLike.listToken(
+                address(tok),
+                6,
+                IChainlinkAggregator(address(boundedPrimary)),
+                cfg[i].registryDeviationBps,
+                cfg[i].registryMaxStaleSeconds
+            );
         }
 
         // The decision the orchestrator uses to pick the re-point target.
@@ -236,17 +310,54 @@ contract DeployPublicTestnetGapsTest is Test, DeployPublicTestnet {
         for (uint256 i = 0; i < 7; i++) {
             string memory sym = cfg[i].symbol;
             assertEq(cfg[i].token, L[i].token, string.concat(sym, ": token drift"));
-            assertEq(uint256(cfg[i].tokenDecimals), uint256(L[i].tokenDecimals), string.concat(sym, ": decimals drift (DeployArcoraDexV3)"));
-            assertEq(uint256(cfg[i].registryDeviationBps), uint256(L[i].registryDeviationBps), string.concat(sym, ": registry deviationBps drift (DeployArcoraDexV3)"));
-            assertEq(uint256(cfg[i].registryMaxStaleSeconds), uint256(L[i].registryMaxStaleSeconds), string.concat(sym, ": registry maxStaleSeconds drift (DeployArcoraDexV3)"));
-            assertEq(uint256(cfg[i].aggDivergenceBps), uint256(L[i].aggDivergenceBps), string.concat(sym, ": aggregator divergenceBps drift (DeployOraclesP3/P3_5)"));
-            assertEq(uint256(cfg[i].guardCumulativeBps), uint256(L[i].guardCumulativeBps), string.concat(sym, ": guard cumulativeBps drift (DeployOraclesP3)"));
-            assertEq(cfg[i].minAnswer, L[i].minAnswer, string.concat(sym, ": band minAnswer drift (MigrateFeedsToV2._bandFor)"));
-            assertEq(cfg[i].maxAnswer, L[i].maxAnswer, string.concat(sym, ": band maxAnswer drift (MigrateFeedsToV2._bandFor)"));
-            assertEq(uint256(cfg[i].maxJumpBps), uint256(L[i].maxJumpBps), string.concat(sym, ": maxJumpBps drift (MigrateFeedsToV2._bandFor)"));
-            assertEq(cfg[i].targetSeed, L[i].targetSeed, string.concat(sym, ": targetSeed drift (DeployArcoraDexV3 SEED_*)"));
+            assertEq(
+                uint256(cfg[i].tokenDecimals),
+                uint256(L[i].tokenDecimals),
+                string.concat(sym, ": decimals drift (DeployArcoraDexV3)")
+            );
+            assertEq(
+                uint256(cfg[i].registryDeviationBps),
+                uint256(L[i].registryDeviationBps),
+                string.concat(sym, ": registry deviationBps drift (DeployArcoraDexV3)")
+            );
+            assertEq(
+                uint256(cfg[i].registryMaxStaleSeconds),
+                uint256(L[i].registryMaxStaleSeconds),
+                string.concat(sym, ": registry maxStaleSeconds drift (DeployArcoraDexV3)")
+            );
+            assertEq(
+                uint256(cfg[i].aggDivergenceBps),
+                uint256(L[i].aggDivergenceBps),
+                string.concat(sym, ": aggregator divergenceBps drift (DeployOraclesP3/P3_5)")
+            );
+            assertEq(
+                uint256(cfg[i].guardCumulativeBps),
+                uint256(L[i].guardCumulativeBps),
+                string.concat(sym, ": guard cumulativeBps drift (DeployOraclesP3)")
+            );
+            assertEq(
+                cfg[i].minAnswer,
+                L[i].minAnswer,
+                string.concat(sym, ": band minAnswer drift (MigrateFeedsToV2._bandFor)")
+            );
+            assertEq(
+                cfg[i].maxAnswer,
+                L[i].maxAnswer,
+                string.concat(sym, ": band maxAnswer drift (MigrateFeedsToV2._bandFor)")
+            );
+            assertEq(
+                uint256(cfg[i].maxJumpBps),
+                uint256(L[i].maxJumpBps),
+                string.concat(sym, ": maxJumpBps drift (MigrateFeedsToV2._bandFor)")
+            );
+            assertEq(
+                cfg[i].targetSeed, L[i].targetSeed, string.concat(sym, ": targetSeed drift (DeployArcoraDexV3 SEED_*)")
+            );
             // initialPrice + the band are mutually consistent (within bounds).
-            assertTrue(cfg[i].initialPrice >= cfg[i].minAnswer && cfg[i].initialPrice <= cfg[i].maxAnswer, string.concat(sym, ": initialPrice out of band"));
+            assertTrue(
+                cfg[i].initialPrice >= cfg[i].minAnswer && cfg[i].initialPrice <= cfg[i].maxAnswer,
+                string.concat(sym, ": initialPrice out of band")
+            );
         }
     }
 
@@ -256,10 +367,12 @@ contract DeployPublicTestnetGapsTest is Test, DeployPublicTestnet {
 
     function test_h2_writers_separated() public {
         TokenCfg memory c = _cfg()[0];
-        MockChainlinkFeedV2 boundedPrimary =
-            new MockChainlinkFeedV2(FEED_DECIMALS, c.initialPrice, keeperPrimary, address(this), c.minAnswer, c.maxAnswer, c.maxJumpBps, 0);
-        MockChainlinkFeedV2 secondary =
-            new MockChainlinkFeedV2(FEED_DECIMALS, c.initialPrice, keeperSecondary, address(this), c.minAnswer, c.maxAnswer, c.maxJumpBps, 0);
+        MockChainlinkFeedV2 boundedPrimary = new MockChainlinkFeedV2(
+            FEED_DECIMALS, c.initialPrice, keeperPrimary, address(this), c.minAnswer, c.maxAnswer, c.maxJumpBps, 0
+        );
+        MockChainlinkFeedV2 secondary = new MockChainlinkFeedV2(
+            FEED_DECIMALS, c.initialPrice, keeperSecondary, address(this), c.minAnswer, c.maxAnswer, c.maxJumpBps, 0
+        );
         assertEq(boundedPrimary.writer(), keeperPrimary, "primary writer");
         assertEq(secondary.writer(), keeperSecondary, "secondary writer");
         assertTrue(keeperPrimary != keeperSecondary, "writers not separated");

@@ -103,7 +103,9 @@ contract SweepProtocolFees is Script {
             sweeper == owner,
             "SweepProtocolFees: broadcaster is NOT the Pool owner. On the deferred-governance testnet use the deployer key; if the Pool is Timelock-owned, route the sweep through a Gov-Safe Timelock batch (see header)."
         );
-        require(!pool.paused(), "SweepProtocolFees: Pool is paused (whenNotPaused gate, I-3) -- unpause before sweeping");
+        require(
+            !pool.paused(), "SweepProtocolFees: Pool is paused (whenNotPaused gate, I-3) -- unpause before sweeping"
+        );
 
         vm.startBroadcast(sweeperKey);
         (uint256 tokensSwept, uint256 tokensSkipped) = _sweepAll(pool, treasury, true);

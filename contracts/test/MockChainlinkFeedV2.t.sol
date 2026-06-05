@@ -223,8 +223,8 @@ contract MockChainlinkFeedV2Test is Test {
         vm.warp(block.timestamp + 600);
         vm.prank(writer);
         // 0.90e8 is below LO (0.95e8)
-        vm.expectRevert(abi.encodeWithSelector(MockChainlinkFeedV2.AnswerOutOfBounds.selector, int256(0.90e8), LO, HI));
-        f.setAnswer(0.90e8);
+        vm.expectRevert(abi.encodeWithSelector(MockChainlinkFeedV2.AnswerOutOfBounds.selector, int256(0.9e8), LO, HI));
+        f.setAnswer(0.9e8);
     }
 
     function test_h2_setAnswer_revertsAboveMaxBand() public {
@@ -232,8 +232,8 @@ contract MockChainlinkFeedV2Test is Test {
         vm.warp(block.timestamp + 600);
         vm.prank(writer);
         // 1.10e8 is above HI (1.05e8)
-        vm.expectRevert(abi.encodeWithSelector(MockChainlinkFeedV2.AnswerOutOfBounds.selector, int256(1.10e8), LO, HI));
-        f.setAnswer(1.10e8);
+        vm.expectRevert(abi.encodeWithSelector(MockChainlinkFeedV2.AnswerOutOfBounds.selector, int256(1.1e8), LO, HI));
+        f.setAnswer(1.1e8);
     }
 
     function test_h2_setAnswer_revertsOnMaxJump() public {

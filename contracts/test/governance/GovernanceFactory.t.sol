@@ -21,7 +21,9 @@ contract GovFactoryHarness {
         uint256 timelockMinDelay,
         bool useTestMnemonic
     ) external view returns (GovernanceFactory.Config memory) {
-        return GovernanceFactory.buildConfig(govOwners, govThreshold, pgOwners, pgThreshold, timelockMinDelay, useTestMnemonic);
+        return GovernanceFactory.buildConfig(
+            govOwners, govThreshold, pgOwners, pgThreshold, timelockMinDelay, useTestMnemonic
+        );
     }
 }
 

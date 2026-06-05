@@ -190,7 +190,8 @@ contract ArcoraDexPoolSecurityTest is Test {
 
         // List DAI with a very tight stale window (60s) but never deposit / seed its cache
         MockERC20 dai = new MockERC20("DAI", "DAI", 18);
-        MockChainlinkFeedV2 fDai = new MockChainlinkFeedV2(8, 100_000_000, DEPLOYER, DEPLOYER, 1, type(int256).max, 0, 0);
+        MockChainlinkFeedV2 fDai =
+            new MockChainlinkFeedV2(8, 100_000_000, DEPLOYER, DEPLOYER, 1, type(int256).max, 0, 0);
         vm.prank(DEPLOYER);
         reg.listToken(address(dai), 18, IChainlinkAggregator(address(fDai)), 50, 60); // 1-minute window
 

@@ -831,9 +831,7 @@ contract ArcoraDexPoolTest is Test {
         // which is what this regression covers. `RevertingDecimalsMockFeed`
         // remains a documented analogue of this failure mode.
         vm.mockCallRevert(
-            address(fUsdc),
-            abi.encodeWithSelector(IChainlinkAggregator.decimals.selector),
-            "decimals unavailable"
+            address(fUsdc), abi.encodeWithSelector(IChainlinkAggregator.decimals.selector), "decimals unavailable"
         );
 
         // totalReservesUSD() must not revert; cache fallback keeps NAV non-zero
