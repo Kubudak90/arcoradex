@@ -174,9 +174,55 @@ export class UpstashCooldownStore implements CooldownStore {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Fail-closed store. Returned in PRODUCTION when the cross-instance backend is
+// expected but unavailable (Upstash env unset, or @upstash/redis can't load).
+// Construction is cheap so module load / `next build` (which runs with
+// NODE_ENV=production) never throws; every OPERATION throws at request time, so
+// the faucet refuses to serve on a per-instance store instead of SILENTLY
+// re-opening M-3 (cross-instance rate-limit defeated). Dev/test still get the
+// in-memory fallback.
+// ---------------------------------------------------------------------------
+export class FailClosedStore implements CooldownStore {
+  constructor(private readonly reason: string) {}
+  private fail(): never {
+    throw new Error(this.reason);
+  }
+  async get(): Promise<number | undefined> {
+    return this.fail();
+  }
+  async set(): Promise<void> {
+    return this.fail();
+  }
+  async delete(): Promise<void> {
+    return this.fail();
+  }
+  async reserve(): Promise<boolean> {
+    return this.fail();
+  }
+  async release(): Promise<void> {
+    return this.fail();
+  }
+  async incrWithTtl(): Promise<number> {
+    return this.fail();
+  }
+  async decr(): Promise<void> {
+    return this.fail();
+  }
+}
+
+// Mirrors the route's L-11 production check (kept local to avoid an import
+// cycle: route.ts imports from this module).
+function isProductionEnv(): boolean {
+  return process.env.NODE_ENV === "production" || process.env.VERCEL_ENV === "production";
+}
+
 // Backend selection. Reads env at call time so a test can flip it; in practice
-// this is evaluated once per cold start. Returns the Upstash adapter when both
-// REST credentials are present, else the in-memory fallback.
+// this is evaluated once per cold start.
+//   - Upstash REST creds present -> cross-instance adapter (fail closed if the
+//     client can't load, e.g. dep missing -> `pnpm add @upstash/redis`).
+//   - Production WITHOUT creds    -> FailClosedStore (never silently per-instance).
+//   - Dev/test                    -> in-memory fallback.
 export function createCooldownStore(): CooldownStore {
   const url = process.env.UPSTASH_REDIS_REST_URL;
   const token = process.env.UPSTASH_REDIS_REST_TOKEN;
@@ -185,10 +231,24 @@ export function createCooldownStore(): CooldownStore {
     // Memory path (dev/test) never needs @upstash/redis resolvable at build
     // time. Typed via UpstashRedisLike — we don't depend on the package's own
     // types here so a test/typecheck without it installed still compiles.
-    type RedisCtor = new (cfg: { url: string; token: string }) => UpstashRedisLike;
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const mod = require("@upstash/redis") as { Redis: RedisCtor };
-    return new UpstashCooldownStore(new mod.Redis({ url, token }));
+    try {
+      type RedisCtor = new (cfg: { url: string; token: string }) => UpstashRedisLike;
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const mod = require("@upstash/redis") as { Redis: RedisCtor };
+      return new UpstashCooldownStore(new mod.Redis({ url, token }));
+    } catch (e) {
+      // Env says "use Upstash" but the client can't load (dep not installed —
+      // run `pnpm add @upstash/redis`). FAIL CLOSED rather than fall through to
+      // the per-instance Memory store, which would silently re-open M-3.
+      return new FailClosedStore(
+        `M-3: UPSTASH_REDIS_REST_URL/TOKEN are set but the @upstash/redis client failed to load (${(e as Error).message}). Run \`pnpm add @upstash/redis\`. Refusing to serve the faucet on a per-instance store.`,
+      );
+    }
+  }
+  if (isProductionEnv()) {
+    return new FailClosedStore(
+      "M-3: a cross-instance faucet store is required in production. Set UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN (and `pnpm add @upstash/redis`). Refusing to serve the faucet on a per-instance store.",
+    );
   }
   return new MemoryCooldownStore();
 }

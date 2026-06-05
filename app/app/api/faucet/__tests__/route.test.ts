@@ -37,6 +37,17 @@ vi.mock("@arcoralabs/dex-sdk", () => ({
   arcTestnet: { id: 5042002, name: "Arc Testnet" },
 }));
 
+// Route tests exercise the HANDLER with a working store. The real backend
+// selection — including M-3 production fail-closed when no cross-instance store
+// is configured — is unit-tested in lib/__tests__/faucet-rate-limit.test.ts.
+// Force the in-memory store here so prod-env route tests don't fail closed on
+// the (deploy-time) @upstash/redis dependency, which the route loads via a CJS
+// require() that vi.mock cannot intercept.
+vi.mock("@/lib/faucet-rate-limit", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/faucet-rate-limit")>();
+  return { ...actual, createCooldownStore: () => new actual.MemoryCooldownStore() };
+});
+
 const RECIPIENT = "0x1111111111111111111111111111111111111111";
 const IP = "203.0.113.9";
 
@@ -178,6 +189,8 @@ describe("L-11: origin allowlist fail-closed in production", () => {
     mutableEnv.NODE_ENV = ORIGINAL_NODE_ENV;
     if (ORIGINAL_VERCEL_ENV === undefined) delete process.env.VERCEL_ENV;
     else process.env.VERCEL_ENV = ORIGINAL_VERCEL_ENV;
+    delete process.env.UPSTASH_REDIS_REST_URL;
+    delete process.env.UPSTASH_REDIS_REST_TOKEN;
   });
 
   it("prod (VERCEL_ENV=production) + unset allowlist → 403", async () => {
@@ -219,6 +232,8 @@ describe("L-11: origin allowlist fail-closed in production", () => {
   it("prod + matching allowlist origin → allowed", async () => {
     process.env.VERCEL_ENV = "production";
     process.env.NEXT_PUBLIC_APP_URL = "https://app.test";
+    // createCooldownStore is mocked to the in-memory store (see top), so this
+    // isolates the L-11 ORIGIN check from M-3 backend selection.
     const { POST } = await loadRoute();
 
     const req = new Request("https://app.test/api/faucet", {

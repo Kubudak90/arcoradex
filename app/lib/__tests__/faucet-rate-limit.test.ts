@@ -1,7 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   COOLDOWN_MS,
   MemoryCooldownStore,
+  FailClosedStore,
+  createCooldownStore,
   checkRateLimit,
   consumeHourlyBudget,
   extractClientIp,
@@ -198,5 +200,44 @@ describe("extractClientIp", () => {
   it("ignores empty x-forwarded-for and falls back", () => {
     const ip = extractClientIp(mkReq({ "x-forwarded-for": "", "x-real-ip": "198.51.100.7" }));
     expect(ip).toBe("198.51.100.7");
+  });
+});
+
+describe("createCooldownStore backend selection (M-3 fail-closed)", () => {
+  const SAVED = {
+    url: process.env.UPSTASH_REDIS_REST_URL,
+    token: process.env.UPSTASH_REDIS_REST_TOKEN,
+    vercel: process.env.VERCEL_ENV,
+  };
+  afterEach(() => {
+    // Restore env so other suites are unaffected.
+    const restore = (k: "UPSTASH_REDIS_REST_URL" | "UPSTASH_REDIS_REST_TOKEN" | "VERCEL_ENV", v: string | undefined) => {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    };
+    restore("UPSTASH_REDIS_REST_URL", SAVED.url);
+    restore("UPSTASH_REDIS_REST_TOKEN", SAVED.token);
+    restore("VERCEL_ENV", SAVED.vercel);
+  });
+
+  it("uses the in-memory store in dev/test when no Upstash creds are set", () => {
+    delete process.env.UPSTASH_REDIS_REST_URL;
+    delete process.env.UPSTASH_REDIS_REST_TOKEN;
+    delete process.env.VERCEL_ENV;
+    expect(createCooldownStore()).toBeInstanceOf(MemoryCooldownStore);
+  });
+
+  it("FAILS CLOSED in production when no cross-instance backend is configured", async () => {
+    delete process.env.UPSTASH_REDIS_REST_URL;
+    delete process.env.UPSTASH_REDIS_REST_TOKEN;
+    process.env.VERCEL_ENV = "production";
+    const store = createCooldownStore();
+    // Must NOT silently use the per-instance Memory store (that would re-open M-3).
+    expect(store).toBeInstanceOf(FailClosedStore);
+    expect(store).not.toBeInstanceOf(MemoryCooldownStore);
+    // Every operation throws at request time, so the faucet refuses to serve.
+    await expect(store.get("k")).rejects.toThrow(/cross-instance faucet store is required/);
+    await expect(store.reserve("k", 1000)).rejects.toThrow(/cross-instance/);
+    await expect(store.incrWithTtl("k", 60)).rejects.toThrow(/cross-instance/);
   });
 });
