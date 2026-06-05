@@ -146,6 +146,46 @@ contract DeployPublicTestnet is Script {
         );
     }
 
+    /// @notice The constructor args for ONE token's OracleAggregator, derived
+    /// purely from the in-process address ledger + config. This is the single
+    /// WIRING DECISION that both the P3 (V1) and P3.5 (V2) aggregator-deploy
+    /// steps consume, and that the gap test exercises directly: every aggregator's
+    /// PRIMARY MUST be the bounded H-2 feed (GAP #5), its SECONDARY the P3 secondary,
+    /// and its divergence cap the per-token `_cfg()` value.
+    struct AggWiring {
+        address primary; // GAP #5: bounded H-2 feed from step 2
+        address secondary; // P3 secondary feed from step 5
+        uint16 divergenceBps; // per-token _cfg() divergence cap
+        uint32 maxStaleSeconds; // AGG_MAX_STALE_SECONDS
+    }
+
+    /// @dev SINGLE SOURCE OF TRUTH for "given the deployed feeds, what does each
+    /// aggregator get wired to?". `run()` (via `_deployP3Layer` / `_deployP3_5Aggregators`)
+    /// and the coupling test both call this, so a regression in the wiring (e.g.
+    /// pointing PRIMARY at an old unbounded feed instead of `boundedPrimary[i]`)
+    /// is caught in CI. Pure: takes the resolved feed addresses + config in, no state.
+    function _aggWiring(TokenCfg memory c, address boundedPrimary_, address p3Secondary_)
+        internal
+        pure
+        returns (AggWiring memory)
+    {
+        return AggWiring({
+            primary: boundedPrimary_, // GAP #5: bounded feed, NOT the old unbounded one
+            secondary: p3Secondary_,
+            divergenceBps: c.aggDivergenceBps,
+            maxStaleSeconds: AGG_MAX_STALE_SECONDS
+        });
+    }
+
+    /// @dev SINGLE SOURCE OF TRUTH for the re-point target (GAP #2): the FRESH
+    /// Registry deployed in step 1 — NOT the hardcoded LIVE Registry that the
+    /// legacy P3_5BatchBuilder used. `run()` (via `_repointRegistry`) and the
+    /// coupling test both resolve the target through this helper, so a regression
+    /// that re-points the wrong Registry fails CI.
+    function _repointTarget(Deployed memory d) internal pure returns (ArcoraDexRegistry) {
+        return d.registry;
+    }
+
     // ── In-process address ledger (chained between steps; no log scraping) ───
     struct Deployed {
         ArcoraDexRegistry registry;
@@ -264,7 +304,7 @@ contract DeployPublicTestnet is Script {
                 FEED_DECIMALS,
                 cfg[i].initialPrice,
                 keeper, // writer = primary keeper
-                deployer, // owner = deployer (handed off in DeployGovernanceP2 / future rotation)
+                deployer, // owner = deployer for now; feed ownership is handed to the Gov Safe in a later rotation (see P3 secondaries below, which transferOwnership -> GOVERNANCE_SAFE)
                 cfg[i].minAnswer,
                 cfg[i].maxAnswer,
                 cfg[i].maxJumpBps,
@@ -352,11 +392,14 @@ contract DeployPublicTestnet is Script {
 
             // GAP #5: aggregator PRIMARY = the BOUNDED primary feed from step 2,
             // NOT the old unbounded 2026-05-10 feed. Secondary = this fresh feed.
+            // The wiring decision is routed through `_aggWiring` (the shared,
+            // test-coupled helper) so a regression here fails CI.
+            AggWiring memory w = _aggWiring(cfg[i], d.boundedPrimary[i], address(secondary));
             OracleAggregator agg = new OracleAggregator(
-                IChainlinkAggregator(d.boundedPrimary[i]),
-                IChainlinkAggregator(address(secondary)),
-                cfg[i].aggDivergenceBps,
-                AGG_MAX_STALE_SECONDS,
+                IChainlinkAggregator(w.primary),
+                IChainlinkAggregator(w.secondary),
+                w.divergenceBps,
+                w.maxStaleSeconds,
                 deployer
             );
 
@@ -384,11 +427,13 @@ contract DeployPublicTestnet is Script {
         console2.log("--- P3.5 V2 aggregators (owner = Gov Safe directly) ---");
         for (uint256 i = 0; i < 7; i++) {
             // GAP #5: PRIMARY = bounded primary (H-2 bounds in the live price path).
+            // Wiring routed through the shared, test-coupled `_aggWiring` helper.
+            AggWiring memory w = _aggWiring(cfg[i], d.boundedPrimary[i], d.p3Secondary[i]);
             OracleAggregator agg = new OracleAggregator(
-                IChainlinkAggregator(d.boundedPrimary[i]),
-                IChainlinkAggregator(d.p3Secondary[i]),
-                cfg[i].aggDivergenceBps,
-                AGG_MAX_STALE_SECONDS,
+                IChainlinkAggregator(w.primary),
+                IChainlinkAggregator(w.secondary),
+                w.divergenceBps,
+                w.maxStaleSeconds,
                 GOVERNANCE_SAFE
             );
             // N-6: post-deploy constructor verification (catches arg off-by-one).
@@ -407,10 +452,14 @@ contract DeployPublicTestnet is Script {
     // ─────────────────────────────────────────────────────────────────────────
     function _repointRegistry(Deployed memory d, TokenCfg[7] memory cfg) internal {
         console2.log("--- Re-point NEW Registry -> P3.5 aggregators (deployer setOracle, GAP #2) ---");
+        // GAP #2: target resolved through the shared, test-coupled `_repointTarget`
+        // (the FRESH Registry from step 1), NOT the hardcoded live Registry that
+        // the legacy P3_5BatchBuilder used.
+        ArcoraDexRegistry target = _repointTarget(d);
         for (uint256 i = 0; i < 7; i++) {
-            d.registry.setOracle(cfg[i].token, IChainlinkAggregator(d.p3_5Aggregator[i]));
+            target.setOracle(cfg[i].token, IChainlinkAggregator(d.p3_5Aggregator[i]));
             require(
-                address(d.registry.tokenInfo(cfg[i].token).usdOracle) == d.p3_5Aggregator[i],
+                address(target.tokenInfo(cfg[i].token).usdOracle) == d.p3_5Aggregator[i],
                 "Registry not re-pointed to P3.5 agg"
             );
             console2.log(string.concat("  ", cfg[i].symbol, " usdOracle ->"), d.p3_5Aggregator[i]);
