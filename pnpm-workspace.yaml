@@ -1,3 +1,26 @@
 packages:
   - app
   - packages/*
+
+# Dependency overrides. Moved here from package.json's `pnpm.overrides`: pnpm v11
+# no longer reads the `pnpm` field in package.json — settings now live in
+# pnpm-workspace.yaml (https://pnpm.io/settings). Values mirror the security-audit
+# pins; keep this block in sync with pnpm-lock.yaml's recorded `overrides`.
+overrides:
+  viem: 2.48.8
+  wagmi: 2.19.5
+  esbuild@<=0.24.2: '>=0.25.0'
+  happy-dom@<20.0.0: '>=20.0.0'
+  happy-dom@<20.8.9: '>=20.8.9'
+  happy-dom@>=15.10.0 <=20.8.7: '>=20.8.8'
+  vite@<=6.4.1: '>=6.4.2 <7'
+  axios@>=1.0.0 <1.15.0: '>=1.15.0'
+  postcss@<8.5.10: '>=8.5.10'
+  axios@>=1.0.0 <1.15.1: '>=1.15.1'
+  axios@>=1.0.0 <1.15.2: '>=1.15.2'
+  next@>=16.0.0 <16.2.5: '>=16.2.5'
+  next@>=16.0.0 <16.2.6: '>=16.2.6'
+  vite-node: 2.1.9
+  vitest: 2.1.9
+  ws@>=8.0.0 <8.20.1: '>=8.20.1'
+  brace-expansion@>=5.0.0 <5.0.6: '>=5.0.6'
