@@ -454,6 +454,8 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         uint256 balBefore = IERC20(token).balanceOf(address(this));
         IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
         uint256 received = IERC20(token).balanceOf(address(this)) - balBefore;
+        // Justification [incorrect-equality]: received == 0 detects a transfer that delivered nothing (e.g. a fee-on-transfer token taking the full amount); exact zero is the correct boundary since any positive amount is a valid deposit, so strict equality is intentional and safe.
+        // slither-disable-next-line incorrect-equality
         if (received == 0) revert ZeroAmount();
 
         // Justification [divide-before-multiply]: usdIn intentionally truncates to a USD-normalised integer before the LP ratio multiplication; reordering would overflow uint256 for large token amounts and large prices.
@@ -578,6 +580,8 @@ contract ArcoraDexPool is IArcoraDexPool, Ownable2Step, ReentrancyGuard {
         uint256 inBalBefore = IERC20(tokenIn).balanceOf(address(this));
         IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), amountIn);
         uint256 receivedIn = IERC20(tokenIn).balanceOf(address(this)) - inBalBefore;
+        // Justification [incorrect-equality]: receivedIn == 0 detects a transfer that delivered nothing (e.g. a fee-on-transfer token taking the full amount); exact zero is the correct boundary since any positive amount is a valid swap input, so strict equality is intentional and safe.
+        // slither-disable-next-line incorrect-equality
         if (receivedIn == 0) revert ZeroAmount();
 
         uint256 protFee;
