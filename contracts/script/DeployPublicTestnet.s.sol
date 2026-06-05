@@ -14,15 +14,26 @@ import {IChainlinkAggregator} from "../src/interfaces/IChainlinkAggregator.sol";
 import {MockChainlinkFeedV2} from "../src/testnet/MockChainlinkFeedV2.sol";
 import {OracleAggregator} from "../src/oracle/OracleAggregator.sol";
 import {CumulativeDeviationGuard} from "../src/oracle/CumulativeDeviationGuard.sol";
+import {GovernanceFactory} from "./GovernanceFactory.sol";
 
 /// @title DeployPublicTestnet — turnkey ArcoraDEX public-testnet (re)deploy
 /// @notice Single-execution orchestrator for the FRESH ArcoraDEX redeploy on Arc
 /// testnet (chainId 5042002). Runs the full validated sequence in ONE
 /// `forge script` broadcast, chaining every freshly-deployed address IN-PROCESS
 /// so the operator never hand-scrapes feed/aggregator addresses from broadcast
-/// logs between steps. Reuses the existing tokens + the existing public-mnemonic
-/// Governance Safe / Timelock (governance rotation is DEFERRED — no new
-/// governance is deployed here).
+/// logs between steps. Reuses the existing tokens.
+///
+/// GOVERNANCE — TWO MODES (M-1 audit fix):
+///   - FRESH (default for a real launch): when GOV_SAFE_OWNERS is provided (or
+///     the explicit GOV_USE_TEST_MNEMONIC=true opt-in is set), the orchestrator
+///     deploys a BRAND-NEW Gov Safe + Pause-Guardian Safe + Timelock from the
+///     env-provided owner ADDRESSES (via GovernanceFactory) and wires the fresh
+///     oracle layer to the NEW Gov Safe, with the Pool/Registry handoff target =
+///     the NEW Timelock. Because the fixed contracts need a fresh deploy anyway,
+///     this avoids rotating the old public-mnemonic governance.
+///   - REUSE (legacy): when no governance env is set, falls back to the existing
+///     public-mnemonic Gov Safe / Timelock constants below (kept for continuity;
+///     NOT for a real launch — see M-1).
 ///
 /// This consolidates the previously-manual chain:
 ///   DeployArcoraDexV3 (Registry/Pool/LP + setPool + list + bootstrap)
@@ -66,16 +77,29 @@ import {CumulativeDeviationGuard} from "../src/oracle/CumulativeDeviationGuard.s
 ///   DEPLOYER_PRIVATE_KEY  — broadcasts; must own the seed token balances + gas
 ///   KEEPER_EOA            — PRIMARY-feed writer (address, not key)
 ///   KEEPER_SECONDARY      — SECONDARY-feed writer (address; MUST differ from KEEPER_EOA, H-2)
+/// Governance env (FRESH mode — recommended for a real launch, M-1):
+///   GOV_SAFE_OWNERS       — comma-separated Gov Safe owner ADDRESSES
+///   GOV_SAFE_THRESHOLD    — uint signatures required for the Gov Safe
+///   PG_SAFE_OWNERS        — comma-separated Pause-Guardian owner ADDRESSES
+///   PG_SAFE_THRESHOLD     — uint signatures required for the PG Safe
+///   TIMELOCK_MIN_DELAY    — uint seconds (default 48h = 172800)
+///   (testnet-only opt-in: GOV_USE_TEST_MNEMONIC=true derives owners from the
+///    public Foundry mnemonic instead — loud warning + mainnet guard.)
+///   When NONE of the above governance env is set, the orchestrator falls back to
+///   REUSE mode (legacy public-mnemonic Gov Safe / Timelock constants).
 /// Optional env:
 ///   HANDOFF_GOVERNANCE    — if "true", transfer Pool+Registry ownership to the
-///                           existing Timelock and have the Gov Safe accept
+///                           (fresh or legacy) Timelock so the Gov Safe can accept
 ///                           (default: leave ownership with the deployer so the
 ///                           operator can stage the handoff separately). On a fork
 ///                           the orchestrator's revalidation drives this directly.
 contract DeployPublicTestnet is Script {
-    // ── Existing governance (REUSED — no new governance deployed) ────────────
-    address constant GOVERNANCE_SAFE = 0x715f669D79Cc72d6685F8724c0B86f7B53d7e624;
-    address payable constant TIMELOCK = payable(0x36444f653E7746d69aD5d91dA920f5Cd2F9C6E83);
+    // ── Legacy governance (REUSE mode fallback ONLY — see M-1) ───────────────
+    // Used only when NO fresh-governance env is supplied. These are the OLD
+    // public-mnemonic Gov Safe / Timelock; a real launch MUST use FRESH mode
+    // (GOV_SAFE_OWNERS) so these are never wired into a new deployment.
+    address constant LEGACY_GOVERNANCE_SAFE = 0x715f669D79Cc72d6685F8724c0B86f7B53d7e624;
+    address payable constant LEGACY_TIMELOCK = payable(0x36444f653E7746d69aD5d91dA920f5Cd2F9C6E83);
 
     // ── Pool params (match DeployArcoraDexV3) ────────────────────────────────
     uint16 constant SWAP_FEE_BPS = 5; // 0.05%
@@ -196,6 +220,13 @@ contract DeployPublicTestnet is Script {
         address[7] p3Aggregator; // step 3: V1 aggregators (primary=boundedPrimary)
         CumulativeDeviationGuard guard; // step 3
         address[7] p3_5Aggregator; // step 4: V2 aggregators (primary=boundedPrimary, secondary=p3Secondary)
+        // ── Governance targets (M-1): the oracle layer owner (Gov Safe) and the
+        // Pool/Registry handoff target (Timelock). In FRESH mode these are the
+        // newly-deployed addresses; in REUSE mode they are the LEGACY_* constants.
+        address govSafe; // oracle layer ownership target (Gov Safe)
+        address payable timelock; // Pool/Registry handoff target (Timelock)
+        address pgSafe; // Pause-Guardian Safe (FRESH mode only; address(0) in REUSE)
+        bool freshGovernance; // true when a NEW governance stack was deployed here
     }
 
     function run() external {
@@ -217,15 +248,24 @@ contract DeployPublicTestnet is Script {
         TokenCfg[7] memory cfg = _cfg();
         Deployed memory d;
 
+        // M-1: decide governance mode. FRESH when any governance env is supplied
+        // (GOV_SAFE_OWNERS or the GOV_USE_TEST_MNEMONIC opt-in); else REUSE legacy.
+        bool freshGov = _freshGovernanceRequested();
+
         console2.log("=== ArcoraDEX public-testnet turnkey (re)deploy ===");
         console2.log("Deployer:        ", deployer);
         console2.log("KEEPER primary:  ", keeperPrimary);
         console2.log("KEEPER secondary:", keeperSecondary);
-        console2.log("Governance Safe: ", GOVERNANCE_SAFE);
-        console2.log("Timelock:        ", TIMELOCK);
+        console2.log("Governance mode: ", freshGov ? "FRESH (new Gov Safe/Timelock)" : "REUSE (legacy constants)");
         console2.log("");
 
         vm.startBroadcast(deployerKey);
+
+        // 0. Governance: deploy a FRESH stack (M-1) or resolve the legacy
+        //    constants. Sets d.govSafe (oracle layer owner) + d.timelock
+        //    (Pool/Registry handoff target). Done FIRST so every downstream
+        //    ownership transfer targets the correct governance.
+        _resolveGovernance(d, freshGov);
 
         // 1. Registry + Pool (+ auto-LP) + setPool (I-1 reserve guard).
         _deployCore(d, deployer);
@@ -277,6 +317,58 @@ contract DeployPublicTestnet is Script {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
+    // Step 0 — governance resolution (M-1)
+    // ─────────────────────────────────────────────────────────────────────────
+    /// @notice FRESH mode is requested when ANY governance env is supplied:
+    /// GOV_SAFE_OWNERS (the real-owners default) OR the GOV_USE_TEST_MNEMONIC
+    /// opt-in. Otherwise the orchestrator stays on the legacy REUSE constants.
+    function _freshGovernanceRequested() internal view returns (bool) {
+        if (vm.envOr("GOV_USE_TEST_MNEMONIC", false)) return true;
+        // GOV_SAFE_OWNERS present (non-empty) => fresh, real-owners mode.
+        address[] memory empty = new address[](0);
+        address[] memory owners = vm.envOr("GOV_SAFE_OWNERS", ",", empty);
+        return owners.length > 0;
+    }
+
+    /// @dev Sets d.govSafe (oracle layer owner) and d.timelock (Pool/Registry
+    /// handoff target). FRESH: deploys a brand-new Gov Safe + Pause-Guardian Safe
+    /// + Timelock from env-provided owner ADDRESSES via GovernanceFactory, wiring
+    /// proposer=executor=Gov Safe (L-8), admin=0. The Timelock is deployed at the
+    /// final TIMELOCK_MIN_DELAY (the orchestrator does not self-drive the 3/5 Safe,
+    /// so there is no setup-delay-0 phase here — see _handoffGovernance for the
+    /// 48h-accept timing note). REUSE: resolves the legacy constants.
+    /// MUST run inside the deployer's active broadcast.
+    function _resolveGovernance(Deployed memory d, bool freshGov) internal {
+        if (freshGov) {
+            GovernanceFactory.Config memory gcfg = GovernanceFactory.resolveConfig();
+            GovernanceFactory.Stack memory s = GovernanceFactory.deploy(gcfg, gcfg.timelockMinDelay);
+            d.govSafe = address(s.govSafe);
+            d.timelock = payable(address(s.timelock));
+            d.pgSafe = address(s.pgSafe);
+            d.freshGovernance = true;
+            // L-8 sanity: executor is the Gov Safe, NOT address(0); the old
+            // public-mnemonic Gov Safe has no role on the fresh Timelock.
+            require(
+                s.timelock.hasRole(s.timelock.EXECUTOR_ROLE(), d.govSafe), "fresh Timelock: Gov Safe not executor"
+            );
+            require(
+                s.timelock.hasRole(s.timelock.PROPOSER_ROLE(), d.govSafe), "fresh Timelock: Gov Safe not proposer"
+            );
+            console2.log("  Governance Safe (oracle owner):", d.govSafe);
+            console2.log("  Timelock (Pool/Registry target):", d.timelock);
+            console2.log("");
+        } else {
+            d.govSafe = LEGACY_GOVERNANCE_SAFE;
+            d.timelock = LEGACY_TIMELOCK;
+            d.pgSafe = address(0);
+            d.freshGovernance = false;
+            console2.log("  REUSE legacy Governance Safe:", d.govSafe);
+            console2.log("  REUSE legacy Timelock:       ", d.timelock);
+            console2.log("");
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
     // Step 1 — core
     // ─────────────────────────────────────────────────────────────────────────
     function _deployCore(Deployed memory d, address deployer) internal {
@@ -304,7 +396,7 @@ contract DeployPublicTestnet is Script {
                 FEED_DECIMALS,
                 cfg[i].initialPrice,
                 keeper, // writer = primary keeper
-                deployer, // owner = deployer for now; feed ownership is handed to the Gov Safe in a later rotation (see P3 secondaries below, which transferOwnership -> GOVERNANCE_SAFE)
+                deployer, // owner = deployer for now; feed ownership is handed to the Gov Safe in a later rotation (see P3 secondaries below, which transferOwnership -> d.govSafe)
                 cfg[i].minAnswer,
                 cfg[i].maxAnswer,
                 cfg[i].maxJumpBps,
@@ -411,10 +503,11 @@ contract DeployPublicTestnet is Script {
             console2.log(string.concat("  ", cfg[i].symbol, " V1 agg:   "), address(agg));
 
             // Ownership → Gov Safe (Ownable2Step pending-accept), matching legacy P3.
-            agg.transferOwnership(GOVERNANCE_SAFE);
-            secondary.transferOwnership(GOVERNANCE_SAFE);
+            // M-1: d.govSafe is the FRESH Gov Safe (or the legacy constant in REUSE mode).
+            agg.transferOwnership(d.govSafe);
+            secondary.transferOwnership(d.govSafe);
         }
-        d.guard.transferOwnership(GOVERNANCE_SAFE);
+        d.guard.transferOwnership(d.govSafe);
         console2.log("  Secondary writers set to KEEPER_SECONDARY (H-2 separation, in-process).");
         console2.log("  P3 ownership transfer (pending Gov Safe acceptance) emitted.");
         console2.log("");
@@ -434,10 +527,10 @@ contract DeployPublicTestnet is Script {
                 IChainlinkAggregator(w.secondary),
                 w.divergenceBps,
                 w.maxStaleSeconds,
-                GOVERNANCE_SAFE
+                d.govSafe // M-1: FRESH Gov Safe (or legacy constant in REUSE mode)
             );
             // N-6: post-deploy constructor verification (catches arg off-by-one).
-            require(agg.owner() == GOVERNANCE_SAFE, "P3.5: wrong owner");
+            require(agg.owner() == d.govSafe, "P3.5: wrong owner");
             require(agg.MAX_STALE_SECONDS() == AGG_MAX_STALE_SECONDS, "P3.5: wrong stale");
             require(agg.maxDivergenceBps() == cfg[i].aggDivergenceBps, "P3.5: wrong div bps");
             require(address(agg.PRIMARY()) == d.boundedPrimary[i], "P3.5: primary != bounded feed (GAP#5)");
@@ -496,32 +589,49 @@ contract DeployPublicTestnet is Script {
                 "secondary writer != KEEPER_SECONDARY"
             );
             require(keeperSecondary != keeperPrimary, "writers not separated (H-2)");
+            // M-1: the P3.5 aggregator (oracle layer) is owned by d.govSafe (the
+            // FRESH Gov Safe in FRESH mode), NOT the legacy public-mnemonic Safe.
+            require(agg.owner() == d.govSafe, "P3.5 agg owner != resolved Gov Safe (M-1)");
+            if (d.freshGovernance) {
+                require(d.govSafe != LEGACY_GOVERNANCE_SAFE, "FRESH mode but Gov Safe == legacy (M-1)");
+            }
         }
+        // M-1: guard ownership pending-accept to d.govSafe (Ownable2Step).
+        require(d.guard.pendingOwner() == d.govSafe, "guard pendingOwner != resolved Gov Safe (M-1)");
         console2.log("All 7 registry oracles resolve via P3.5 agg whose PRIMARY == bounded feed: ok (GAP#5)");
         console2.log("Writers separated: primary == KEEPER_EOA, secondary == KEEPER_SECONDARY (H-2): ok");
+        console2.log("Oracle layer owner == resolved Gov Safe (M-1): ok");
         console2.log("NAV USD (1e18):", d.pool.totalReservesUSD());
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Step 8 — governance handoff (Pool/Registry ownership → existing Timelock)
+    // Step 8 — governance handoff (Pool/Registry ownership → Timelock)
     // ─────────────────────────────────────────────────────────────────────────
-    /// @dev Transfers Pool + Registry ownership to the EXISTING Timelock. The
-    /// Ownable2Step `acceptOwnership` must be executed by the Timelock itself
-    /// (it becomes pendingOwner), which requires a Gov-Safe-scheduled Timelock op.
-    /// Scheduling/accept is driven separately (or by the fork revalidation harness)
-    /// because it needs the 3/5 Gov Safe signatures; this step only performs the
+    /// @dev Transfers Pool + Registry ownership to d.timelock (the FRESH Timelock
+    /// in FRESH mode; the legacy constant in REUSE mode). The Ownable2Step
+    /// `acceptOwnership` must be executed by the Timelock itself (it becomes
+    /// pendingOwner), which requires a Gov-Safe-scheduled Timelock op. Scheduling/
+    /// accept is driven separately (or by the fork revalidation harness) because
+    /// it needs the 3/5 Gov Safe signatures; this step only performs the
     /// deployer-side transferOwnership so the run leaves a clean pending state.
+    ///
+    /// 48h-ACCEPT TIMING: the Gov Safe's acceptOwnership runs THROUGH the
+    /// Timelock, so it incurs the configured TIMELOCK_MIN_DELAY (default 48h).
+    /// To minimize the wait at launch, the operator can deploy with
+    /// TIMELOCK_MIN_DELAY=0, schedule+execute both accepts immediately, then
+    /// updateDelay to 48h afterward (the fork harness does exactly this).
     function _handoffGovernance(Deployed memory d, uint256 deployerKey) internal {
         console2.log("");
         console2.log("--- Governance handoff: transferOwnership(Pool, Registry) -> Timelock ---");
         vm.startBroadcast(deployerKey);
-        d.pool.transferOwnership(TIMELOCK);
-        d.registry.transferOwnership(TIMELOCK);
+        d.pool.transferOwnership(d.timelock);
+        d.registry.transferOwnership(d.timelock);
         vm.stopBroadcast();
-        console2.log("Pool pendingOwner  -> Timelock:", TIMELOCK);
-        console2.log("Registry pendingOwner -> Timelock:", TIMELOCK);
+        console2.log("Pool pendingOwner  -> Timelock:", d.timelock);
+        console2.log("Registry pendingOwner -> Timelock:", d.timelock);
         console2.log("NEXT: Gov Safe must schedule+execute Timelock ops calling");
-        console2.log("  Pool.acceptOwnership() and Registry.acceptOwnership() (3/5 Safe).");
+        console2.log("  Pool.acceptOwnership() and Registry.acceptOwnership() (Gov Safe threshold).");
+        console2.log("  NOTE: each accept incurs the Timelock delay (48h unless deployed at delay 0).");
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -534,6 +644,11 @@ contract DeployPublicTestnet is Script {
         console2.log("POOL_V3=", address(d.pool));
         console2.log("LP_V3=", address(d.lp));
         console2.log("GUARD=", address(d.guard));
+        console2.log("GOVERNANCE_SAFE=", d.govSafe);
+        console2.log("TIMELOCK=", d.timelock);
+        if (d.freshGovernance) {
+            console2.log("PAUSE_GUARDIAN_SAFE=", d.pgSafe);
+        }
         for (uint256 i = 0; i < 7; i++) {
             console2.log(string.concat("FEED_", cfg[i].symbol, "= "), d.boundedPrimary[i]);
             console2.log(string.concat("P3_SECONDARY_", cfg[i].symbol, "= "), d.p3Secondary[i]);
