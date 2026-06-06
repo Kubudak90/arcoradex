@@ -7,17 +7,15 @@ export interface ArcoraDexAddresses {
 }
 
 /**
- * Live V3-testnet addresses on Arc (chainId 5042002).
- * Recorded in:
- *   - docs/rollouts/2026-05-14-phase3-oracle.md     (P3 oracle layer)
- *   - docs/rollouts/2026-05-14-phase2-governance.md (Timelock/Safe owners)
- * V1 addresses (paused) are kept only in git history; see commit dae32d1 for
- * the original.
+ * Live public-testnet addresses on Arc (chainId 5042002).
+ * Deployed 2026-06-06 via DeployPublicTestnet.s.sol (fresh M-1 governance:
+ * Gov Safe 3/5 + Pause-Guardian 2/3 + 48h Timelock; H-2 separated keepers).
+ * Prior deployments are kept only in git history.
  */
 const ARC_TESTNET_V3: ArcoraDexAddresses = {
-  registry: "0x9914436E5245bF3c0d4D4338e0a8b8F5Ab5505aB",
-  pool:     "0x1ce1Ef94e7ebe70727BD69003d61A3F0c9A331bc",
-  lp:       "0x17B47173C457069E53B3B75Ef42773041B79523e",
+  registry: "0xc6D0FB58Bf2d529021A4E679F36Fe31842A97c97",
+  pool:     "0x532505501B1D789A724E9341B95aD9037aA1a3bf",
+  lp:       "0x8C286D963030E5218d08E2cf83F40c624b561155",
 };
 
 export const DEFAULT_ADDRESSES: Record<number, ArcoraDexAddresses> = {
