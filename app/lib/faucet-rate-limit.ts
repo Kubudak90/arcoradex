@@ -175,6 +175,82 @@ export class UpstashCooldownStore implements CooldownStore {
 }
 
 // ---------------------------------------------------------------------------
+// Dependency-free Upstash REST client. The cross-instance store talks to an
+// Upstash-compatible REST endpoint — hosted Upstash OR the self-hosted
+// serverless-redis-http ("SRH") gateway on the ops box. The official
+// `@upstash/redis` package is just a thin fetch wrapper over this same wire
+// protocol (POST the command as a JSON array with a Bearer token, read the
+// `{ result }` field), so we implement it inline instead of taking the
+// dependency. Why this matters: adding @upstash/redis as a direct app dependency
+// perturbs pnpm's peer-context resolution and forks `wagmi` into two
+// WagmiProvider instances (the app's wagmi key gains a `(@upstash/redis)` peer
+// marker the dex-sdk's does not), which crashes the /_not-found static prerender
+// with "useConfig must be used within WagmiProvider". No dep ⇒ no fork, and the
+// faucet still gets a real cross-instance backend in production. This also means
+// createCooldownStore can no longer fail to load the client at runtime.
+export class FetchUpstashRedis implements UpstashRedisLike {
+  constructor(
+    private readonly url: string,
+    private readonly token: string,
+  ) {}
+
+  // Upstash REST: POST the command as a JSON array to the base URL with a Bearer
+  // token; the body is `{ "result": <value> }` on success or `{ "error": ... }`.
+  private async command(args: (string | number)[]): Promise<unknown> {
+    const res = await fetch(this.url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${this.token}`,
+        "Content-Type": "application/json",
+      },
+      // Coerce to strings so numeric args round-trip identically to the official
+      // client (Redis stores everything as strings anyway).
+      body: JSON.stringify(args.map((a) => String(a))),
+      cache: "no-store",
+    });
+    if (!res.ok) {
+      throw new Error(`Upstash REST ${args[0]} failed: HTTP ${res.status}`);
+    }
+    const json = (await res.json()) as { result?: unknown; error?: string };
+    if (json.error) throw new Error(`Upstash REST ${args[0]} error: ${json.error}`);
+    return json.result ?? null;
+  }
+
+  async get(key: string): Promise<unknown> {
+    return this.command(["GET", key]);
+  }
+
+  async set(
+    key: string,
+    value: string | number,
+    opts?: { nx?: boolean; px?: number },
+  ): Promise<unknown> {
+    const args: (string | number)[] = ["SET", key, value];
+    if (opts?.nx) args.push("NX");
+    if (opts?.px !== undefined) args.push("PX", opts.px);
+    // Returns "OK" when set, null when NX found an existing key — exactly what
+    // UpstashCooldownStore.reserve() checks for.
+    return this.command(args);
+  }
+
+  async del(...keys: string[]): Promise<unknown> {
+    return this.command(["DEL", ...keys]);
+  }
+
+  async incr(key: string): Promise<number> {
+    return Number(await this.command(["INCR", key]));
+  }
+
+  async decr(key: string): Promise<number> {
+    return Number(await this.command(["DECR", key]));
+  }
+
+  async expire(key: string, seconds: number): Promise<unknown> {
+    return this.command(["EXPIRE", key, seconds]);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Fail-closed store. Returned in PRODUCTION when the cross-instance backend is
 // expected but unavailable (Upstash env unset, or @upstash/redis can't load).
 // Construction is cheap so module load / `next build` (which runs with
@@ -219,35 +295,24 @@ function isProductionEnv(): boolean {
 
 // Backend selection. Reads env at call time so a test can flip it; in practice
 // this is evaluated once per cold start.
-//   - Upstash REST creds present -> cross-instance adapter (fail closed if the
-//     client can't load, e.g. dep missing -> `pnpm add @upstash/redis`).
+//   - Upstash REST creds present -> cross-instance adapter (dependency-free
+//     fetch client; no npm dep to install or fail to load).
 //   - Production WITHOUT creds    -> FailClosedStore (never silently per-instance).
 //   - Dev/test                    -> in-memory fallback.
 export function createCooldownStore(): CooldownStore {
   const url = process.env.UPSTASH_REDIS_REST_URL;
   const token = process.env.UPSTASH_REDIS_REST_TOKEN;
   if (url && token) {
-    // Lazy require so the dependency is only loaded when configured, and the
-    // Memory path (dev/test) never needs @upstash/redis resolvable at build
-    // time. Typed via UpstashRedisLike — we don't depend on the package's own
-    // types here so a test/typecheck without it installed still compiles.
-    try {
-      type RedisCtor = new (cfg: { url: string; token: string }) => UpstashRedisLike;
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const mod = require("@upstash/redis") as { Redis: RedisCtor };
-      return new UpstashCooldownStore(new mod.Redis({ url, token }));
-    } catch (e) {
-      // Env says "use Upstash" but the client can't load (dep not installed —
-      // run `pnpm add @upstash/redis`). FAIL CLOSED rather than fall through to
-      // the per-instance Memory store, which would silently re-open M-3.
-      return new FailClosedStore(
-        `M-3: UPSTASH_REDIS_REST_URL/TOKEN are set but the @upstash/redis client failed to load (${(e as Error).message}). Run \`pnpm add @upstash/redis\`. Refusing to serve the faucet on a per-instance store.`,
-      );
-    }
+    // Cross-instance + atomic backend over the Upstash REST protocol, via the
+    // built-in fetch client above. No dynamic require / no @upstash/redis dep,
+    // so this can no longer fail-closed merely because a package wasn't
+    // installed at deploy time — the previous deferral left the live faucet
+    // returning 500s (creds set, package absent -> require threw).
+    return new UpstashCooldownStore(new FetchUpstashRedis(url, token));
   }
   if (isProductionEnv()) {
     return new FailClosedStore(
-      "M-3: a cross-instance faucet store is required in production. Set UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN (and `pnpm add @upstash/redis`). Refusing to serve the faucet on a per-instance store.",
+      "M-3: a cross-instance faucet store is required in production. Set UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN. Refusing to serve the faucet on a per-instance store.",
     );
   }
   return new MemoryCooldownStore();
