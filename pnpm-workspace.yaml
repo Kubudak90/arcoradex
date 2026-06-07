@@ -2,6 +2,22 @@ packages:
   - app
   - packages/*
 
+# pnpm v10+ blocks dependency lifecycle scripts by default (supply-chain
+# hardening). `allowBuilds` (v10.26+, replaces onlyBuiltDependencies) records an
+# explicit per-package decision; leaving any package undecided makes `pnpm -r
+# build` fail its pre-build deps-status check with ERR_PNPM_IGNORED_BUILDS.
+# All of these are either optional native perf addons (bufferutil,
+# utf-8-validate), ship prebuilt platform binaries via optional deps (esbuild,
+# sharp, unrs-resolver), or have a pure-JS fallback (keccak) — none need to
+# compile from source for this app to build or run, so we disallow all.
+allowBuilds:
+  bufferutil: false
+  esbuild: false
+  keccak: false
+  sharp: false
+  unrs-resolver: false
+  utf-8-validate: false
+
 # Dependency overrides. Moved here from package.json's `pnpm.overrides`: pnpm v11
 # no longer reads the `pnpm` field in package.json — settings now live in
 # pnpm-workspace.yaml (https://pnpm.io/settings). Values mirror the security-audit

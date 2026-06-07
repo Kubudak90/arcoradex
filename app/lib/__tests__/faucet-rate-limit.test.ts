@@ -1,8 +1,10 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   COOLDOWN_MS,
   MemoryCooldownStore,
   FailClosedStore,
+  UpstashCooldownStore,
+  FetchUpstashRedis,
   createCooldownStore,
   checkRateLimit,
   consumeHourlyBudget,
@@ -239,5 +241,94 @@ describe("createCooldownStore backend selection (M-3 fail-closed)", () => {
     await expect(store.get("k")).rejects.toThrow(/cross-instance faucet store is required/);
     await expect(store.reserve("k", 1000)).rejects.toThrow(/cross-instance/);
     await expect(store.incrWithTtl("k", 60)).rejects.toThrow(/cross-instance/);
+  });
+
+  it("uses the cross-instance Upstash store (NOT fail-closed) when REST creds are set", () => {
+    process.env.UPSTASH_REDIS_REST_URL = "http://example.test:18079";
+    process.env.UPSTASH_REDIS_REST_TOKEN = "tok";
+    process.env.VERCEL_ENV = "production";
+    const store = createCooldownStore();
+    // Regression for the deferred-dep bug: creds present must yield a real
+    // cross-instance backend, not a FailClosedStore (which the old dynamic
+    // `require("@upstash/redis")` produced when the package wasn't installed,
+    // 500-ing the live faucet).
+    expect(store).toBeInstanceOf(UpstashCooldownStore);
+    expect(store).not.toBeInstanceOf(FailClosedStore);
+  });
+});
+
+describe("FetchUpstashRedis (dependency-free Upstash REST client)", () => {
+  function mockFetch(result: unknown) {
+    const calls: { url: string; body: unknown; auth: string | null }[] = [];
+    const fn = vi.fn(async (url: string, init: RequestInit) => {
+      calls.push({
+        url,
+        body: JSON.parse(init.body as string),
+        auth: new Headers(init.headers).get("authorization"),
+      });
+      return new Response(JSON.stringify({ result }), { status: 200 });
+    });
+    return { fn, calls };
+  }
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("encodes SET ... NX PX as an Upstash command array with a Bearer token", async () => {
+    const { fn, calls } = mockFetch("OK");
+    vi.stubGlobal("fetch", fn);
+    const redis = new FetchUpstashRedis("http://srh.test:18079", "secret-token");
+    const res = await redis.set("k", 1717000000000, { nx: true, px: 60000 });
+    expect(res).toBe("OK");
+    expect(calls[0]!.url).toBe("http://srh.test:18079");
+    expect(calls[0]!.auth).toBe("Bearer secret-token");
+    // All args stringified, NX/PX appended in order — matches `SET k v NX PX 60000`.
+    expect(calls[0]!.body).toEqual(["SET", "k", "1717000000000", "NX", "PX", "60000"]);
+  });
+
+  it("reserve() returns true via UpstashCooldownStore when SET NX succeeds, false when key exists", async () => {
+    // SET NX -> "OK": slot acquired.
+    const ok = mockFetch("OK");
+    vi.stubGlobal("fetch", ok.fn);
+    const acquired = await new UpstashCooldownStore(
+      new FetchUpstashRedis("http://srh.test", "t"),
+    ).reserve("inflight:k", 60000);
+    expect(acquired).toBe(true);
+
+    // SET NX -> null: key already held, slot denied.
+    const denied = mockFetch(null);
+    vi.stubGlobal("fetch", denied.fn);
+    const blocked = await new UpstashCooldownStore(
+      new FetchUpstashRedis("http://srh.test", "t"),
+    ).reserve("inflight:k", 60000);
+    expect(blocked).toBe(false);
+  });
+
+  it("incrWithTtl sets the window TTL only on the first increment", async () => {
+    const calls: unknown[][] = [];
+    let n = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        const body = JSON.parse(init.body as string) as unknown[];
+        calls.push(body);
+        // INCR returns the new counter; EXPIRE returns 1.
+        const result = body[0] === "INCR" ? ++n : 1;
+        return new Response(JSON.stringify({ result }), { status: 200 });
+      }),
+    );
+    const store = new UpstashCooldownStore(new FetchUpstashRedis("http://srh.test", "t"));
+    await store.incrWithTtl("budget", 3600); // n=1 -> EXPIRE
+    await store.incrWithTtl("budget", 3600); // n=2 -> no EXPIRE
+    const cmds = calls.map((c) => c[0]);
+    expect(cmds).toEqual(["INCR", "EXPIRE", "INCR"]);
+  });
+
+  it("throws on a non-OK HTTP response (so the route fails closed)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("nope", { status: 500 })),
+    );
+    const redis = new FetchUpstashRedis("http://srh.test", "t");
+    await expect(redis.get("k")).rejects.toThrow(/HTTP 500/);
   });
 });
