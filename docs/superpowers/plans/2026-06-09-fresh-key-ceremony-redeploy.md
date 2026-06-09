@@ -233,6 +233,8 @@ TREASURY=<fresh treasury>
 
 ### Task 2.1: Parameterize the orchestrator + token config to accept fresh token addresses (TDD)
 
+> ✅ **COMPLETED 2026-06-09** (branch `ops/2026-06-09-fresh-redeploy`, commits `625a70e` + `e0ef7c2`). Added `resolvedTokens()` view + `run()` override loop (audited oracle-wiring untouched); created `DeployTokensFresh.s.sol`; new `DeployPublicTestnetTokenParam.t.sol` (order-independent). Full suite 196 passed / 0 failed. Spec + code-quality reviewed. Note: `TransferTokenOwnershipToFaucet.s.sol` needs no change — it reads the token list from the registry dynamically (`reg.tokens(i)`), so it picks up the fresh tokens automatically.
+
 **Files:**
 - Modify: `contracts/script/DeployPublicTestnet.s.sol` (the 7 hardcoded `token` fields in `_cfg()`)
 - Create: `contracts/script/DeployTokensFresh.s.sol`
