@@ -240,6 +240,29 @@ contract DeployPublicTestnet is Script {
         );
     }
 
+    /// @notice Resolve the 7 token ADDRESSES, layering an env-driven override on
+    /// top of the audited `_cfg()` constants (Branch C fresh-redeploy). For each
+    /// slot i, returns `vm.envOr("TOKEN_<SYM>", <constant>)` where the default is
+    /// the historical hardcoded address from `_cfg()`. This ONLY overrides the
+    /// `.token` ADDRESS — the per-token economic config (decimals, oracle bands,
+    /// seeds, divergence caps) is left intact in `_cfg()`. With NO env set, every
+    /// slot resolves to its `_cfg()` constant so legacy behavior is unchanged.
+    ///
+    /// Kept SEPARATE from the `internal pure` `_cfg()` (which the gap/coupling
+    /// tests are bound to) — `run()` applies this override over the `_cfg()`
+    /// memory array before any downstream use (listing, bootstrap, etc.).
+    /// Symbols/order: [USDC, USDT, PYUSD, DAI, EURC, TRYC, BRLC].
+    function resolvedTokens() public view returns (address[7] memory tokens) {
+        TokenCfg[7] memory c = _cfg();
+        tokens[0] = vm.envOr("TOKEN_USDC", c[0].token);
+        tokens[1] = vm.envOr("TOKEN_USDT", c[1].token);
+        tokens[2] = vm.envOr("TOKEN_PYUSD", c[2].token);
+        tokens[3] = vm.envOr("TOKEN_DAI", c[3].token);
+        tokens[4] = vm.envOr("TOKEN_EURC", c[4].token);
+        tokens[5] = vm.envOr("TOKEN_TRYC", c[5].token);
+        tokens[6] = vm.envOr("TOKEN_BRLC", c[6].token);
+    }
+
     /// @notice The constructor args for ONE token's OracleAggregator, derived
     /// purely from the in-process address ledger + config. This is the single
     /// WIRING DECISION that both the P3 (V1) and P3.5 (V2) aggregator-deploy
@@ -316,6 +339,16 @@ contract DeployPublicTestnet is Script {
         bool handoff = _envBool("HANDOFF_GOVERNANCE");
 
         TokenCfg[7] memory cfg = _cfg();
+        // Branch C (fresh-redeploy): override ONLY the token ADDRESSES from env
+        // (TOKEN_<SYM>), leaving the audited per-token economic config intact.
+        // Default (no env) keeps the historical hardcoded `_cfg()` addresses, so
+        // legacy behavior is unchanged. Applied here, before any downstream use
+        // (listing, bootstrap, re-point), so the entire run targets the resolved
+        // tokens.
+        address[7] memory tokens = resolvedTokens();
+        for (uint256 i = 0; i < 7; i++) {
+            cfg[i].token = tokens[i];
+        }
         Deployed memory d;
 
         // M-1: decide governance mode. FRESH when any governance env is supplied
