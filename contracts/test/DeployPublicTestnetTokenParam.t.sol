@@ -32,6 +32,11 @@ contract DeployPublicTestnetTokenParamTest is Test, DeployPublicTestnet {
         assertEq(resolved[0], fresh, "USDC slot not overridden from TOKEN_USDC env");
         // Untouched slots still resolve to their historical constants.
         assertEq(resolved[6], DEFAULT_BRLC, "BRLC slot must default when its env is unset");
+
+        // `vm.setEnv` mutates the PROCESS env for the rest of the run (no per-test
+        // revert — see GovernanceFactory.t.sol); reset to "" so `vm.envOr` falls
+        // back to the constant for any test that runs after this one.
+        vm.setEnv("TOKEN_USDC", "");
     }
 
     /// With NO env set, every slot MUST resolve to its historical constant so
