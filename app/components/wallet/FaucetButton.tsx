@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { useAccount, useChainId } from "wagmi";
 import { ACTIVE_CHAIN, EXPLORER } from "@/lib/chain";
 import { Icon } from "@/components/ds/Icon";
@@ -58,9 +59,18 @@ export function FaucetButton() {
   const [pending, setPending] = useState(false);
   const [result, setResult] = useState<ClaimResult | null>(null);
   const [failure, setFailure] = useState<FaucetFailure | null>(null);
+  const [mounted, setMounted] = useState(false);
 
   const wrongChain = isConnected && chainId !== ACTIVE_CHAIN.id;
   const explorer = EXPLORER;
+
+  // Portal target — the header has a backdrop-filter, which creates a containing
+  // block for `position: fixed`, so the overlay must portal to <body> to center
+  // on the viewport (not the 64px-tall header). Mounted-gated for SSR safety.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot client mount flag for the portal
+    setMounted(true);
+  }, []);
 
   // Escape-to-close (matches the prototype TokenSelectModal).
   useEffect(() => {
@@ -108,20 +118,22 @@ export function FaucetButton() {
         <span className="ar-hide-sm">Faucet</span>
       </button>
 
-      {open && (
-        <div
-          onClick={() => setOpen(false)}
-          style={{
-            position: "fixed",
-            inset: 0,
-            zIndex: 200,
-            display: "grid",
-            placeItems: "center",
-            background: "rgba(20,40,36,.42)",
-            backdropFilter: "blur(4px)",
-            animation: "ar-overlay .2s ease",
-          }}
-        >
+      {open &&
+        mounted &&
+        createPortal(
+          <div
+            onClick={() => setOpen(false)}
+            style={{
+              position: "fixed",
+              inset: 0,
+              zIndex: 200,
+              display: "grid",
+              placeItems: "center",
+              background: "rgba(20,40,36,.42)",
+              backdropFilter: "blur(4px)",
+              animation: "ar-overlay .2s ease",
+            }}
+          >
           <div
             onClick={(e) => e.stopPropagation()}
             role="dialog"
@@ -319,8 +331,9 @@ export function FaucetButton() {
               </div>
             </div>
           </div>
-        </div>
-      )}
+          </div>,
+          document.body,
+        )}
     </>
   );
 }
