@@ -54,8 +54,13 @@ EURC `0x76fa…`).
 
 - Public RPC `sepolia.base.org` showed heavy read-after-write lag during ops — use
   `base-sepolia-rpc.publicnode.com` for reliable reads/verification.
-- Governance accepts (Gov Safe via Timelock) + the live §13 drill scripts (`ops/basekeeper/drills/`)
-  are operational follow-ups; all drill BEHAVIORS are already proven in the CI revalidation suite
+- **Governance finalized 2026-06-10** via `script/ExecuteGovBaseSepoliaV2.s.sol` (deployer broadcast;
+  test-mnemonic owners signed off-chain): 3 adapters → Gov Safe, Pool/Registry → Timelock, pause
+  drill passed, Timelock locked to 48h. No address needed gas (deployer paid all); Base Sepolia gov
+  keys are the public test mnemonic (nothing secret to delete). EURC mock CL leg stays deployer-owned
+  for drills. Future gov ops incur the 48h delay; emergency pause stays immediate via PG Safe.
+- The live §13 drill scripts (`ops/basekeeper/drills/`) remain an optional operational follow-up; all
+  drill BEHAVIORS are already proven in the CI revalidation suite
   (`test/DeployBaseSepoliaV2.t.sol`, 11 tests incl. confidence/stale/floor/divergence/proportional/pause).
 - For a post-2026-07-31 or mainnet deploy, drop the `PYTH_SEPOLIA` override (default upgraded address
   becomes correct) and re-verify `getUpdateFee > 0` against the chosen receiver first.
