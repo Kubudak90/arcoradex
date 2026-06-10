@@ -5,8 +5,10 @@
   "type": "module",
   "license": "MIT",
   "exports": {
-    ".":      { "types": "./src/index.ts",       "default": "./src/index.ts" },
-    "./react":{ "types": "./src/react/index.ts", "default": "./src/react/index.ts" }
+    ".":         { "types": "./src/index.ts",          "default": "./src/index.ts" },
+    "./v2":      { "types": "./src/v2.ts",              "default": "./src/v2.ts" },
+    "./react":   { "types": "./src/react/index.ts",     "default": "./src/react/index.ts" },
+    "./react/v2":{ "types": "./src/react/v2/index.ts",  "default": "./src/react/v2/index.ts" }
   },
   "files": ["dist", "src", "README.md"],
   "scripts": {
