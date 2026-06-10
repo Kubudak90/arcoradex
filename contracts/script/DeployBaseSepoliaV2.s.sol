@@ -328,7 +328,14 @@ contract DeployBaseSepoliaV2 is Script {
         }
         require(d.freshGovernance, "governance not fresh");
         console2.log("Registry.pool, pauseGuardian, pending owners, adapters, caps: ok");
-        console2.log("NAV USD (1e18):", d.pool.totalReservesUSD());
+        // NAV read reverts while ANY active token's oracle is unsafe (e.g. Pyth not yet
+        // pulled at deploy time). The bootstrap is seed-robust (skip-not-abort), so the
+        // summary must be too — log NAV when readable, else point at the keeper step.
+        try d.pool.totalReservesUSD() returns (uint256 nav) {
+            console2.log("NAV USD (1e18):", nav);
+        } catch {
+            console2.log("NAV unreadable (oracle unsafe) - run the Pyth keeper, then seed deposits");
+        }
     }
 
     // ── Step 9: address ledger ───────────────────────────────────────────

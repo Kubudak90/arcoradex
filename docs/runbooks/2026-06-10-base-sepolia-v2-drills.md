@@ -1,8 +1,16 @@
 # Base Sepolia V2 — §13-step-2 Drill Runbook
 
+> **Deploy first.** Run the Pyth keeper — `node ops/basekeeper/update-pyth-base-sepolia.mjs` —
+> BEFORE (or immediately after) the `DeployBaseSepoliaV2.s.sol` orchestrator so the bootstrap
+> seed deposits land. On a bare deploy with no fresh Pyth pull, the orchestrator logs `SKIP`
+> for each oracle-unsafe token and the summary prints "NAV unreadable (oracle unsafe)". That is
+> the seed-robust design (skip, not abort) — NOT an error. Pull Pyth, then seed deposits.
+
 Run AFTER `DeployBaseSepoliaV2.s.sol` succeeds and the address ledger is captured into
-`ops/basekeeper/.env` (REGISTRY, POOL, LP, GOV_SAFE, TIMELOCK, ADAPTER_{USDC,USDT,EURC},
-EURC_MOCK_CL_FEED, TOKEN_{USDC,USDT,EURC}). These drills exercise spec §11 (oracle failure
+`ops/basekeeper/.env` (REGISTRY, POOL, LP, GOV_SAFE, PG_SAFE, TIMELOCK, TOKEN_{USDC,USDT,EURC},
+ADAPTER_{USDC,USDT,EURC}, CL_LEG_{USDC,USDT,EURC} — key names exactly as the deploy script's
+`_emitLedger` prints them). The EURC mock Chainlink feed is ledger key `CL_LEG_EURC`; the drill
+scripts also accept the legacy alias `EURC_MOCK_CL_FEED`. These drills exercise spec §11 (oracle failure
 behavior), §7 (marginal fee bands / reserve floor), §8.3 (proportional emergency exit), and
 §12 (the monitorable signals each drill emits). They are the §13-step-2 gate before the
 mainnet rollout (§13 steps 4-7, a separate plan).
@@ -45,10 +53,12 @@ Run: `bash ops/basekeeper/drills/03-stale-pyth.sh`
 Observe: all `peekPrice(*).safe == false`; the keeper pull (`update-pyth-base-sepolia.mjs`)
 restores safety. §12 signal: Pyth freshness alarm.
 
-## Drill 4 — Confidence drill  [fork-only, documented]
+## Drill 4 — Confidence drill  [fork/CI-only]
 Goal (§10): a blown Pyth confidence ratio (> `pythMaxConfBps`) makes a token unsafe. Live Sepolia
 Pyth confidence cannot be forced; on a fork, `vm.mockCall` the Pyth `getPriceUnsafe` to return a
-high `conf`. Documented in `DeployBaseSepoliaV2.t.sol::test_drill_confidence` (Task 3).
+high `conf` — implemented in `DeployBaseSepoliaV2.t.sol::test_drill_confidence`.
+Run: `cd contracts && forge test --match-test test_drill_confidence`
+(A CI twin of Drill 3 also exists: `forge test --match-test test_drill_stale_pyth`.)
 
 ## Drill 5 — Reserve-floor drill  [permissionless]
 Goal (§7): a swap large enough to push the output reserve below `minimumReserveUsd` reverts
