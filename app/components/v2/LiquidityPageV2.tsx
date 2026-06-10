@@ -21,7 +21,8 @@ import { CoinBadge } from "@/components/ds/CoinBadge";
 import { AnimatedNumber } from "@/components/ds/AnimatedNumber";
 import { TokenSelectModal } from "@/components/ds/TokenSelectModal";
 import { tokenColor } from "@/components/ds/tokens";
-import { ACTIVE_CHAIN, EXPLORER } from "@/lib/chain";
+import { DEFAULT_CHAIN, isSupportedChain } from "@/lib/chain";
+import { useExplorer } from "@/lib/useActiveChain";
 import { pushToast } from "@/components/layout/toast-store";
 import { useTokensV2 } from "./useTokensV2";
 import { usePoolStatsV2 } from "./usePoolStatsV2";
@@ -67,7 +68,8 @@ export function LiquidityPageV2() {
   const { address: account, isConnected } = useAccount();
   const chainId = useChainId();
   const { switchChain, isPending: switchPending } = useSwitchChain();
-  const wrongChain = isConnected && chainId !== ACTIVE_CHAIN.id;
+  const explorer = useExplorer();
+  const wrongChain = isConnected && !isSupportedChain(chainId);
 
   const [tab, setTab] = useState<Tab>("deposit");
   const [tokenAddr, setTokenAddr] = useState<`0x${string}` | undefined>();
@@ -674,7 +676,7 @@ export function LiquidityPageV2() {
           isConnected={isConnected}
           wrongChain={wrongChain}
           switchPending={switchPending}
-          onSwitch={() => switchChain({ chainId: ACTIVE_CHAIN.id })}
+          onSwitch={() => switchChain({ chainId: DEFAULT_CHAIN.id as never })}
           busy={busy}
           tab={tab}
           proportional={proportional}
@@ -695,7 +697,7 @@ export function LiquidityPageV2() {
           <p style={{ fontSize: 12, textAlign: "center", marginTop: 12, color: "var(--success)" }}>
             Confirmed ·{" "}
             <a
-              href={`${EXPLORER}/tx/${txHash}`}
+              href={`${explorer}/tx/${txHash}`}
               target="_blank"
               rel="noreferrer"
               style={{ textDecoration: "underline" }}
@@ -925,7 +927,7 @@ function ActionButton(props: {
   if (wrongChain) {
     return (
       <Button variant="primary" size="lg" full disabled={switchPending} onClick={onSwitch}>
-        {switchPending ? "Switching…" : `Switch to ${ACTIVE_CHAIN.name}`}
+        {switchPending ? "Switching…" : `Switch to ${DEFAULT_CHAIN.name}`}
       </Button>
     );
   }

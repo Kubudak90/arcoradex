@@ -1,7 +1,7 @@
 "use client";
 import { Icon } from "@/components/ds/Icon";
 import { iconBtnStyle } from "@/components/ds/iconBtnStyle";
-import { EXPLORER } from "@/lib/chain";
+import { useExplorer } from "@/lib/useActiveChain";
 import { useToasts, dismiss, type Toast } from "./toast-store";
 
 /**
@@ -33,6 +33,7 @@ export function Toasts() {
 }
 
 function ToastCard({ t }: { t: Toast }) {
+  const explorer = useExplorer();
   const accent =
     t.kind === "success"
       ? "var(--success)"
@@ -64,7 +65,7 @@ function ToastCard({ t }: { t: Toast }) {
         )}
         {shortHash && (
           <a
-            href={`${EXPLORER}/tx/${t.hash}`}
+            href={`${explorer}/tx/${t.hash}`}
             target="_blank"
             rel="noreferrer"
             style={{

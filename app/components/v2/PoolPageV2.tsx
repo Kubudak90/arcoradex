@@ -11,7 +11,7 @@ import { CoinBadge } from "@/components/ds/CoinBadge";
 import { AnimatedNumber } from "@/components/ds/AnimatedNumber";
 import { AreaChart } from "@/components/ds/AreaChart";
 import { tokenColor } from "@/components/ds/tokens";
-import { EXPLORER } from "@/lib/chain";
+import { useExplorer } from "@/lib/useActiveChain";
 import { useTokensV2 } from "./useTokensV2";
 import { usePoolStatsV2 } from "./usePoolStatsV2";
 import { useReserves, reserveUsd1e18 } from "./useReserves";
@@ -435,10 +435,11 @@ function GovRow({ label, value }: { label: string; value: React.ReactNode }) {
 }
 
 function AddrLink({ addr }: { addr?: `0x${string}` }) {
+  const explorer = useExplorer();
   if (!addr) return <span style={{ color: "var(--fg-3)" }}>—</span>;
   return (
     <a
-      href={`${EXPLORER}/address/${addr}`}
+      href={`${explorer}/address/${addr}`}
       target="_blank"
       rel="noreferrer"
       style={{ color: "var(--action)", textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 4 }}
@@ -478,6 +479,7 @@ function LiveFeed({ rows, tokens }: { rows: FeedRow[]; tokens: TokenInfoV2[] }) 
 }
 
 function TxRow({ tx, byAddr }: { tx: FeedRow; byAddr: Record<string, TokenInfoV2> }) {
+  const explorer = useExplorer();
   const from = tx.from ? byAddr[tx.from] : undefined;
   const to = tx.to ? byAddr[tx.to] : undefined;
   const tone = tx.action === "swap" ? "accent" : tx.action === "withdraw" ? "info" : "neutral";
@@ -522,7 +524,7 @@ function TxRow({ tx, byAddr }: { tx: FeedRow; byAddr: Record<string, TokenInfoV2
       <span style={{ fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 600 }}>{amountStr}</span>
       <span style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "flex-end", minWidth: 132 }}>
         <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--fg-3)" }}>{shortAddr(tx.user)}</span>
-        <a href={`${EXPLORER}/tx/${tx.txHash}`} target="_blank" rel="noreferrer" aria-label="view transaction">
+        <a href={`${explorer}/tx/${tx.txHash}`} target="_blank" rel="noreferrer" aria-label="view transaction">
           <Icon name="external" size={13} style={{ color: "var(--fg-3)" }} />
         </a>
       </span>

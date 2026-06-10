@@ -2,7 +2,9 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useAccount, useChainId } from "wagmi";
-import { ACTIVE_CHAIN, EXPLORER } from "@/lib/chain";
+import { baseSepolia } from "@arcoralabs/dex-sdk/v2";
+import { isSupportedChain } from "@/lib/chain";
+import { useActiveChain, useExplorer } from "@/lib/useActiveChain";
 import { Icon } from "@/components/ds/Icon";
 import { Button } from "@/components/ds/Button";
 import { CoinBadge } from "@/components/ds/CoinBadge";
@@ -55,14 +57,22 @@ const TOKEN_LIST = FAUCET_TOKENS.map((t) => ({
 export function FaucetButton() {
   const { address, isConnected } = useAccount();
   const chainId = useChainId();
+  const activeChain = useActiveChain();
   const [open, setOpen] = useState(false);
   const [pending, setPending] = useState(false);
   const [result, setResult] = useState<ClaimResult | null>(null);
   const [failure, setFailure] = useState<FaucetFailure | null>(null);
   const [mounted, setMounted] = useState(false);
 
-  const wrongChain = isConnected && chainId !== ACTIVE_CHAIN.id;
-  const explorer = EXPLORER;
+  // The /api/faucet route mints the BASE token set via the Base faucet signer
+  // (0xb5f3, which owns those mocks). The Arc V2 tokens are owned by the
+  // DEPLOYER, not that signer, so the faucet can only mint on Base for now —
+  // Arc minting needs a separate signer/owner wiring (see report). The button
+  // stays enabled only on Base; on Arc (or any other chain) it explains why.
+  const wrongChain = isConnected && !isSupportedChain(chainId);
+  const onBase = isConnected && chainId === baseSepolia.id;
+  const faucetUnavailable = isConnected && isSupportedChain(chainId) && !onBase;
+  const explorer = useExplorer();
 
   // Portal target — the header has a backdrop-filter, which creates a containing
   // block for `position: fixed`, so the overlay must portal to <body> to center
@@ -192,7 +202,7 @@ export function FaucetButton() {
             <div style={{ padding: "0 18px 18px", overflowY: "auto" }}>
               <p style={{ fontSize: 13.5, color: "var(--fg-3)", margin: "0 0 14px", lineHeight: 1.5 }}>
                 Mint a fresh batch of mock stablecoins to your connected wallet on{" "}
-                {ACTIVE_CHAIN.name}. One claim per 24 hours per address.
+                {baseSepolia.name}. One claim per 24 hours per address.
               </p>
 
               <div
@@ -249,8 +259,33 @@ export function FaucetButton() {
                     marginTop: 16,
                   }}
                 >
-                  Switch to {ACTIVE_CHAIN.name} to claim.
+                  Switch to {baseSepolia.name} to claim.
                 </p>
+              ) : faucetUnavailable ? (
+                <div
+                  style={{
+                    marginTop: 16,
+                    borderRadius: "var(--radius-md)",
+                    border: "1px solid var(--border)",
+                    background: "var(--surface-2)",
+                    padding: "12px 14px",
+                    display: "flex",
+                    alignItems: "flex-start",
+                    gap: 9,
+                  }}
+                >
+                  <Icon name="info" size={17} style={{ color: "var(--fg-3)", marginTop: 1 }} />
+                  <div style={{ fontSize: 12.5, color: "var(--fg-2)", lineHeight: 1.5 }}>
+                    <div style={{ fontWeight: 600, color: "var(--fg-1)", marginBottom: 2 }}>
+                      Faucet available on {baseSepolia.name} only
+                    </div>
+                    <div>
+                      You&apos;re on {activeChain.name}. The hosted faucet mints the
+                      Base Sepolia token set — switch to {baseSepolia.name} to claim.
+                      Arc test tokens are minted by the deployer.
+                    </div>
+                  </div>
+                </div>
               ) : result ? (
                 <div style={{ marginTop: 16 }}>
                   <p

@@ -14,7 +14,7 @@ import { Button } from "@/components/ds/Button";
 import { Icon } from "@/components/ds/Icon";
 import { CoinBadge } from "@/components/ds/CoinBadge";
 import { tokenColor } from "@/components/ds/tokens";
-import { ACTIVE_CHAIN } from "@/lib/chain";
+import { DEFAULT_CHAIN, isSupportedChain } from "@/lib/chain";
 import { shortAddr } from "@/lib/utils";
 import { useTokensV2 } from "@/components/v2/useTokensV2";
 import { pushToast } from "@/components/layout/toast-store";
@@ -27,7 +27,9 @@ import { pushToast } from "@/components/layout/toast-store";
  *   - connected    → wallet chip (gradient disc + short addr + chevron) that
  *     opens a portfolio dropdown (live V2 token balances + Disconnect).
  *
- * A wrong-chain connection swaps the chip for a "Switch to Base Sepolia" button.
+ * A connection on an unsupported network swaps the chip for a "Switch network"
+ * button that returns the wallet to the default supported chain (the header
+ * ChainSwitcher handles switching BETWEEN the two supported chains).
  */
 export function ConnectButton() {
   const { address, isConnected } = useAccount();
@@ -37,7 +39,7 @@ export function ConnectButton() {
   const { switchChain, isPending: switchPending } = useSwitchChain();
   const [open, setOpen] = useState(false);
 
-  const wrongChain = isConnected && chainId !== ACTIVE_CHAIN.id;
+  const wrongChain = isConnected && !isSupportedChain(chainId);
 
   // Close the dropdown on any outside click.
   useEffect(() => {
@@ -86,9 +88,9 @@ export function ConnectButton() {
         variant="primary"
         size="md"
         disabled={switchPending}
-        onClick={() => switchChain({ chainId: ACTIVE_CHAIN.id })}
+        onClick={() => switchChain({ chainId: DEFAULT_CHAIN.id as never })}
       >
-        {switchPending ? "Switching…" : `Switch to ${ACTIVE_CHAIN.name}`}
+        {switchPending ? "Switching…" : `Switch to ${DEFAULT_CHAIN.name}`}
       </Button>
     );
   }

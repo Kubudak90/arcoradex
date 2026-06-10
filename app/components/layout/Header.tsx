@@ -6,7 +6,7 @@ import { Icon } from "@/components/ds/Icon";
 import { iconBtnStyle } from "@/components/ds/iconBtnStyle";
 import { ConnectButton } from "@/components/wallet/ConnectButton";
 import { FaucetButton } from "@/components/wallet/FaucetButton";
-import { NetworkButton } from "@/components/wallet/NetworkButton";
+import { ChainSwitcher } from "@/components/wallet/ChainSwitcher";
 import { useTheme } from "./useTheme";
 
 const NAV = [
@@ -21,9 +21,10 @@ function isActive(pathname: string, href: string) {
 
 /**
  * Header — the prototype's sticky glass `TopNav`. Wordmark, NavTab tabs
- * (active = `usePathname()` match with the lime underline), the "Add Base
- * Sepolia" chip (`<NetworkButton>`), the Faucet chip (`<FaucetButton>`), the
- * dark/light theme toggle (persisted to localStorage), and `<ConnectButton>`.
+ * (active = `usePathname()` match with the lime underline), the network
+ * switcher chip (`<ChainSwitcher>` — Arc testnet ⇄ Base Sepolia), the Faucet
+ * chip (`<FaucetButton>`), the dark/light theme toggle (persisted to
+ * localStorage), and `<ConnectButton>`.
  */
 export function Header() {
   const pathname = usePathname();
@@ -94,7 +95,7 @@ export function Header() {
           })}
         </nav>
         <div style={{ flex: 1 }} />
-        <NetworkButton />
+        <ChainSwitcher />
         <FaucetButton />
         <button
           onClick={toggle}

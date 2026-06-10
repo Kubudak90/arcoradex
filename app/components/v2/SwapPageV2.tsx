@@ -17,7 +17,8 @@ import { CoinBadge } from "@/components/ds/CoinBadge";
 import { TokenSelectModal } from "@/components/ds/TokenSelectModal";
 import { tokenColor } from "@/components/ds/tokens";
 import { iconBtnStyle } from "@/components/ds/iconBtnStyle";
-import { ACTIVE_CHAIN, EXPLORER } from "@/lib/chain";
+import { DEFAULT_CHAIN, isSupportedChain } from "@/lib/chain";
+import { useExplorer } from "@/lib/useActiveChain";
 import { pushToast } from "@/components/layout/toast-store";
 import { useTokensV2 } from "./useTokensV2";
 import { usePoolStatsV2 } from "./usePoolStatsV2";
@@ -50,7 +51,8 @@ export function SwapPageV2() {
   const { address: account, isConnected } = useAccount();
   const chainId = useChainId();
   const { switchChain, isPending: switchPending } = useSwitchChain();
-  const wrongChain = isConnected && chainId !== ACTIVE_CHAIN.id;
+  const explorer = useExplorer();
+  const wrongChain = isConnected && !isSupportedChain(chainId);
 
   const [tokenIn, setTokenIn] = useState<`0x${string}` | undefined>();
   const [tokenOut, setTokenOut] = useState<`0x${string}` | undefined>();
@@ -371,9 +373,9 @@ export function SwapPageV2() {
             size="lg"
             full
             disabled={switchPending}
-            onClick={() => switchChain({ chainId: ACTIVE_CHAIN.id })}
+            onClick={() => switchChain({ chainId: DEFAULT_CHAIN.id as never })}
           >
-            {switchPending ? "Switching…" : `Switch to ${ACTIVE_CHAIN.name}`}
+            {switchPending ? "Switching…" : `Switch to ${DEFAULT_CHAIN.name}`}
           </Button>
         ) : swap.isPending ? (
           <Button variant="primary" size="lg" full disabled>
@@ -424,7 +426,7 @@ export function SwapPageV2() {
           >
             Swap confirmed ·{" "}
             <a
-              href={`${EXPLORER}/tx/${txHash}`}
+              href={`${explorer}/tx/${txHash}`}
               target="_blank"
               rel="noreferrer"
               style={{ textDecoration: "underline" }}
