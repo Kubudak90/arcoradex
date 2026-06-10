@@ -32,9 +32,13 @@ vi.mock("viem/accounts", () => ({
 const checkBotId = vi.fn(async () => ({ isBot: false }));
 vi.mock("botid/server", () => ({ checkBotId: () => checkBotId() }));
 
-// Only `arcTestnet` is consumed from the SDK by the route.
-vi.mock("@arcoralabs/dex-sdk", () => ({
-  arcTestnet: { id: 5042002, name: "Arc Testnet" },
+// Only `baseSepolia` is consumed from the SDK V2 entrypoint by the route.
+vi.mock("@arcoralabs/dex-sdk/v2", () => ({
+  baseSepolia: {
+    id: 84532,
+    name: "Base Sepolia",
+    rpcUrls: { default: { http: ["https://base-sepolia-rpc.publicnode.com"] } },
+  },
 }));
 
 // Route tests exercise the HANDLER with a working store. The real backend

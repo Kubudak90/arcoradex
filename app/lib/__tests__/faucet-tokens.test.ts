@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 import { FAUCET_TOKENS } from "../faucet-tokens";
 
 describe("FAUCET_TOKENS", () => {
-  it("lists exactly 7 stables (matching Registry token count)", () => {
-    expect(FAUCET_TOKENS).toHaveLength(7);
+  it("lists exactly 3 stables (matching the live V2 Registry token count)", () => {
+    expect(FAUCET_TOKENS).toHaveLength(3);
   });
 
   it("symbols are unique", () => {
@@ -20,16 +20,12 @@ describe("FAUCET_TOKENS", () => {
     }
   });
 
-  it("addresses match the 2026-06-10 fresh Arc redeploy (Branch C)", () => {
+  it("addresses match the live Base Sepolia (84532) V2 token set", () => {
     const bySymbol = Object.fromEntries(FAUCET_TOKENS.map((t) => [t.symbol, t.address]));
     expect(bySymbol).toEqual({
-      USDC:  "0x200380a191FdB530C73120674EAF00E8417D168B",
-      USDT:  "0xd93548768635d218478899448729eB9d6fCE9903",
-      PYUSD: "0xd3fea5191fbD9e5B7492DE0e8289897514421407",
-      DAI:   "0x89dD7f0D66e35F78794ee0215E380DD3269A2a0B",
-      EURC:  "0xD4637b44879630dD0fE35FE86CC90EA192aeF008",
-      TRYC:  "0x0dA050E630A1801421AdEf52351b1a1123b38265",
-      BRLC:  "0x98422826dD9C22123991713810E1aC0B5d15179d",
+      USDC: "0x3a98d8adC295d90171e9DA93D411dEa95674c867",
+      USDT: "0x7110315D229C7CE655399703ACbA8E67f1d5C0c0",
+      EURC: "0x4b1F2D659DAD4B791414fF4323bCd17C218b8bD7",
     });
   });
 
@@ -46,9 +42,9 @@ describe("FAUCET_TOKENS", () => {
     }
   });
 
-  it("USDC/USDT/PYUSD/DAI mint ≈ $1000 (pegged USD ⇒ 1000 units)", () => {
-    const pegged = FAUCET_TOKENS.filter((t) => ["USDC", "USDT", "PYUSD", "DAI"].includes(t.symbol));
-    expect(pegged).toHaveLength(4);
+  it("USDC/USDT mint ≈ $1000 (pegged USD ⇒ 1000 units)", () => {
+    const pegged = FAUCET_TOKENS.filter((t) => ["USDC", "USDT"].includes(t.symbol));
+    expect(pegged).toHaveLength(2);
     for (const t of pegged) {
       expect(t.amount).toBe(1_000n);
     }

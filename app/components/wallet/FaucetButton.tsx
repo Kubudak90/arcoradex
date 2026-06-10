@@ -1,9 +1,12 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useAccount, useChainId } from "wagmi";
 import { ACTIVE_CHAIN, EXPLORER } from "@/lib/chain";
-import { Modal } from "@/components/ui/modal";
 import { Icon } from "@/components/ds/Icon";
+import { Button } from "@/components/ds/Button";
+import { CoinBadge } from "@/components/ds/CoinBadge";
+import { tokenColor } from "@/components/ds/tokens";
+import { iconBtnStyle } from "@/components/ds/iconBtnStyle";
 import { chipNav } from "@/components/layout/chip-style";
 import { FAUCET_TOKENS } from "@/lib/faucet-tokens";
 
@@ -59,6 +62,16 @@ export function FaucetButton() {
   const wrongChain = isConnected && chainId !== ACTIVE_CHAIN.id;
   const explorer = EXPLORER;
 
+  // Escape-to-close (matches the prototype TokenSelectModal).
+  useEffect(() => {
+    if (!open) return;
+    const k = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("keydown", k);
+    return () => window.removeEventListener("keydown", k);
+  }, [open]);
+
   async function claim() {
     if (!address) return;
     setPending(true);
@@ -95,71 +108,219 @@ export function FaucetButton() {
         <span className="ar-hide-sm">Faucet</span>
       </button>
 
-      <Modal open={open} onOpenChange={setOpen} title="Test token faucet">
-        <p className="text-sm text-arc-ink-500 m-0">
-          Mint a fresh batch of mock stablecoins to your connected wallet on {ACTIVE_CHAIN.name}. One claim
-          per 24 hours per address.
-        </p>
+      {open && (
+        <div
+          onClick={() => setOpen(false)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 200,
+            display: "grid",
+            placeItems: "center",
+            background: "rgba(20,40,36,.42)",
+            backdropFilter: "blur(4px)",
+            animation: "ar-overlay .2s ease",
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Test token faucet"
+            style={{
+              width: 440,
+              maxWidth: "92vw",
+              maxHeight: "86vh",
+              display: "flex",
+              flexDirection: "column",
+              background: "var(--surface)",
+              border: "1px solid var(--border)",
+              borderRadius: "var(--radius-xl)",
+              boxShadow: "var(--elev-4)",
+              overflow: "hidden",
+              animation: "ar-pop .26s var(--ease-standard)",
+            }}
+          >
+            <div
+              style={{
+                padding: "18px 18px 6px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span
+                  style={{
+                    width: 32,
+                    height: 32,
+                    display: "grid",
+                    placeItems: "center",
+                    borderRadius: "var(--radius-md)",
+                    background: "rgba(200,242,74,.16)",
+                    border: "1px solid rgba(200,242,74,.32)",
+                    color: "var(--action)",
+                  }}
+                >
+                  <Icon name="droplet" size={17} />
+                </span>
+                <div style={{ fontWeight: 700, fontSize: 16 }}>Test token faucet</div>
+              </div>
+              <button
+                onClick={() => setOpen(false)}
+                style={iconBtnStyle}
+                aria-label="Close"
+                onMouseEnter={(e) => (e.currentTarget.style.background = "var(--surface-2)")}
+                onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+              >
+                <Icon name="close" size={18} />
+              </button>
+            </div>
 
-        <div className="rounded-2xl border border-arc-ink-100 bg-surface-tint p-4 mt-4">
-          <div className="t-label m-0 mb-2">You receive</div>
-          <ul className="grid grid-cols-2 gap-y-1.5 text-sm m-0 p-0 list-none">
-            {TOKEN_LIST.map((t) => (
-              <li key={t.sym} className="flex justify-between gap-3">
-                <span className="text-arc-ink-700">{t.sym}</span>
-                <span className="t-mono text-arc-ink-900">{t.amt}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
+            <div style={{ padding: "0 18px 18px", overflowY: "auto" }}>
+              <p style={{ fontSize: 13.5, color: "var(--fg-3)", margin: "0 0 14px", lineHeight: 1.5 }}>
+                Mint a fresh batch of mock stablecoins to your connected wallet on{" "}
+                {ACTIVE_CHAIN.name}. One claim per 24 hours per address.
+              </p>
 
-        {!isConnected ? (
-          <p className="text-sm text-arc-ink-500 text-center mt-4">
-            Connect a wallet first.
-          </p>
-        ) : wrongChain ? (
-          <p className="text-sm text-center mt-4" style={{ color: "var(--color-warn)" }}>
-            Switch to {ACTIVE_CHAIN.name} to claim.
-          </p>
-        ) : result ? (
-          <div className="mt-4 space-y-2 text-xs">
-            <p className="text-center" style={{ color: "var(--color-success)" }}>
-              ✓ Claim broadcast. Tokens should appear in seconds.
-            </p>
-            <div className="rounded-xl bg-surface-tint p-3 max-h-40 overflow-y-auto">
-              {Object.entries(result.txHashes).map(([sym, hash]) => (
-                <div key={sym} className="flex justify-between py-0.5">
-                  <span className="text-arc-ink-700">{sym}</span>
-                  <a
-                    href={`${explorer}/tx/${hash}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="t-mono text-arc-blue-600 hover:underline"
-                  >
-                    {hash.slice(0, 10)}…
-                  </a>
+              <div
+                style={{
+                  borderRadius: "var(--radius-lg)",
+                  border: "1px solid var(--border)",
+                  background: "var(--surface-2)",
+                  padding: 14,
+                }}
+              >
+                <div className="overline" style={{ fontSize: 10, marginBottom: 10 }}>
+                  You receive
                 </div>
-              ))}
+                <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
+                  {TOKEN_LIST.map((t) => (
+                    <div
+                      key={t.sym}
+                      style={{ display: "flex", alignItems: "center", gap: 10 }}
+                    >
+                      <CoinBadge sym={t.sym} color={tokenColor(t.sym)} size={26} />
+                      <span style={{ fontSize: 13.5, fontWeight: 600 }}>{t.sym}</span>
+                      <span
+                        style={{
+                          marginLeft: "auto",
+                          fontFamily: "var(--font-mono)",
+                          fontSize: 13.5,
+                          fontWeight: 600,
+                        }}
+                      >
+                        {t.amt}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {!isConnected ? (
+                <p
+                  style={{
+                    fontSize: 13.5,
+                    color: "var(--fg-3)",
+                    textAlign: "center",
+                    marginTop: 16,
+                  }}
+                >
+                  Connect a wallet first.
+                </p>
+              ) : wrongChain ? (
+                <p
+                  style={{
+                    fontSize: 13.5,
+                    color: "var(--warning)",
+                    textAlign: "center",
+                    marginTop: 16,
+                  }}
+                >
+                  Switch to {ACTIVE_CHAIN.name} to claim.
+                </p>
+              ) : result ? (
+                <div style={{ marginTop: 16 }}>
+                  <p
+                    style={{
+                      fontSize: 13,
+                      color: "var(--success)",
+                      textAlign: "center",
+                      margin: "0 0 10px",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: 6,
+                    }}
+                  >
+                    <Icon name="checkCircle" size={16} /> Claim broadcast. Tokens should appear
+                    in seconds.
+                  </p>
+                  <div
+                    style={{
+                      borderRadius: "var(--radius-md)",
+                      background: "var(--surface-2)",
+                      border: "1px solid var(--border)",
+                      padding: 12,
+                      maxHeight: 160,
+                      overflowY: "auto",
+                    }}
+                  >
+                    {Object.entries(result.txHashes).map(([sym, hash]) => (
+                      <div
+                        key={sym}
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          padding: "3px 0",
+                          fontSize: 12.5,
+                        }}
+                      >
+                        <span style={{ color: "var(--fg-2)" }}>{sym}</span>
+                        <a
+                          href={`${explorer}/tx/${hash}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          style={{
+                            fontFamily: "var(--font-mono)",
+                            color: "var(--action)",
+                            textDecoration: "none",
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 4,
+                          }}
+                        >
+                          {hash.slice(0, 10)}… <Icon name="external" size={12} />
+                        </a>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div style={{ marginTop: 16 }}>
+                  <Button
+                    variant="primary"
+                    size="lg"
+                    full
+                    icon="droplet"
+                    disabled={pending}
+                    onClick={claim}
+                  >
+                    {pending ? "Minting…" : "Claim test tokens"}
+                  </Button>
+                </div>
+              )}
+
+              {/* M-9 (audit 2026-05-24): a11y wrapper. role="alert" + aria-live so
+                  screen readers announce the failure when it appears. The region
+                  is rendered unconditionally so AT can pick up the live mutation. */}
+              <div role="alert" aria-live="assertive" aria-atomic="true">
+                {failure ? <FailureNotice failure={failure} /> : null}
+              </div>
             </div>
           </div>
-        ) : (
-          <button
-            onClick={claim}
-            disabled={pending}
-            className="w-full inline-flex items-center justify-center h-12 rounded-full text-[15px] font-medium text-white mt-4 transition-all disabled:opacity-50"
-            style={{ background: "var(--grad-arcora)", boxShadow: "var(--shadow-glow)" }}
-          >
-            {pending ? "Minting…" : "Claim test tokens"}
-          </button>
-        )}
-
-        {/* M-9 (audit 2026-05-24): a11y wrapper. role="alert" + aria-live so
-            screen readers announce the failure when it appears. The region
-            is rendered unconditionally so AT can pick up the live mutation. */}
-        <div role="alert" aria-live="assertive" aria-atomic="true">
-          {failure ? <FailureNotice failure={failure} /> : null}
         </div>
-      </Modal>
+      )}
     </>
   );
 }
@@ -168,15 +329,22 @@ function FailureNotice({ failure }: { failure: FaucetFailure }) {
   if (failure.kind === "bot") {
     return (
       <div
-        className="mt-3 rounded-xl border px-3 py-2.5 flex items-start gap-2 text-xs"
-        // Soft amber tone using the existing --color-warn token at low opacity.
-        style={{ borderColor: "color-mix(in srgb, var(--color-warn) 50%, transparent)", background: "color-mix(in srgb, var(--color-warn) 10%, var(--surface))" }}
+        style={{
+          marginTop: 14,
+          borderRadius: "var(--radius-md)",
+          border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)",
+          background: "var(--warning-bg)",
+          padding: "10px 12px",
+          display: "flex",
+          alignItems: "flex-start",
+          gap: 9,
+        }}
       >
-        <span className="ms" style={{ fontSize: 18, color: "var(--color-warn)" }}>
-          shield_person
-        </span>
-        <div className="text-left text-arc-ink-700">
-          <div className="font-medium text-arc-ink-900 mb-0.5">Request flagged as automated</div>
+        <Icon name="shield" size={17} style={{ color: "var(--warning)", marginTop: 1 }} />
+        <div style={{ fontSize: 12.5, color: "var(--fg-2)", lineHeight: 1.5 }}>
+          <div style={{ fontWeight: 600, color: "var(--fg-1)", marginBottom: 2 }}>
+            Request flagged as automated
+          </div>
           <div>
             If you&apos;re on a VPN, headless browser, or a private window with strict
             anti-fingerprinting, switch to a normal browser and try again.
@@ -189,14 +357,20 @@ function FailureNotice({ failure }: { failure: FaucetFailure }) {
     const remaining = formatRetryAfter(failure.retryAfterSec);
     return (
       <div
-        className="mt-3 rounded-xl border px-3 py-2.5 flex items-start gap-2 text-xs"
-        style={{ borderColor: "var(--arc-ink-200)", background: "var(--surface-tint)" }}
+        style={{
+          marginTop: 14,
+          borderRadius: "var(--radius-md)",
+          border: "1px solid var(--border)",
+          background: "var(--surface-2)",
+          padding: "10px 12px",
+          display: "flex",
+          alignItems: "flex-start",
+          gap: 9,
+        }}
       >
-        <span className="ms" style={{ fontSize: 18, color: "var(--arc-ink-500)" }}>
-          schedule
-        </span>
-        <div className="text-left text-arc-ink-700">
-          <div className="font-medium text-arc-ink-900 mb-0.5">
+        <Icon name="clock" size={17} style={{ color: "var(--fg-3)", marginTop: 1 }} />
+        <div style={{ fontSize: 12.5, color: "var(--fg-2)", lineHeight: 1.5 }}>
+          <div style={{ fontWeight: 600, color: "var(--fg-1)", marginBottom: 2 }}>
             Cooldown active{remaining ? ` — try again in ${remaining}` : ""}
           </div>
           <div>{failure.message}</div>
@@ -205,7 +379,14 @@ function FailureNotice({ failure }: { failure: FaucetFailure }) {
     );
   }
   return (
-    <p className="mt-3 text-xs text-center" style={{ color: "var(--color-danger)" }}>
+    <p
+      style={{
+        marginTop: 14,
+        fontSize: 12.5,
+        textAlign: "center",
+        color: "var(--danger)",
+      }}
+    >
       {failure.message}
     </p>
   );

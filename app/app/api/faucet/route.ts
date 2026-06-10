@@ -8,7 +8,7 @@ import {
   getAddress,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { arcTestnet } from "@arcoralabs/dex-sdk";
+import { baseSepolia } from "@arcoralabs/dex-sdk/v2";
 import { checkBotId } from "botid/server";
 import {
   createCooldownStore,
@@ -165,9 +165,11 @@ export async function POST(req: Request): Promise<NextResponse<FaucetSuccess | F
 
     // Build clients
     const account = privateKeyToAccount(key as `0x${string}`);
-    const transport = http(process.env.NEXT_PUBLIC_RPC_URL || "https://rpc.testnet.arc.network");
-    const publicClient = createPublicClient({ chain: arcTestnet, transport });
-    const walletClient = createWalletClient({ chain: arcTestnet, transport, account });
+    const transport = http(
+      process.env.NEXT_PUBLIC_RPC_URL || baseSepolia.rpcUrls.default.http[0],
+    );
+    const publicClient = createPublicClient({ chain: baseSepolia, transport });
+    const walletClient = createWalletClient({ chain: baseSepolia, transport, account });
 
     try {
       // Pre-fetch the next nonce so back-to-back broadcasts don't collide
@@ -180,7 +182,7 @@ export async function POST(req: Request): Promise<NextResponse<FaucetSuccess | F
       for (const t of FAUCET_TOKENS) {
         const value = t.amount * 10n ** BigInt(t.decimals);
         const hash = await walletClient.writeContract({
-          chain: arcTestnet,
+          chain: baseSepolia,
           account,
           address: t.address,
           abi: MINT_ABI,
