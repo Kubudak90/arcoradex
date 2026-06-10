@@ -74,14 +74,36 @@ contract ExecuteGovernanceAccepts is Script {
         a[14] = 0xCbdD7381766f3021C5fae2a5bBeAe5CF0Fc20bcF;
     }
 
+    /// @dev Tolerant private-key reader: accepts the 64-hex key with or without
+    /// a 0x/0X prefix and ignores surrounding whitespace/newlines — wallet
+    /// exports and shell paste paths disagree on the prefix, and a strict
+    /// envUint read turns that into an opaque parse revert.
+    function _envKey(string memory name) internal view returns (uint256 k) {
+        bytes memory b = bytes(vm.envString(name));
+        uint256 start = 0;
+        while (start < b.length && (b[start] == 0x20 || b[start] == 0x09 || b[start] == 0x0a || b[start] == 0x0d)) {
+            start++;
+        }
+        if (b.length >= start + 2 && b[start] == "0" && (b[start + 1] == "x" || b[start + 1] == "X")) {
+            start += 2;
+        }
+        require(b.length >= start + 64, string.concat(name, ": expected 64 hex chars (got too few)"));
+        bytes memory hexPart = new bytes(64);
+        for (uint256 i = 0; i < 64; i++) {
+            hexPart[i] = b[start + i];
+        }
+        k = vm.parseUint(string.concat("0x", string(hexPart)));
+        require(k != 0, string.concat(name, " parses to zero"));
+    }
+
     function run() external {
         require(block.chainid == 5042002, "Arc testnet only");
 
         uint256 broadcaster = vm.envUint("DEPLOYER_PRIVATE_KEY");
         uint256[] memory govKeys = new uint256[](3);
-        govKeys[0] = vm.envUint("GOV_OWNER_KEY_1");
-        govKeys[1] = vm.envUint("GOV_OWNER_KEY_2");
-        govKeys[2] = vm.envUint("GOV_OWNER_KEY_3");
+        govKeys[0] = _envKey("GOV_OWNER_KEY_1");
+        govKeys[1] = _envKey("GOV_OWNER_KEY_2");
+        govKeys[2] = _envKey("GOV_OWNER_KEY_3");
 
         // ── Validate signer sets against BOTH Safes ──────────────────────────
         uint256 pgCount = 0;
