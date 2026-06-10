@@ -9,10 +9,10 @@ Quick-reference for Claude sessions. Keep entries terse; link to rollout docs fo
 
 ## Key EOAs
 
-- **Deployer EOA:** `0xe8E5AAa3d8c705A07de02aADF98CE31F20A5754b`
-- **Governance Safe (3/5):** `0x715f669D79Cc72d6685F8724c0B86f7B53d7e624`
-- **Pause Guardian Safe (2/3):** `0x39500e45935f36CfcEb826590aaE97226Ac6640D`
-- **TimelockController (48 h):** `0x36444f653E7746d69aD5d91dA920f5Cd2F9C6E83`
+- **Deployer EOA:** `0xC49303Bda108dE3FFDBDEC069B795b645168D7e6`
+- **Governance Safe (3/5):** `0x396145BAB316d84F958368d93ec8984559f0261B`
+- **Pause Guardian Safe (2/3):** `0x1098e88b8b243451109D7eA7690f9e2ca7b18280`
+- **TimelockController:** `0xEb2E77144F5BcB854ED75C687988c4F19100e5D7` (delay 0, raising to 48h)
 
 See `memory/arcoradex_role_eoas.md` for full address table.
 
@@ -20,11 +20,11 @@ See `memory/arcoradex_role_eoas.md` for full address table.
 
 | Contract | Address |
 |---|---|
-| ArcoraDexRegistry V3 | `0x9914436E5245bF3c0d4D4338e0a8b8F5Ab5505aB` |
-| ArcoraDexPool V3 | `0x1ce1ef94e7ebe70727bd69003d61a3f0c9a331bc` |
-| ArcoraDexLP V3 | `0x17B47173C457069E53B3B75Ef42773041B79523e` |
+| ArcoraDexRegistry V3 | `0x372f83a1432Aa43b72eDCE083DC8352d9Bfb47f1` |
+| ArcoraDexPool V3 | `0x214825E3e24a07cd58e48267e492320dAccCe2f6` |
+| ArcoraDexLP V3 | `0xc07e979B5Ee023Ad96E65E733b99902306CAFEf2` |
 
-Deployed in [Phase 2 — Governance Migration (2026-05-14)](docs/rollouts/2026-05-14-phase2-governance.md).
+Deployed in the [2026-06-10 fresh redeploy (Branch C)](#deployment-history) lost-key recovery.
 
 ## Deployment history
 
@@ -36,6 +36,7 @@ Deployed in [Phase 2 — Governance Migration (2026-05-14)](docs/rollouts/2026-0
 - [Phase 3 — Oracle Hardening (2026-05-17/18)](docs/rollouts/2026-05-14-phase3-oracle.md) — dual-source `OracleAggregator` (V1), `CumulativeDeviationGuard`, tightened TRYC/BRLC caps; registry swapped via Timelock.
 - [Phase 3 Operationalization (2026-05-18)](docs/rollouts/2026-05-18-phase3-operationalization.md)
 - [Phase 3.5 OracleAggregator V2 (2026-05-20)](docs/rollouts/2026-05-20-phase3_5-oracle-v2.md) — V2 redeploy: per-source staleness, degraded-mode signal, monotonic roundId. Registry pointers swapped via Timelock batch `0xe2e130fb…58354c`, executed 2026-05-22 (tx `0x6b65230972baab17f256b9fd62643d7af370617ec8b6077fa30d7e852045d314`, block 43528310).
+- 2026-06-10 fresh redeploy (Branch C): lost-key recovery — fresh governance + fresh tokens + fresh faucet on Arc testnet; deployer 0xC493…D7e6; Gov Safe 0x3961…261B 3/5, PG 0x1098…8280 2/3, Timelock 0xEb2E…e5D7 (delay 0, raising to 48h). Pool 0x2148…e2f6, Registry 0x372f…47f1, LP 0xc07e…FEf2.
 
 ## V3 Pool + P3 oracle layer
 

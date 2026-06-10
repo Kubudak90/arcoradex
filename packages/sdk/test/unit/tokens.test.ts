@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { tokenLabel } from "@/tokens/label";
 
-const USDC = "0x3BFa09fF6467639f0981948385bA1018Ac07d22C";
+const USDC = "0x200380a191FdB530C73120674EAF00E8417D168B";
 
 describe("tokenLabel", () => {
   it("returns metadata for a known checksummed address", () => {
