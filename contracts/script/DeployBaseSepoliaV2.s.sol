@@ -49,7 +49,19 @@ import {GovernanceFactory} from "./GovernanceFactory.sol";
 contract DeployBaseSepoliaV2 is Script {
     uint256 internal constant CHAIN_ID = 84532;
     // UPGRADED (2026-07-31) Pyth Core on Base Sepolia. See the oracle-adapters plan table.
+    // This becomes the live VAA-accepting receiver only AFTER the 2026-07-31 upgrade.
     address internal constant PYTH_SEPOLIA = 0x5f52e4DBEA21f5b23523B6e20d50c29ae0a4EB83;
+    // CURRENT (pre-2026-07-31) live Pyth Core receiver on Base Sepolia. The upgraded
+    // address above returns getUpdateFee==0 and reverts InvalidWormholeVaa() until the
+    // DAO upgrade lands, so a deploy BEFORE 2026-07-31 must point adapters here. Override
+    // with env `PYTH_SEPOLIA`; default stays the upgraded address for post-upgrade deploys.
+    address internal constant PYTH_SEPOLIA_CURRENT = 0xA2aa501b19aff244D90cc15a4Cf739D2725B5729;
+
+    /// @dev Resolve the Pyth receiver: env `PYTH_SEPOLIA` override (set it to
+    /// PYTH_SEPOLIA_CURRENT for a pre-upgrade deploy) else the upgraded default.
+    function _pyth() internal view returns (address) {
+        return vm.envOr("PYTH_SEPOLIA", PYTH_SEPOLIA);
+    }
     uint16 internal constant PROTOCOL_FEE_SHARE_BPS = 1_000; // 10% protocol / 90% LP
 
     /// @dev Per-token Base Sepolia config — the SINGLE source of truth the drift
@@ -222,10 +234,11 @@ contract DeployBaseSepoliaV2 is Script {
                 console2.log(string.concat("  ", cfg[i].symbol, " MOCK CL leg ($1.15):"), clLeg);
             }
             d.chainlinkLeg[i] = clLeg;
+            address pythAddr = _pyth();
             ChainlinkPythAdapterV2 a = new ChainlinkPythAdapterV2(
                 d.token[i],
                 IChainlinkAggregator(clLeg),
-                IPythV2(PYTH_SEPOLIA),
+                IPythV2(pythAddr),
                 cfg[i].pythPriceId,
                 cfg[i].chainlinkMaxStaleSeconds,
                 cfg[i].pythMaxStaleSeconds,
@@ -235,7 +248,7 @@ contract DeployBaseSepoliaV2 is Script {
             );
             // N-6: post-deploy constructor verification (catches arg off-by-one).
             require(a.TOKEN() == d.token[i], "adapter TOKEN mismatch");
-            require(address(a.PYTH()) == PYTH_SEPOLIA, "adapter PYTH mismatch");
+            require(address(a.PYTH()) == pythAddr, "adapter PYTH mismatch");
             require(a.PYTH_PRICE_ID() == cfg[i].pythPriceId, "adapter price id mismatch");
             require(a.maxDivergenceBps() == cfg[i].maxDivergenceBps, "adapter divergence mismatch");
             d.adapter[i] = address(a);
