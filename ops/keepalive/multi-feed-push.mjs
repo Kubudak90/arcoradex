@@ -93,7 +93,7 @@ const FEEDS = [
     { symbol: "PYUSD", feed: process.env.FEED_PYUSD, secondary: process.env.P3_SECONDARY_PYUSD, coingeckoId: "paypal-usd",      band: { min: 0.95, max: 1.05 }, maxDevBps: 50,  peg: 1.00, maxPegDriftBps: 200, fx: null },
     { symbol: "DAI",   feed: process.env.FEED_DAI,   secondary: process.env.P3_SECONDARY_DAI,   coingeckoId: "dai",             band: { min: 0.95, max: 1.05 }, maxDevBps: 50,  peg: 1.00, maxPegDriftBps: 200, fx: null },
     { symbol: "EURC",  feed: process.env.FEED_EURC,  secondary: process.env.P3_SECONDARY_EURC,  coingeckoVsCurrency: "eur",     band: { min: 1.02, max: 1.20 },   maxDevBps: 150, peg: 1.08,  maxPegDriftBps: 800,  fx: "eur" },
-    { symbol: "TRYC",  feed: process.env.FEED_TRYC,  secondary: process.env.P3_SECONDARY_TRYC,  coingeckoVsCurrency: "try",     band: { min: 0.020, max: 0.040 }, maxDevBps: 150, peg: 0.030, maxPegDriftBps: 1500, fx: "try" },
+    { symbol: "TRYC",  feed: process.env.FEED_TRYC,  secondary: process.env.P3_SECONDARY_TRYC,  coingeckoVsCurrency: "try",     band: { min: 0.020, max: 0.040 }, maxDevBps: 150, peg: 0.023, maxPegDriftBps: 1500, fx: "try" },
     { symbol: "BRLC",  feed: process.env.FEED_BRLC,  secondary: process.env.P3_SECONDARY_BRLC,  coingeckoVsCurrency: "brl",     band: { min: 0.15, max: 0.22 },   maxDevBps: 150, peg: 0.18,  maxPegDriftBps: 1000, fx: "brl" },
 ];
 
