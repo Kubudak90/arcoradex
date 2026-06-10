@@ -311,8 +311,13 @@
 .body  { font-weight: var(--weight-regular); font-size: var(--text-base); line-height: var(--leading-normal); }
 .body-sm { font-weight: var(--weight-regular); font-size: var(--text-sm); line-height: var(--leading-normal); }
 .caption { font-weight: var(--weight-regular); font-size: var(--text-xs); line-height: var(--leading-snug); color: var(--fg-2); }
+/* NOTE: the class name `overline` collides with Tailwind v4's built-in
+   `overline` text-decoration utility, which drew a line above every label.
+   `text-decoration: none` here (unlayered, so it beats the layered utility)
+   neutralizes it; the typography role is unchanged. */
 .overline { font-family: var(--font-mono); font-weight: var(--weight-medium);
-  font-size: var(--text-2xs); letter-spacing: var(--tracking-caps); text-transform: uppercase; color: var(--fg-3); }
+  font-size: var(--text-2xs); letter-spacing: var(--tracking-caps); text-transform: uppercase;
+  text-decoration: none; color: var(--fg-3); }
 .code { font-family: var(--font-mono); font-size: var(--text-sm); line-height: var(--leading-normal); }
 
 /* ============================================================
