@@ -251,4 +251,65 @@ contract ChainlinkPythAdapterV2Test is Test {
             token, IChainlinkAggregator(address(cl)), IPythV2(address(pyth)), PID, CL_STALE, PY_STALE, 0, DIV_BPS, owner
         );
     }
+
+    // ── Fail-closed hardening: price ceiling + future timestamps (review findings 1-3) ──
+
+    /// Helper: a fresh 0-dec Chainlink adapter so `answer` is scaled by 10**18 (worst case
+    /// for the normalization multiply). Pyth is left at the default fresh $1.00.
+    function _adapterWith0DecCL() internal returns (ChainlinkPythAdapterV2 a, MockChainlinkFeed feed) {
+        feed = new MockChainlinkFeed(0, 1); // 0 decimals; placeholder answer
+        a = new ChainlinkPythAdapterV2(
+            token,
+            IChainlinkAggregator(address(feed)),
+            IPythV2(address(pyth)),
+            PID,
+            CL_STALE,
+            PY_STALE,
+            CONF_BPS,
+            DIV_BPS,
+            owner
+        );
+    }
+
+    // FINDING 1 (fail-open → fail-closed): decimals=0 + answer=int256.max overflows the
+    // normalization multiply `uint256(a) * 10**18` OUTSIDE the try/catch, so the read would
+    // REVERT pre-fix. Must return (.., false) with no revert.
+    function test_chainlink_astronomical_answer_int256max_is_unsafe_no_revert() public {
+        (ChainlinkPythAdapterV2 a, MockChainlinkFeed feed) = _adapterWith0DecCL();
+        feed.setAnswer(type(int256).max);
+        (, bool safe) = a.peekPrice(token);
+        assertFalse(safe, "int256.max CL answer => unsafe, not a revert");
+    }
+
+    // FINDING 2 (fail-open → fail-closed): decimals=0 + answer=int192.max normalizes WITHOUT
+    // overflowing the multiply (~3.14e75 < uint256.max), but the divergence math
+    // (`diff*BPS`) then overflows pre-fix. The price-ceiling check must invalidate the leg
+    // first so the read returns (.., false) with no revert.
+    function test_chainlink_huge_but_normalizable_answer_int192max_is_unsafe_no_revert() public {
+        (ChainlinkPythAdapterV2 a, MockChainlinkFeed feed) = _adapterWith0DecCL();
+        feed.setAnswer(type(int192).max); // other leg (Pyth) is a valid $1.00
+        (, bool safe) = a.peekPrice(token);
+        assertFalse(safe, "int192.max CL answer (>ceiling) => unsafe, not a revert");
+    }
+
+    // FINDING 3 (hardening): a Pyth publishTime in the future must NOT count as fresh.
+    function test_pyth_future_publishTime_is_unsafe() public {
+        pyth.setPrice(PID, 100_000_000, 100_000, -8, block.timestamp + 10_000);
+        (, bool safe) = adapter.peekPrice(token);
+        assertFalse(safe, "future Pyth publishTime => unsafe");
+    }
+
+    // FINDING 3 (hardening): a Chainlink updatedAt in the future must NOT count as fresh.
+    function test_chainlink_future_updatedAt_is_unsafe() public {
+        cl.setUpdatedAt(block.timestamp + 10_000);
+        (, bool safe) = adapter.peekPrice(token);
+        assertFalse(safe, "future Chainlink updatedAt => unsafe");
+    }
+
+    // Regression: ordinary $1.00 / $1.00 on both legs stays safe after the hardening.
+    function test_normal_dollar_both_legs_still_safe() public {
+        (uint256 p, bool safe) = adapter.peekPrice(token);
+        assertTrue(safe, "normal $1/$1 stays safe post-hardening");
+        assertEq(p, 1e18, "still normalized to 1e18");
+    }
 }

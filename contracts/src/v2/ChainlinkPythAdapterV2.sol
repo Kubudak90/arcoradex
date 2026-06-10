@@ -19,6 +19,16 @@ import {IPythV2} from "./interfaces/IPythV2.sol";
 contract ChainlinkPythAdapterV2 is IOracleAdapterV2, Ownable2Step {
     uint256 internal constant BPS = 10_000;
 
+    /// @dev Fail-closed normalized-price ceiling (review findings 1 & 2). Any leg whose
+    /// 1e18-normalized price exceeds this is treated as INVALID (leg ⇒ unsafe), never a
+    /// revert. The bound is deliberately astronomical ($1e18) so no real asset trips it,
+    /// yet it caps `_compute`'s arithmetic: with both legs ≤ 1e36,
+    /// `diff * BPS ≤ 1e36 * 1e4 = 1e40` and `cl1e18 + py1e18 ≤ 2e36` both stay well below
+    /// uint256.max (~1.16e77) — so the divergence/mid math can never overflow. Each leg
+    /// reader applies this in overflow-proof order (compare BEFORE multiplying) so the
+    /// read/peek fail-closed invariant holds: they never revert except WrongToken.
+    uint256 internal constant MAX_PRICE_1E18 = 1e36;
+
     // ── Immutable wiring ────────────────────────────────────────────────
     // Justification [naming-convention]: UPPER_CASE marks an immutable, per project convention.
     // slither-disable-next-line naming-convention
@@ -158,9 +168,22 @@ contract ChainlinkPythAdapterV2 is IOracleAdapterV2, Ownable2Step {
         // Justification [unused-return]: startedAt (3rd field) carries no staleness info.
         // slither-disable-next-line unused-return
         try CHAINLINK_FEED.latestRoundData() returns (uint80 r, int256 a, uint256, uint256 u, uint80 air) {
-            if (a > 0 && u > 0 && r != 0 && air >= r && block.timestamp <= u + chainlinkMaxStaleSeconds) {
+            // Finding 3 (hardening): reject future `updatedAt` (no forward tolerance) — a
+            // timestamp ahead of `block.timestamp` is not "fresh", it is malformed ⇒ unsafe.
+            if (
+                a > 0 && u > 0 && u <= block.timestamp && r != 0 && air >= r
+                    && block.timestamp <= u + chainlinkMaxStaleSeconds
+            ) {
                 // CHAINLINK_DECIMALS <= 18 (constructor-guaranteed) ⇒ scale up to 1e18.
-                return (true, uint256(a) * (10 ** (18 - CHAINLINK_DECIMALS)));
+                uint256 scale = 10 ** (18 - CHAINLINK_DECIMALS);
+                // Finding 1 (fail-closed): cap the normalized price BEFORE multiplying so an
+                // astronomical `a` (e.g. decimals=0, answer=int256.max) marks the leg invalid
+                // instead of overflowing — the multiply lives in the try's success branch,
+                // which try/catch does NOT shield, so an overflow here would otherwise REVERT
+                // the read. Comparing `a > MAX_PRICE_1E18 / scale` first is overflow-proof and
+                // keeps the read/peek invariant: never revert except WrongToken.
+                if (uint256(a) > MAX_PRICE_1E18 / scale) return (false, 0);
+                return (true, uint256(a) * scale);
             }
             return (false, 0);
         } catch {
@@ -174,6 +197,9 @@ contract ChainlinkPythAdapterV2 is IOracleAdapterV2, Ownable2Step {
         try PYTH.getPriceUnsafe(PYTH_PRICE_ID) returns (IPythV2.Price memory p) {
             if (p.price <= 0 || p.publishTime == 0) return (false, 0);
             if (p.expo < -18 || p.expo > 18) return (false, 0); // malformed-expo (§14 expo-edge)
+            // Finding 3 (hardening): reject future `publishTime` (no forward tolerance) — a
+            // timestamp ahead of `block.timestamp` is not "fresh", it is malformed ⇒ unsafe.
+            if (p.publishTime > block.timestamp) return (false, 0);
             if (block.timestamp > p.publishTime + pythMaxStaleSeconds) return (false, 0);
             uint256 rawPrice = uint256(uint64(p.price));
             // Confidence ratio in bps; expo cancels (conf and price share expo).
@@ -181,6 +207,14 @@ contract ChainlinkPythAdapterV2 is IOracleAdapterV2, Ownable2Step {
             int256 scaleExp = int256(18) + int256(p.expo); // in [0, 36]
             uint256 scaled =
                 scaleExp >= 0 ? rawPrice * (10 ** uint256(scaleExp)) : rawPrice / (10 ** uint256(-scaleExp));
+            // Finding 2 (fail-closed): cap the normalized price so an astronomical-but-
+            // individually-valid leg marks itself invalid instead of letting `_compute`'s
+            // divergence math (`diff * BPS`, `cl1e18 + py1e18`) overflow and REVERT the read.
+            // rawPrice ≤ uint64.max (~1.8e19) and scaleExp ≤ 36, so the scale-up cannot
+            // overflow uint256; the ceiling is applied after normalization. With both legs
+            // ≤ MAX_PRICE_1E18 the compute math is overflow-free. Invariant: never revert
+            // except WrongToken.
+            if (scaled > MAX_PRICE_1E18) return (false, 0);
             return (true, scaled);
         } catch {
             return (false, 0);
