@@ -1,0 +1,18 @@
+{
+  "name": "arcoradex-arc-v2-keeper",
+  "private": true,
+  "type": "module",
+  "version": "1.0.0",
+  "description": "Arc V2 keeper: push a fresh setPrice(token, peg, true) per token to each MockOracleAdapterV2Settable on Arc testnet (5042002) so the adapters keep reading safe",
+  "main": "push-prices-arc.mjs",
+  "scripts": {
+    "push": "node push-prices-arc.mjs",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "viem": "^2.21.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

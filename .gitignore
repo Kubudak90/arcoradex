@@ -29,6 +29,11 @@ ops/basekeeper/.env.*
 !ops/basekeeper/.env.example
 ops/basekeeper/node_modules/
 ops/basekeeper/package-lock.json
+ops/arckeeper/.env
+ops/arckeeper/.env.*
+!ops/arckeeper/.env.example
+ops/arckeeper/node_modules/
+ops/arckeeper/package-lock.json
 
 # Next.js app
 app/node_modules/
