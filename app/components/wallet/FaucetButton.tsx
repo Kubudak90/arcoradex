@@ -3,6 +3,8 @@ import { useState } from "react";
 import { useAccount, useChainId } from "wagmi";
 import { ACTIVE_CHAIN, EXPLORER } from "@/lib/chain";
 import { Modal } from "@/components/ui/modal";
+import { Icon } from "@/components/ds/Icon";
+import { chipNav } from "@/components/layout/chip-style";
 import { FAUCET_TOKENS } from "@/lib/faucet-tokens";
 
 interface ClaimResult {
@@ -85,12 +87,12 @@ export function FaucetButton() {
     <>
       <button
         onClick={() => setOpen(true)}
-        className="hidden sm:inline-flex items-center gap-1.5 h-9 px-3.5 rounded-full text-[13px] font-medium bg-arc-ink-50 text-arc-ink-900 hover:bg-arc-ink-100 transition-colors"
+        style={chipNav}
+        onMouseEnter={(e) => (e.currentTarget.style.background = "var(--surface-2)")}
+        onMouseLeave={(e) => (e.currentTarget.style.background = "var(--surface)")}
       >
-        <span className="ms" style={{ fontSize: 16 }}>
-          water_drop
-        </span>
-        Faucet
+        <Icon name="droplet" size={15} style={{ color: "var(--action)" }} />
+        <span className="ar-hide-sm">Faucet</span>
       </button>
 
       <Modal open={open} onOpenChange={setOpen} title="Test token faucet">

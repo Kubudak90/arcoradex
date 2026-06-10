@@ -1,7 +1,15 @@
 "use client";
 import { useAccount, useChainId, useSwitchChain } from "wagmi";
+import { Icon } from "@/components/ds/Icon";
+import { chipNav } from "@/components/layout/chip-style";
 import { ACTIVE_CHAIN, ADD_NETWORK_PARAMS } from "@/lib/chain";
 
+/**
+ * "Add Base Sepolia" chip — ported from the prototype's nav chip (`chipNav` +
+ * plus icon). Calls `wallet_addEthereumChain` to add 84532 to the wallet, with
+ * a `switchChain` fallback when already connected. When the wallet is already on
+ * the active chain the chip shows a live dot + the chain name.
+ */
 export function NetworkButton() {
   const chainId = useChainId();
   const { isConnected } = useAccount();
@@ -10,45 +18,51 @@ export function NetworkButton() {
 
   async function onClick() {
     try {
-      if (isConnected) {
-        await switchChainAsync({ chainId: ACTIVE_CHAIN.id });
+      const eth = (
+        window as unknown as { ethereum?: { request: (a: unknown) => Promise<unknown> } }
+      ).ethereum;
+      if (eth) {
+        await eth.request({
+          method: "wallet_addEthereumChain",
+          params: [ADD_NETWORK_PARAMS],
+        });
         return;
       }
-      const eth = (window as unknown as { ethereum?: { request: (a: unknown) => Promise<unknown> } })
-        .ethereum;
-      if (!eth) return;
-      await eth.request({
-        method: "wallet_addEthereumChain",
-        params: [ADD_NETWORK_PARAMS],
-      });
+      if (isConnected) await switchChainAsync({ chainId: ACTIVE_CHAIN.id });
     } catch {
       // user rejected or wallet not present — no-op
     }
   }
 
-  const label = isPending
-    ? "Switching…"
-    : onChain
-      ? ACTIVE_CHAIN.name
-      : isConnected
-        ? `Switch to ${ACTIVE_CHAIN.name}`
-        : `Add ${ACTIVE_CHAIN.name}`;
-
   return (
     <button
       onClick={onClick}
       disabled={isPending}
-      className="hidden sm:inline-flex items-center gap-1.5 h-9 px-3.5 rounded-full text-[13px] font-medium bg-arc-ink-50 text-arc-ink-900 hover:bg-arc-ink-100 transition-colors disabled:opacity-60"
-      title={onChain ? `Already on ${ACTIVE_CHAIN.name} — click to re-confirm` : `Force wallet to ${ACTIVE_CHAIN.name}`}
+      style={chipNav}
+      onMouseEnter={(e) => (e.currentTarget.style.background = "var(--surface-2)")}
+      onMouseLeave={(e) => (e.currentTarget.style.background = "var(--surface)")}
+      title={
+        onChain
+          ? `Connected to ${ACTIVE_CHAIN.name}`
+          : `Add ${ACTIVE_CHAIN.name} to your wallet`
+      }
     >
       {onChain ? (
-        <span className="dot live" />
+        <span
+          style={{
+            width: 7,
+            height: 7,
+            borderRadius: "50%",
+            background: "var(--success)",
+            boxShadow: "0 0 0 3px var(--success-bg)",
+          }}
+        />
       ) : (
-        <span className="ms" style={{ fontSize: 16 }}>
-          add_link
-        </span>
+        <Icon name="plus" size={15} />
       )}
-      {label}
+      <span className="ar-hide-sm">
+        {isPending ? "Switching…" : onChain ? ACTIVE_CHAIN.name : `Add ${ACTIVE_CHAIN.name}`}
+      </span>
     </button>
   );
 }

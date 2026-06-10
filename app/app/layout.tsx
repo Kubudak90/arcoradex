@@ -3,6 +3,9 @@ import { BotIdClient } from "botid/client";
 import { Providers } from "@/components/wallet/Providers";
 import { Header } from "@/components/layout/Header";
 import { Footer } from "@/components/layout/Footer";
+import { Background } from "@/components/layout/Background";
+import { Toasts } from "@/components/layout/Toasts";
+import { PageFade } from "@/components/layout/PageFade";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -29,11 +32,25 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
       </head>
-      <body className="min-h-full flex flex-col bg-bg text-fg-1">
+      <body className="min-h-full bg-bg text-fg-1" style={{ position: "relative" }}>
         <Providers>
-          <Header />
-          <main className="flex-1 mx-auto w-full max-w-[1280px] px-8 py-8">{children}</main>
-          <Footer />
+          <Background style="mesh" motion />
+          <div style={{ position: "relative", zIndex: 1 }}>
+            <Header />
+            <main
+              style={{
+                padding: "44px 24px 0",
+                margin: "0 auto",
+                width: "100%",
+                maxWidth: 1280,
+                minHeight: "calc(100vh - 320px)",
+              }}
+            >
+              <PageFade>{children}</PageFade>
+            </main>
+            <Footer />
+          </div>
+          <Toasts />
         </Providers>
       </body>
     </html>

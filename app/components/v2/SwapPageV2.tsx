@@ -18,6 +18,7 @@ import { TokenSelectModal } from "@/components/ds/TokenSelectModal";
 import { tokenColor } from "@/components/ds/tokens";
 import { iconBtnStyle } from "@/components/ds/iconBtnStyle";
 import { ACTIVE_CHAIN, EXPLORER } from "@/lib/chain";
+import { pushToast } from "@/components/layout/toast-store";
 import { useTokensV2 } from "./useTokensV2";
 import { useMaxGuard } from "./useMaxGuard";
 import { ReserveHealthBar } from "./ReserveHealthBar";
@@ -169,12 +170,22 @@ export function SwapPageV2() {
         slippageBps: Math.round(slippagePct * 100),
         deadline: BigInt(Math.floor(Date.now() / 1000) + 20 * 60),
       });
-      // TODO(toast): once Task 7 ships the toast store, pushToast({kind:"success",
-      // title:"Swap confirmed", hash:res.hash}). For now surface inline.
       setTxHash(res.hash);
+      pushToast({
+        kind: "success",
+        title: "Swap confirmed",
+        msg:
+          inMeta && outMeta ? `${inMeta.symbol} → ${outMeta.symbol}` : undefined,
+        hash: res.hash,
+      });
       setAmountStr("");
-    } catch {
-      // surfaced via swap.error below; keep the form state for retry
+    } catch (err) {
+      // The inline error message below still surfaces; also toast it (unless
+      // it's the oracle-unsafe signal, which has its own dedicated banner).
+      const e = err as Error;
+      if (e?.name !== "OracleUnsafeError") {
+        pushToast({ kind: "error", title: "Swap failed", msg: e?.message });
+      }
     }
   }
 

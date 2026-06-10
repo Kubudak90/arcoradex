@@ -1,6 +1,7 @@
-import { Wordmark } from "@/components/brand/Wordmark";
+import { Wordmark } from "@/components/ds/Wordmark";
+import { Pill } from "@/components/ds/Pill";
 
-const COLUMNS = [
+const COLUMNS: { h: string; links: { label: string; href: string }[] }[] = [
   {
     h: "Protocol",
     links: [
@@ -30,58 +31,110 @@ const COLUMNS = [
   {
     h: "Network",
     links: [
-      { label: "Arc Testnet", href: "https://testnet.arcscan.app" },
+      { label: "Base Sepolia", href: "https://sepolia.basescan.org" },
       { label: "Status", href: "#" },
       { label: "Bridge", href: "#" },
     ],
   },
 ];
 
+/**
+ * Footer — the prototype's 4-column footer. Brand blurb + Wordmark + an
+ * "Operational" success pill, the Protocol/Develop/Ecosystem/Network columns
+ * (Network relabelled to Base Sepolia), and the mono © / `v2-testnet` bar.
+ */
 export function Footer() {
   return (
-    <footer className="border-t border-arc-ink-100 bg-surface mt-20">
-      <div className="mx-auto max-w-[1280px] px-8 py-12 grid grid-cols-1 md:grid-cols-[2fr_1fr_1fr_1fr_1fr] gap-8">
-        <div>
-          <Wordmark size={28} />
-          <p className="mt-4 text-arc-ink-500 text-[13px] max-w-[280px] leading-relaxed">
-            Stableswap built on Arc Testnet. Part of the ArcoraPay ecosystem — settle in any stable, swap at oracle price.
+    <footer
+      style={{
+        position: "relative",
+        zIndex: 1,
+        borderTop: "1px solid var(--border)",
+        marginTop: 80,
+        background: "var(--surface)",
+      }}
+    >
+      <div
+        style={{
+          maxWidth: 1280,
+          margin: "0 auto",
+          padding: "48px 24px 28px",
+          display: "grid",
+          gridTemplateColumns: "1.6fr repeat(4, 1fr)",
+          gap: 32,
+        }}
+      >
+        <div style={{ maxWidth: 280 }}>
+          <Wordmark size={18} />
+          <p style={{ marginTop: 14, fontSize: 13, color: "var(--fg-3)", lineHeight: 1.6 }}>
+            Stableswap on Base Sepolia. Part of the ArcoraPay ecosystem — settle in any stable,
+            swap at oracle price.
           </p>
+          <div style={{ marginTop: 16 }}>
+            <Pill tone="success">
+              <span
+                style={{
+                  width: 7,
+                  height: 7,
+                  borderRadius: "50%",
+                  background: "var(--success)",
+                }}
+              />{" "}
+              Operational
+            </Pill>
+          </div>
         </div>
         {COLUMNS.map((c) => (
           <div key={c.h}>
-            <div className="t-label mb-3">{c.h}</div>
-            <ul className="list-none p-0 m-0 flex flex-col gap-2">
+            <div className="overline" style={{ marginBottom: 12 }}>
+              {c.h}
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
               {c.links.map((l) => (
-                <li key={l.label}>
-                  <a
-                    href={l.href}
-                    target={l.href.startsWith("http") ? "_blank" : undefined}
-                    rel={l.href.startsWith("http") ? "noreferrer" : undefined}
-                    className="text-[13px] text-arc-ink-700 hover:text-arc-ink-900 transition-colors"
-                  >
-                    {l.label}
-                  </a>
-                </li>
+                <FooterLink key={l.label} href={l.href} label={l.label} />
               ))}
-            </ul>
+            </div>
           </div>
         ))}
       </div>
-      <div className="border-t border-arc-ink-100">
-        <div
-          className="mx-auto max-w-[1280px] px-8 py-5 flex justify-between items-center text-xs text-arc-ink-500"
-          style={{ fontFamily: "var(--font-mono)" }}
-        >
-          <div>© 2026 ArcoraLabs · v1.0-testnet</div>
-          <div className="flex gap-4 items-center">
-            <span>
-              Status: <span style={{ color: "var(--color-success)" }}>● Operational</span>
-            </span>
-            <a href="#" className="hover:text-arc-ink-900 transition-colors">Terms</a>
-            <a href="#" className="hover:text-arc-ink-900 transition-colors">Privacy</a>
-          </div>
-        </div>
+      <div
+        style={{
+          maxWidth: 1280,
+          margin: "0 auto",
+          padding: "16px 24px 28px",
+          borderTop: "1px solid var(--border-faint)",
+          display: "flex",
+          justifyContent: "space-between",
+          fontSize: 12.5,
+          color: "var(--fg-3)",
+          fontFamily: "var(--font-mono)",
+        }}
+      >
+        <span>© 2026 ArcoraLabs · v2-testnet</span>
+        <span style={{ display: "flex", gap: 16 }}>
+          <a href="#" style={{ color: "var(--fg-3)", textDecoration: "none" }}>
+            Terms
+          </a>
+          <a href="#" style={{ color: "var(--fg-3)", textDecoration: "none" }}>
+            Privacy
+          </a>
+        </span>
       </div>
     </footer>
+  );
+}
+
+function FooterLink({ href, label }: { href: string; label: string }) {
+  const external = href.startsWith("http");
+  return (
+    <a
+      href={href}
+      target={external ? "_blank" : undefined}
+      rel={external ? "noreferrer" : undefined}
+      className="footer-link"
+      style={{ fontSize: 13.5, color: "var(--fg-2)", textDecoration: "none" }}
+    >
+      {label}
+    </a>
   );
 }

@@ -341,3 +341,23 @@ body { font-family: var(--font-sans); color: var(--fg-1); background: var(--bg);
 ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 99px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--green-500); }
 ::-webkit-scrollbar-track { background: transparent; }
+
+/* ===== Misc base + utilities (ported from prototype) ===== */
+::selection { background: rgba(200,242,74,.3); }
+input::placeholder { color: var(--fg-3); }
+
+/* Footer link hover (prototype: --fg-2 → --action) */
+.footer-link { transition: color var(--dur-fast); }
+.footer-link:hover { color: var(--action) !important; }
+
+/* Responsive helper used by the nav chips (hide their labels on small screens) */
+@media (max-width: 720px) { .ar-hide-sm { display: none !important; } }
+
+/* Motion gate — collapse animations/transitions for reduced-motion users */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+  }
+}
