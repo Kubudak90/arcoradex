@@ -90,6 +90,37 @@ contract ArcoraDexPoolV2 is IArcoraDexPoolV2, Ownable2Step, ReentrancyGuard {
         return (reserves[token] * price1e18) / (10 ** dec);
     }
 
+    /// @dev Total gross USD entitlement that traverse can place down to the floor for
+    /// `tokenOut` at its current reserve — the sum of every band's gross-for-debit.
+    /// Found by feeding traverse a deliberately-huge gross and reading how much debit
+    /// it placed; because traverse caps at the floor, the placed gross == max gross.
+    function _maxGrossUsd(IArcoraDexRegistryV2.TokenConfigV2 memory c, uint256 reserveUsd)
+        internal
+        view
+        returns (uint256 grossUsd, FeeBandMathV2.Result memory r)
+    {
+        if (reserveUsd <= c.minimumReserveUsd) return (0, r);
+        // Binary search the largest gross whose traverse returns ok. Upper bound is the
+        // full usable reserve (debit <= gross always, so usable is a safe ceiling).
+        uint256 lo;
+        uint256 hi = reserveUsd - c.minimumReserveUsd;
+        while (lo < hi) {
+            uint256 mid = (lo + hi + 1) / 2;
+            FeeBandMathV2.Result memory probe = FeeBandMathV2.traverse(
+                mid, reserveUsd, c.minimumReserveUsd, c.targetReserveUsd, c.bands, protocolFeeShareBps
+            );
+            if (probe.ok) {
+                lo = mid;
+            } else {
+                hi = mid - 1;
+            }
+        }
+        grossUsd = lo;
+        r = FeeBandMathV2.traverse(
+            grossUsd, reserveUsd, c.minimumReserveUsd, c.targetReserveUsd, c.bands, protocolFeeShareBps
+        );
+    }
+
     // ── NAV ──────────────────────────────────────────────────────────
     /// @dev Stateful NAV: reverts (via _readSafe) if any active token is unsafe — this
     /// is the §11 "operations whose NAV requires an unsafe price stop" guarantee.
@@ -444,11 +475,41 @@ contract ArcoraDexPoolV2 is IArcoraDexPoolV2, Ownable2Step, ReentrancyGuard {
             FeeBandMathV2.healthBps(reserveUsd - r.totalReserveDebitUsd, cOut.minimumReserveUsd, cOut.targetReserveUsd);
     }
 
-    function maxSwapOut(address) external view virtual override returns (uint256, uint256) {
-        revert(); // implemented in Task 9
+    function maxSwapOut(address tokenOut) external view override returns (uint256 netOut, uint256 grossUsd1e18) {
+        IArcoraDexRegistryV2.TokenConfigV2 memory c = REGISTRY.tokenConfig(tokenOut);
+        uint256 pOut = _peekSafe(tokenOut, c);
+        uint256 reserveUsd = _reserveUsd(tokenOut, pOut, c.decimals);
+        FeeBandMathV2.Result memory r;
+        (grossUsd1e18, r) = _maxGrossUsd(c, reserveUsd);
+        netOut = (r.totalUserOutputUsd * (10 ** c.decimals)) / pOut;
     }
 
-    function maxWithdraw(address, address) external view virtual override returns (uint256, uint256) {
-        revert(); // implemented in Task 9
+    function maxWithdraw(address tokenOut, address account)
+        external
+        view
+        override
+        returns (uint256 lpAmount, uint256 netOut)
+    {
+        IArcoraDexRegistryV2.TokenConfigV2 memory c = REGISTRY.tokenConfig(tokenOut);
+        uint256 pOut = _peekSafe(tokenOut, c);
+        uint256 reserveUsd = _reserveUsd(tokenOut, pOut, c.decimals);
+        (uint256 maxGrossUsd, FeeBandMathV2.Result memory r) = _maxGrossUsd(c, reserveUsd);
+        // LP amount whose gross USD share == maxGrossUsd (round DOWN so we never overstate).
+        uint256 navBefore = totalReservesUSD();
+        uint256 supply = LP.totalSupply();
+        // gross = lp * (nav + VA) / (supply + VS)  =>  lp = gross * (supply + VS) / (nav + VA)
+        uint256 lpFromGross = (maxGrossUsd * (supply + VIRTUAL_SHARES)) / (navBefore + VIRTUAL_ASSETS);
+        uint256 bal = LP.balanceOf(account);
+        lpAmount = lpFromGross < bal ? lpFromGross : bal;
+        if (lpAmount == lpFromGross) {
+            netOut = (r.totalUserOutputUsd * (10 ** c.decimals)) / pOut;
+        } else {
+            // Account-balance bound: recompute the net for the smaller LP slice.
+            uint256 grossUsd = (lpAmount * (navBefore + VIRTUAL_ASSETS)) / (supply + VIRTUAL_SHARES);
+            FeeBandMathV2.Result memory r2 = FeeBandMathV2.traverse(
+                grossUsd, reserveUsd, c.minimumReserveUsd, c.targetReserveUsd, c.bands, protocolFeeShareBps
+            );
+            netOut = (r2.totalUserOutputUsd * (10 ** c.decimals)) / pOut;
+        }
     }
 }
