@@ -20,23 +20,16 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" className="h-full">
+    <html lang="en" data-theme="dark" className="h-full">
       <head>
         {/* Vercel BotID signal collection — protects /api/faucet from automated abuse. */}
         <BotIdClient protect={[{ path: "/api/faucet", method: "POST" }]} />
-        {/* Load fonts in <head> so Material Symbols ligatures resolve before first paint. */}
+        {/* Hanken Grotesk + IBM Plex Mono are loaded via the @import in
+            globals.css; preconnect here so the CDN handshake starts early. */}
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        <link
-          rel="stylesheet"
-          href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Roboto+Flex:opsz,wght@8..144,300..700&family=Roboto+Mono:wght@400;500&display=swap"
-        />
-        <link
-          rel="stylesheet"
-          href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,400,0,0&display=block"
-        />
       </head>
-      <body className="min-h-full flex flex-col bg-surface-page text-arc-ink-900">
+      <body className="min-h-full flex flex-col bg-bg text-fg-1">
         <Providers>
           <Header />
           <main className="flex-1 mx-auto w-full max-w-[1280px] px-8 py-8">{children}</main>

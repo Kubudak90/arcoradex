@@ -1,278 +1,343 @@
+/* ============================================================
+   ArcoraDEX ServiceNow design-system foundation.
+
+   Ported verbatim from the prototype colors_and_type.css
+   (the Hanken Grotesk + IBM Plex Mono webfonts, the CORE palette
+   --sn, --chartreuse, --green ramp, functional hues, TYPE,
+   spacing, --radius, MOTION, and BOTH semantic blocks
+   light default and dark). Replaces the prior Arc-blue tokens.
+
+   NOTE: plain @import url() rules MUST sit above @import
+   "tailwindcss" — Tailwind v4 expands its import inline, so any
+   @import placed below it violates the CSS spec (@import must
+   precede all other rules) and Turbopack's dev parser rejects it.
+   ============================================================ */
+
+/* ---- Webfonts (Hanken Grotesk + IBM Plex Mono) ---------------- */
+@import url('https://fonts.googleapis.com/css2?family=Hanken+Grotesk:ital,wght@0,300..800;1,400..600&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
 @import "tailwindcss";
 
-/* Note: font @import URLs are also injected via <link> tags in app/app/layout.tsx
-   so Material Symbols ligatures resolve before first paint. Keeping the imports
-   here as a fallback for tools (e.g. PostCSS coverage analyzers). */
-
+/* ---- Tailwind v4 theme bridge ---------------------------------
+   Map the design-system tokens onto Tailwind's @theme namespace so
+   utility classes (font-sans, font-mono, rounded-*, etc.) resolve
+   to the ServiceNow values. Semantic colors are exposed so
+   `bg-surface`, `text-fg-1`, `border-border`, … work in TSX. */
 @theme inline {
-  /* Brand — Arcora */
-  --color-arc-blue-50: #eef3ff;
-  --color-arc-blue-100: #dce6ff;
-  --color-arc-blue-200: #b6c9ff;
-  --color-arc-blue-300: #8aa8ff;
-  --color-arc-blue-400: #5582ff;
-  --color-arc-blue-500: #2563ff;
-  --color-arc-blue-600: #1d5dff;
-  --color-arc-blue-700: #1846cc;
-  --color-arc-blue-800: #143399;
-  --color-arc-blue-900: #0e2266;
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+  --font-display: var(--font-display);
 
-  --color-arc-teal-50: #e6fbf6;
-  --color-arc-teal-100: #c2f4e8;
-  --color-arc-teal-200: #8fe8d5;
-  --color-arc-teal-300: #4fd8bd;
-  --color-arc-teal-400: #13b8af;
-  --color-arc-teal-500: #00c2a8;
-  --color-arc-teal-600: #0aa38f;
-  --color-arc-teal-700: #0f806f;
+  --color-bg: var(--bg);
+  --color-bg-sunken: var(--bg-sunken);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
 
-  /* Ink (cool near-black) */
-  --color-arc-ink-900: #0b1426;
-  --color-arc-ink-800: #1a2436;
-  --color-arc-ink-700: #2c3649;
-  --color-arc-ink-600: #4a5568;
-  --color-arc-ink-500: #6b7588;
-  --color-arc-ink-400: #8c95a6;
-  --color-arc-ink-300: #b5bcc9;
-  --color-arc-ink-200: #d6dbe3;
-  --color-arc-ink-100: #e6ecf2;
-  --color-arc-ink-50: #f2f5f9;
-  --color-arc-ink-25: #f7f9fc;
+  --color-fg-1: var(--fg-1);
+  --color-fg-2: var(--fg-2);
+  --color-fg-3: var(--fg-3);
 
-  /* Surfaces */
-  --color-surface: #ffffff;
-  --color-surface-page: #fafbfd;
-  --color-surface-tint: #f7f9fc;
-  --color-surface-sunken: #f2f5f9;
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-border-faint: var(--border-faint);
 
-  /* Semantic */
-  --color-success: #0aa38f;
-  --color-warn: #f59e0b;
-  --color-danger: #e5484d;
+  --color-brand: var(--brand);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-action: var(--action);
+  --color-success: var(--success);
+  --color-info: var(--info);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
 
-  /* Type */
-  --font-brand: "Roboto Flex", "Roboto", system-ui, sans-serif;
-  --font-sans: "Roboto", system-ui, sans-serif;
-  --font-mono: "Roboto Mono", ui-monospace, monospace;
-
-  /* Shape */
-  --radius-xs: 6px;
-  --radius-sm: 10px;
-  --radius-md: 14px;
-  --radius-lg: 20px;
-  --radius-xl: 28px;
-  --radius-2xl: 36px;
-
-  /* Shadows */
-  --shadow-xs: 0 1px 2px rgba(11, 20, 38, 0.06);
-  --shadow-sm: 0 2px 6px rgba(11, 20, 38, 0.06), 0 1px 2px rgba(11, 20, 38, 0.04);
-  --shadow-md: 0 8px 24px rgba(11, 20, 38, 0.08), 0 2px 6px rgba(11, 20, 38, 0.04);
-  --shadow-lg: 0 24px 60px rgba(11, 20, 38, 0.1), 0 6px 16px rgba(11, 20, 38, 0.05);
-  --shadow-glow: 0 8px 32px rgba(37, 99, 255, 0.18);
+  --radius-xs: var(--radius-xs);
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+  --radius-xl: var(--radius-xl);
+  --radius-2xl: var(--radius-2xl);
 }
 
 :root {
+  /* ============================================================
+     1. CORE PALETTE  (raw, theme-independent brand values)
+     ============================================================ */
+
+  /* ServiceNow greens */
+  --sn-ink:        #293E40;  /* "Outer Space" — brand dark green   */
+  --sn-ink-deep:   #16252455;/* used only as a tint helper          */
+  --sn-green:      #62D84E;  /* signature bright green              */
+  --sn-sage:       #80B6A1;  /* secondary light green / "Green Sheen"*/
+  --sn-sage-deep:  #4E8C77;
+
+  /* Chartreuse accent family (project accent) */
+  --chartreuse-100: #F2FBD6;
+  --chartreuse-200: #E4F7A8;
+  --chartreuse-300: #D6F277;
+  --chartreuse-400: #C8F24A;  /* ← primary accent */
+  --chartreuse-500: #B4E034;
+  --chartreuse-600: #97BE20;
+  --chartreuse-700: #6F8E14;
+
+  /* Green-tinted neutral ramp (cool, slightly desaturated green) */
+  --green-50:  #F6F8F6;
+  --green-100: #ECF1EE;
+  --green-150: #E2E8E4;
+  --green-200: #D4DCD7;
+  --green-300: #BCC7C1;
+  --green-400: #9AA8A2;
+  --green-500: #7C8B85;
+  --green-600: #5E6E68;
+  --green-700: #44524D;
+  --green-800: #2C3835;
+  --green-850: #1F2A27;
+  --green-900: #14201E;
+  --green-950: #0D1514;
+  --green-990: #080E0D;
+
+  /* Functional hues */
+  --hue-success: #2FA866;
+  --hue-success-soft: #DBF3E6;
+  --hue-info:    #3B82C4;
+  --hue-info-soft: #DBEAF7;
+  --hue-warning: #E0A100;
+  --hue-warning-soft: #FBEFCC;
+  --hue-danger:  #DB4B4B;
+  --hue-danger-soft: #F8DEDE;
+
+  /* ============================================================
+     2. TYPE  — families, weights, fluid scale, leading, tracking
+     ============================================================ */
+  --font-sans: 'Hanken Grotesk', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --font-display: var(--font-sans);
+
+  --weight-light: 300;
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+  --weight-extra: 800;
+
+  /* Type scale (1.250 major-third-ish, tuned for UI) */
+  --text-2xs: 11px;
+  --text-xs:  12px;
+  --text-sm:  13px;
+  --text-base:15px;
+  --text-md:  17px;
+  --text-lg:  20px;
+  --text-xl:  24px;
+  --text-2xl: 30px;
+  --text-3xl: 38px;
+  --text-4xl: 48px;
+  --text-5xl: 62px;
+  --text-6xl: 80px;
+
+  --leading-tight: 1.1;
+  --leading-snug: 1.25;
+  --leading-normal: 1.5;
+  --leading-relaxed: 1.65;
+
+  --tracking-tight: -0.02em;
+  --tracking-snug: -0.01em;
+  --tracking-normal: 0em;
+  --tracking-wide: 0.04em;
+  --tracking-caps: 0.08em;
+
+  /* ============================================================
+     3. SPACING  — 4px base grid
+     ============================================================ */
+  --space-0: 0;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+  --space-20: 80px;
+  --space-24: 96px;
+  --space-32: 128px;
+
+  /* ============================================================
+     4. SHAPES  — corner radii
+     ============================================================ */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+  --radius-2xl: 28px;
+  --radius-pill: 999px;
+  --radius-circle: 50%;
+
+  /* ============================================================
+     5. MOTION
+     ============================================================ */
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-emphasized: cubic-bezier(0.3, 0, 0, 1);
+  --ease-out: cubic-bezier(0, 0, 0, 1);
+  --dur-fast: 120ms;
+  --dur-base: 200ms;
+  --dur-slow: 320ms;
+
+  /* ============================================================
+     6. WIDTHS
+     ============================================================ */
+  --width-content: 1200px;
+  --width-prose: 68ch;
+}
+
+/* ============================================================
+   7. SEMANTIC TOKENS — LIGHT (default)
+   ============================================================ */
+:root,
+[data-theme="light"] {
   color-scheme: light;
 
-  /* Plain CSS variable copies of the @theme tokens — same values, accessible
-     in non-Tailwind contexts (inline style, custom utilities, third-party UI). */
-  --arc-blue-500: #2563ff;
-  --arc-blue-600: #1d5dff;
-  --arc-blue-700: #1846cc;
-  --arc-teal-500: #00c2a8;
-  --arc-teal-600: #0aa38f;
-  --arc-teal-700: #0f806f;
-  --arc-ink-900: #0b1426;
-  --arc-ink-800: #1a2436;
-  --arc-ink-700: #2c3649;
-  --arc-ink-600: #4a5568;
-  --arc-ink-500: #6b7588;
-  --arc-ink-400: #8c95a6;
-  --arc-ink-300: #b5bcc9;
-  --arc-ink-200: #d6dbe3;
-  --arc-ink-100: #e6ecf2;
-  --arc-ink-50: #f2f5f9;
-  --arc-ink-25: #f7f9fc;
-  --surface: #ffffff;
-  --surface-page: #fafbfd;
-  --surface-tint: #f7f9fc;
-  --color-success: #0aa38f;
-  --color-warn: #f59e0b;
-  --color-danger: #e5484d;
+  --bg:        var(--green-50);
+  --bg-sunken: var(--green-100);
+  --surface:   #FFFFFF;
+  --surface-2: var(--green-50);
+  --surface-3: var(--green-100);
 
-  /* Gradients (used as `background:` not Tailwind utilities) */
-  --grad-arcora: linear-gradient(135deg, #2563ff 0%, #1d5dff 35%, #00c2a8 100%);
-  --grad-arcora-soft: linear-gradient(135deg, #eef3ff 0%, #e6fbf6 100%);
-  --grad-text: linear-gradient(135deg, #2563ff 0%, #00c2a8 100%);
+  --fg-1: #16201E;   /* primary text     */
+  --fg-2: #4A5854;   /* secondary text   */
+  --fg-3: #7C8B85;   /* tertiary / hint  */
+  --fg-on-accent: #16241A;
+  --fg-on-brand: #FFFFFF;
 
-  --shadow-xs: 0 1px 2px rgba(11, 20, 38, 0.06);
-  --shadow-sm: 0 2px 6px rgba(11, 20, 38, 0.06), 0 1px 2px rgba(11, 20, 38, 0.04);
-  --shadow-md: 0 8px 24px rgba(11, 20, 38, 0.08), 0 2px 6px rgba(11, 20, 38, 0.04);
-  --shadow-lg: 0 24px 60px rgba(11, 20, 38, 0.1), 0 6px 16px rgba(11, 20, 38, 0.05);
-  --shadow-glow: 0 8px 32px rgba(37, 99, 255, 0.18);
+  --border:        var(--green-150);
+  --border-strong: var(--green-200);
+  --border-faint:  var(--green-100);
 
-  --r-xs: 6px;
-  --r-sm: 10px;
-  --r-md: 14px;
-  --r-lg: 20px;
-  --r-xl: 28px;
-  --r-pill: 9999px;
+  /* Brand + interaction */
+  --brand:        var(--sn-ink);
+  --brand-hover:  #1E2F30;
+  --accent:       var(--chartreuse-400);
+  --accent-hover: var(--chartreuse-500);
+  --accent-press: var(--chartreuse-600);
+  /* Accessible green for links / actionable text on light bg */
+  --action:       #2C7A52;
+  --action-hover: #246A46;
+  --focus-ring:   #62D84E;
 
-  --font-brand: "Roboto Flex", "Roboto", system-ui, sans-serif;
-  --font-ui: "Roboto", system-ui, sans-serif;
-  --font-mono: "Roboto Mono", ui-monospace, monospace;
+  --success: var(--hue-success);  --success-bg: var(--hue-success-soft);
+  --info:    var(--hue-info);     --info-bg:    var(--hue-info-soft);
+  --warning: #9A6B00;             --warning-bg: var(--hue-warning-soft);
+  --danger:  var(--hue-danger);   --danger-bg:  var(--hue-danger-soft);
+
+  /* Elevation (Sigma-style soft, green-tinted shadows) */
+  --elev-0: none;
+  --elev-1: 0 1px 2px rgba(20,40,36,0.06), 0 1px 1px rgba(20,40,36,0.04);
+  --elev-2: 0 2px 6px rgba(20,40,36,0.08), 0 1px 2px rgba(20,40,36,0.05);
+  --elev-3: 0 8px 24px rgba(20,40,36,0.10), 0 2px 6px rgba(20,40,36,0.06);
+  --elev-4: 0 18px 48px rgba(20,40,36,0.16), 0 6px 16px rgba(20,40,36,0.08);
+
+  /* Material (glass) */
+  --glass-bg: rgba(255,255,255,0.66);
+  --glass-border: rgba(255,255,255,0.6);
+  --glass-blur: 18px;
 }
 
-html, body {
-  margin: 0;
-  background: var(--surface-page);
-  color: var(--arc-ink-900);
-  font-family: var(--font-ui);
-  font-size: 16px;
-  line-height: 1.5;
-  -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
-}
-::selection {
-  background: #dce6ff;
-  color: var(--arc-ink-900);
+/* ============================================================
+   8. SEMANTIC TOKENS — DARK
+   ============================================================ */
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg:        var(--green-950);
+  --bg-sunken: var(--green-990);
+  --surface:   var(--green-900);
+  --surface-2: var(--green-850);
+  --surface-3: var(--green-800);
+
+  --fg-1: #ECF2EF;
+  --fg-2: #A7B5B0;
+  --fg-3: #6E7C78;
+  --fg-on-accent: #16241A;
+  --fg-on-brand: #ECF2EF;
+
+  --border:        var(--green-800);
+  --border-strong: var(--green-700);
+  --border-faint:  var(--green-850);
+
+  --brand:        var(--sn-sage);
+  --brand-hover:  #95C7B2;
+  --accent:       var(--chartreuse-400);
+  --accent-hover: var(--chartreuse-300);
+  --accent-press: var(--chartreuse-500);
+  --action:       #6FE05C;
+  --action-hover: #87E977;
+  --focus-ring:   #62D84E;
+
+  --success: #4FC084;  --success-bg: #11301F;
+  --info:    #6AA9E0;  --info-bg:    #112538;
+  --warning: #E6B53A;  --warning-bg: #322512;
+  --danger:  #EE7070;  --danger-bg:  #381818;
+
+  --elev-0: none;
+  --elev-1: 0 1px 2px rgba(0,0,0,0.4);
+  --elev-2: 0 2px 8px rgba(0,0,0,0.45), 0 1px 2px rgba(0,0,0,0.3);
+  --elev-3: 0 10px 28px rgba(0,0,0,0.55), 0 2px 8px rgba(0,0,0,0.4);
+  --elev-4: 0 22px 56px rgba(0,0,0,0.66), 0 8px 18px rgba(0,0,0,0.45);
+
+  --glass-bg: rgba(20,32,30,0.6);
+  --glass-border: rgba(255,255,255,0.08);
+  --glass-blur: 18px;
 }
 
-/* ===== Type utilities (M3-derived, brand-tuned) ===== */
-.t-display-l {
-  font-family: var(--font-brand);
-  font-weight: 500;
-  font-size: clamp(40px, 5.5vw, 64px);
-  line-height: 1.05;
-  letter-spacing: -0.025em;
-}
-.t-display-m {
-  font-family: var(--font-brand);
-  font-weight: 500;
-  font-size: clamp(32px, 4vw, 44px);
-  line-height: 1.1;
-  letter-spacing: -0.02em;
-}
-.t-headline {
-  font-family: var(--font-brand);
-  font-weight: 500;
-  font-size: 28px;
-  line-height: 1.2;
-  letter-spacing: -0.01em;
-}
-.t-title-l {
-  font-family: var(--font-brand);
-  font-weight: 500;
-  font-size: 22px;
-  line-height: 1.3;
-  letter-spacing: -0.005em;
-}
-.t-title-m {
-  font-family: var(--font-ui);
-  font-weight: 500;
-  font-size: 16px;
-  line-height: 1.4;
-}
-.t-title-s {
-  font-family: var(--font-ui);
-  font-weight: 500;
-  font-size: 14px;
-  line-height: 1.4;
-}
-.t-body {
-  font-family: var(--font-ui);
-  font-weight: 400;
-  font-size: 15px;
-  line-height: 1.55;
-}
-.t-body-s {
-  font-family: var(--font-ui);
-  font-weight: 400;
-  font-size: 13px;
-  line-height: 1.5;
-}
-.t-label {
-  font-family: var(--font-mono);
-  font-weight: 400;
-  font-size: 12px;
-  line-height: 1.4;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--arc-ink-500);
-}
-.t-mono {
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-}
-.t-grad {
-  background: var(--grad-text);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-}
+/* ============================================================
+   9. SEMANTIC TYPE ROLES
+   ============================================================ */
+.display-1 { font-family: var(--font-display); font-weight: var(--weight-extra);
+  font-size: var(--text-6xl); line-height: var(--leading-tight); letter-spacing: var(--tracking-tight); }
+.display-2 { font-family: var(--font-display); font-weight: var(--weight-bold);
+  font-size: var(--text-5xl); line-height: var(--leading-tight); letter-spacing: var(--tracking-tight); }
+.h1 { font-family: var(--font-display); font-weight: var(--weight-bold);
+  font-size: var(--text-4xl); line-height: var(--leading-tight); letter-spacing: var(--tracking-tight); }
+.h2 { font-weight: var(--weight-bold); font-size: var(--text-3xl);
+  line-height: var(--leading-snug); letter-spacing: var(--tracking-snug); }
+.h3 { font-weight: var(--weight-semibold); font-size: var(--text-2xl);
+  line-height: var(--leading-snug); letter-spacing: var(--tracking-snug); }
+.h4 { font-weight: var(--weight-semibold); font-size: var(--text-xl);
+  line-height: var(--leading-snug); }
+.h5 { font-weight: var(--weight-semibold); font-size: var(--text-lg); line-height: var(--leading-snug); }
+.title { font-weight: var(--weight-semibold); font-size: var(--text-md); line-height: var(--leading-normal); }
+.body  { font-weight: var(--weight-regular); font-size: var(--text-base); line-height: var(--leading-normal); }
+.body-sm { font-weight: var(--weight-regular); font-size: var(--text-sm); line-height: var(--leading-normal); }
+.caption { font-weight: var(--weight-regular); font-size: var(--text-xs); line-height: var(--leading-snug); color: var(--fg-2); }
+.overline { font-family: var(--font-mono); font-weight: var(--weight-medium);
+  font-size: var(--text-2xs); letter-spacing: var(--tracking-caps); text-transform: uppercase; color: var(--fg-3); }
+.code { font-family: var(--font-mono); font-size: var(--text-sm); line-height: var(--leading-normal); }
 
-/* ===== Material symbols default ===== */
-.ms {
-  font-family: "Material Symbols Rounded";
-  font-weight: normal;
-  font-style: normal;
-  font-size: 20px;
-  line-height: 1;
-  display: inline-flex;
-  vertical-align: middle;
-  text-transform: none;
-  letter-spacing: normal;
-  white-space: nowrap;
-  direction: ltr;
-  -webkit-font-feature-settings: "liga";
-  -webkit-font-smoothing: antialiased;
-  font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24;
-}
-.ms.fill {
-  font-variation-settings: "FILL" 1, "wght" 500, "GRAD" 0, "opsz" 24;
-}
+/* ============================================================
+   10. KEYFRAMES + BASE BODY (prototype animations)
+   ============================================================ */
+@keyframes ar-draw { to { stroke-dashoffset: 0 } }
+@keyframes ar-fadein { to { opacity: 1 } }
+@keyframes ar-pop { from { opacity:0; transform: scale(.96) } to { opacity:1; transform:none } }
+@keyframes ar-overlay { from { opacity:0 } to { opacity:1 } }
+@keyframes ar-pagein { from { opacity:0; transform: translateY(6px) } to { opacity:1; transform:none } }
+@keyframes ar-toastin { from { opacity:0; transform: translateX(16px) } to { opacity:1; transform:none } }
+@keyframes ar-rowin { from { opacity:0; transform: translateY(-6px) } to { opacity:1; transform:none } }
+@keyframes ar-spin { to { transform: rotate(360deg) } }
+.ar-spin { animation: ar-spin .8s linear infinite; }
+@keyframes ar-pulse { 0%{box-shadow:0 0 0 0 rgba(98,216,78,.6)} 70%{box-shadow:0 0 0 7px rgba(98,216,78,0)} 100%{box-shadow:0 0 0 0 rgba(98,216,78,0)} }
+.ar-pulse { animation: ar-pulse 1.6s infinite; }
+@keyframes ar-float1 { 0%,100%{transform:translate(-50%,-50%)} 50%{transform:translate(-46%,-54%)} }
+@keyframes ar-float2 { 0%,100%{transform:translate(-50%,-50%)} 50%{transform:translate(-54%,-46%)} }
+@keyframes ar-float3 { 0%,100%{transform:translate(-50%,-50%)} 50%{transform:translate(-48%,-52%)} }
 
-/* ===== Card primitives ===== */
-.surface-card {
-  background: var(--surface);
-  border-radius: var(--r-lg);
-  border: 1px solid var(--arc-ink-100);
-}
-.surface-card.raised {
-  box-shadow: var(--shadow-md);
-  border-color: transparent;
-}
-
-/* ===== Live status dot ===== */
-.dot {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: 99px;
-  background: var(--color-success);
-}
-.dot.live {
-  box-shadow: 0 0 0 0 rgba(10, 163, 143, 0.7);
-  animation: pulse 1.6s infinite;
-}
-@keyframes pulse {
-  0% { box-shadow: 0 0 0 0 rgba(10, 163, 143, 0.7); }
-  70% { box-shadow: 0 0 0 8px rgba(10, 163, 143, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(10, 163, 143, 0); }
-}
+html { -webkit-text-size-adjust: 100%; }
+body { font-family: var(--font-sans); color: var(--fg-1); background: var(--bg); -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
 
 /* ===== Scrollbar ===== */
-::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
-}
-::-webkit-scrollbar-thumb {
-  background: var(--arc-ink-200);
-  border-radius: 99px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: var(--arc-ink-300);
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: var(--green-500); }
+::-webkit-scrollbar-track { background: transparent; }
