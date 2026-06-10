@@ -1,7 +1,7 @@
 "use client";
 import { useState } from "react";
 import { useAccount, useChainId } from "wagmi";
-import { arcTestnet } from "@arcoralabs/dex-sdk";
+import { ACTIVE_CHAIN, EXPLORER } from "@/lib/chain";
 import { Modal } from "@/components/ui/modal";
 import { FAUCET_TOKENS } from "@/lib/faucet-tokens";
 
@@ -54,8 +54,8 @@ export function FaucetButton() {
   const [result, setResult] = useState<ClaimResult | null>(null);
   const [failure, setFailure] = useState<FaucetFailure | null>(null);
 
-  const wrongChain = isConnected && chainId !== arcTestnet.id;
-  const explorer = process.env.NEXT_PUBLIC_BLOCK_EXPLORER || "https://testnet.arcscan.app";
+  const wrongChain = isConnected && chainId !== ACTIVE_CHAIN.id;
+  const explorer = EXPLORER;
 
   async function claim() {
     if (!address) return;
@@ -95,7 +95,7 @@ export function FaucetButton() {
 
       <Modal open={open} onOpenChange={setOpen} title="Test token faucet">
         <p className="text-sm text-arc-ink-500 m-0">
-          Mint a fresh batch of mock stablecoins to your connected wallet on Arc Testnet. One claim
+          Mint a fresh batch of mock stablecoins to your connected wallet on {ACTIVE_CHAIN.name}. One claim
           per 24 hours per address.
         </p>
 
@@ -117,7 +117,7 @@ export function FaucetButton() {
           </p>
         ) : wrongChain ? (
           <p className="text-sm text-center mt-4" style={{ color: "var(--color-warn)" }}>
-            Switch to Arc Testnet to claim.
+            Switch to {ACTIVE_CHAIN.name} to claim.
           </p>
         ) : result ? (
           <div className="mt-4 space-y-2 text-xs">

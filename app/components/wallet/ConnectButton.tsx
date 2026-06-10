@@ -1,6 +1,6 @@
 "use client";
 import { useAccount, useConnect, useDisconnect, useChainId, useSwitchChain } from "wagmi";
-import { arcTestnet } from "@arcoralabs/dex-sdk";
+import { ACTIVE_CHAIN } from "@/lib/chain";
 import { shortAddr } from "@/lib/utils";
 
 export function ConnectButton() {
@@ -10,17 +10,17 @@ export function ConnectButton() {
   const chainId = useChainId();
   const { switchChain, isPending: switchPending } = useSwitchChain();
 
-  const wrongChain = isConnected && chainId !== arcTestnet.id;
+  const wrongChain = isConnected && chainId !== ACTIVE_CHAIN.id;
 
   if (wrongChain) {
     return (
       <button
-        onClick={() => switchChain({ chainId: arcTestnet.id })}
+        onClick={() => switchChain({ chainId: ACTIVE_CHAIN.id })}
         disabled={switchPending}
         className="inline-flex items-center justify-center h-9 px-4 rounded-full text-sm font-medium text-white transition-all disabled:opacity-50"
         style={{ background: "var(--grad-arcora)", boxShadow: "var(--shadow-glow)" }}
       >
-        {switchPending ? "Switching…" : "Switch to Arc Testnet"}
+        {switchPending ? "Switching…" : `Switch to ${ACTIVE_CHAIN.name}`}
       </button>
     );
   }

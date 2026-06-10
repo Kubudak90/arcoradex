@@ -8,8 +8,9 @@ import {
   useSwap,
   usePoolStats,
 } from "@arcoralabs/dex-sdk/react";
-import { fmtUnits, tryParseUnits, arcTestnet } from "@arcoralabs/dex-sdk";
+import { fmtUnits, tryParseUnits } from "@arcoralabs/dex-sdk";
 import { TokenIcon } from "@/components/common/TokenIcon";
+import { ACTIVE_CHAIN } from "@/lib/chain";
 import { TokenPickerModal } from "./TokenPickerModal";
 import { SlippageMenu } from "./SlippageMenu";
 import { ConfirmSwapModal } from "./ConfirmSwapModal";
@@ -21,12 +22,12 @@ export function SwapCard() {
   const { address: account, isConnected } = useAccount();
   const { stats: poolStats } = usePoolStats();
   // L-5 (audit 2026-05-31): gate the CTA on the connected chain. Mirrors
-  // ConnectButton's wrongChain check (arcTestnet.id === 5042002). Without this
+  // ConnectButton's wrongChain check (ACTIVE_CHAIN.id === 84532). Without this
   // the user could trigger a swap while on the wrong network and the tx would
   // hit a non-existent contract / wrong pool.
   const chainId = useChainId();
   const { switchChain, isPending: switchPending } = useSwitchChain();
-  const wrongChain = isConnected && chainId !== arcTestnet.id;
+  const wrongChain = isConnected && chainId !== ACTIVE_CHAIN.id;
 
   const [tokenIn, setTokenIn] = useState<`0x${string}` | undefined>();
   const [tokenOut, setTokenOut] = useState<`0x${string}` | undefined>();
@@ -249,16 +250,16 @@ export function SwapCard() {
         </div>
 
         {/* CTA. L-5: when connected to the wrong chain, swap the action for a
-            "Switch to Arc Testnet" button (mirrors ConnectButton) so the user
+            "Switch to Base Sepolia" button (mirrors ConnectButton) so the user
             can't dispatch a swap against the wrong network. */}
         {wrongChain ? (
           <button
-            onClick={() => switchChain({ chainId: arcTestnet.id })}
+            onClick={() => switchChain({ chainId: ACTIVE_CHAIN.id })}
             disabled={switchPending}
             className="w-full inline-flex items-center justify-center h-13 rounded-full text-[15px] font-medium text-white mt-3 transition-all disabled:opacity-50"
             style={{ background: "var(--grad-arcora)", boxShadow: "var(--shadow-glow)" }}
           >
-            {switchPending ? "Switching…" : "Switch to Arc Testnet"}
+            {switchPending ? "Switching…" : `Switch to ${ACTIVE_CHAIN.name}`}
           </button>
         ) : (
           <button

@@ -3,9 +3,10 @@ import { useMemo, useState } from "react";
 import { useAccount, useReadContract, useChainId, useSwitchChain } from "wagmi";
 import { erc20Abi } from "viem";
 import { useTokens, useQuoteDeposit, useDeposit } from "@arcoralabs/dex-sdk/react";
-import { fmtUnits, tryParseUnits, arcTestnet } from "@arcoralabs/dex-sdk";
+import { fmtUnits, tryParseUnits } from "@arcoralabs/dex-sdk";
 import { TokenIcon } from "@/components/common/TokenIcon";
 import { TokenPickerModal } from "@/components/swap/TokenPickerModal";
+import { ACTIVE_CHAIN } from "@/lib/chain";
 
 const SLIPPAGE_BPS = 50;
 const PCT_CHIPS = [25, 50, 75, 100] as const;
@@ -13,11 +14,11 @@ const PCT_CHIPS = [25, 50, 75, 100] as const;
 export function DepositTab() {
   const { activeTokens } = useTokens();
   const { address: account, isConnected } = useAccount();
-  // L-5 (audit 2026-05-31): chain gating (mirrors ConnectButton). arcTestnet.id
-  // === 5042002.
+  // L-5 (audit 2026-05-31): chain gating (mirrors ConnectButton). The active
+  // chain is now Base Sepolia (ACTIVE_CHAIN.id === 84532).
   const chainId = useChainId();
   const { switchChain, isPending: switchPending } = useSwitchChain();
-  const wrongChain = isConnected && chainId !== arcTestnet.id;
+  const wrongChain = isConnected && chainId !== ACTIVE_CHAIN.id;
   const [token, setToken] = useState<`0x${string}` | undefined>();
   const [amountStr, setAmountStr] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -121,7 +122,7 @@ export function DepositTab() {
       {/* L-5: switch-chain CTA when on the wrong network. */}
       {wrongChain ? (
         <button
-          onClick={() => switchChain({ chainId: arcTestnet.id })}
+          onClick={() => switchChain({ chainId: ACTIVE_CHAIN.id })}
           disabled={switchPending}
           className="w-full inline-flex items-center justify-center h-13 rounded-full text-[15px] font-medium text-white mt-1 transition-all disabled:opacity-50"
           style={{ background: "var(--grad-arcora)", boxShadow: "var(--shadow-glow)" }}
