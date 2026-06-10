@@ -69,7 +69,9 @@ contract DeployBaseSepoliaV2 is Script {
         uint256 minReserveUsd; // 1e18
         uint256 targetReserveUsd; // 1e18
         uint256 depositCapUsd; // 1e18 (conservative §13-step-5 cap)
-        uint256 seedAmount; // token-native bootstrap (< cap)
+        uint256 seedAmount; // token-native bootstrap: 5x minReserveUsd (~target, < cap)
+        // so a LIVE deploy lands ABOVE the protected floor — maxSwapOut > 0 and the
+        // §13 drills are runnable from genesis, before any external deposits.
     }
 
     function _cfg() internal pure returns (TokenCfg[3] memory c) {
@@ -88,7 +90,7 @@ contract DeployBaseSepoliaV2 is Script {
             minReserveUsd: 1_000e18,
             targetReserveUsd: 5_000e18,
             depositCapUsd: 10_000e18, // conservative §13-step-5 cap
-            seedAmount: 1_000_000_000 // 1,000 USDC (6-dec)
+            seedAmount: 5_000_000_000 // 5,000 USDC (6-dec) — 5x the $1,000 floor (= target)
         });
         // USDT — real Sepolia CL proxy; 7d window (fresh feed).
         c[1] = TokenCfg({
@@ -105,7 +107,7 @@ contract DeployBaseSepoliaV2 is Script {
             minReserveUsd: 1_000e18,
             targetReserveUsd: 5_000e18,
             depositCapUsd: 10_000e18,
-            seedAmount: 1_000_000_000 // 1,000 USDT
+            seedAmount: 5_000_000_000 // 5,000 USDT — 5x the $1,000 floor (= target)
         });
         // EURC — NO Sepolia CL proxy: address(0) sentinel -> in-process MockChainlinkFeed(8,$1.15).
         c[2] = TokenCfg({
@@ -122,7 +124,7 @@ contract DeployBaseSepoliaV2 is Script {
             minReserveUsd: 1_000e18,
             targetReserveUsd: 5_000e18,
             depositCapUsd: 10_000e18,
-            seedAmount: 870_000_000 // ~1,000 USD at $1.15 (6-dec EURC)
+            seedAmount: 4_350_000_000 // ~5,000 USD at $1.15 (6-dec EURC) — 5x the floor
         });
     }
 

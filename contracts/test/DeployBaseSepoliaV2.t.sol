@@ -52,10 +52,21 @@ contract DeployBaseSepoliaV2Test is Test, DeployBaseSepoliaV2 {
         assertEq(uint256(c[2].pythMaxConfBps), 40, "EURC conf drift");
         assertEq(uint256(c[2].maxDivergenceBps), 60, "EURC div drift");
         // All conservative caps; every target > min (Registry §6.2 will reject otherwise).
+        // Seed relation (live-deploy headroom): each token's bootstrap seed must be worth
+        // 5x the protected minReserveUsd floor (== targetReserveUsd) at the deploy-time
+        // price assumption ($1.00 USDC/USDT; the $1.15 EURC mock CL answer), and stay under
+        // the §13-step-5 depositCapUsd — so maxSwapOut > 0 from genesis, BEFORE any
+        // external deposits (a seed AT the floor would leave maxSwapOut == 0, no drills).
         for (uint256 i = 0; i < 3; i++) {
             assertTrue(c[i].targetReserveUsd > c[i].minReserveUsd, "target !> min");
             assertGt(c[i].depositCapUsd, 0, "cap must be set (rollout low cap)");
-            assertLt(c[i].seedAmount, c[i].depositCapUsd, "seed must fit under cap");
+            assertEq(c[i].targetReserveUsd, 5 * c[i].minReserveUsd, "target must be 5x min");
+            uint256 px1e8 = c[i].chainlinkFeed == address(0) ? uint256(c[i].eurcMockAnswer) : 100_000_000;
+            // seedAmount is token-native (6-dec); scale to 1e18 then apply the 8-dec price.
+            uint256 seedUsd1e18 = (c[i].seedAmount * 10 ** (18 - c[i].decimals) * px1e8) / 1e8;
+            assertGe(seedUsd1e18, 5 * c[i].minReserveUsd, "seed must be >= 5x min floor");
+            assertApproxEqRel(seedUsd1e18, 5 * c[i].minReserveUsd, 0.005e18, "seed must be ~5x min floor");
+            assertLe(seedUsd1e18, c[i].depositCapUsd, "seed must fit under cap");
         }
     }
 
@@ -93,11 +104,10 @@ contract DeployBaseSepoliaV2Test is Test, DeployBaseSepoliaV2 {
         d.pgSafe = makeAddr("pgSafe");
         d.freshGovernance = true;
 
-        // Tokens. Mint generous headroom: the drills seed reserves ABOVE the per-token floor
-        // (see the bootstrap loop) so maxSwapOut/quoteSwapV2 have a non-degenerate usable band.
+        // Tokens. Mint seed + faucet headroom, mirroring the orchestrator's _deployTokens.
         for (uint256 i = 0; i < 3; i++) {
             MintableERC20 t = new MintableERC20(cfg[i].name, cfg[i].symbol, cfg[i].decimals, deployer);
-            t.mint(deployer, cfg[i].seedAmount * 10);
+            t.mint(deployer, cfg[i].seedAmount * 2);
             d.token[i] = address(t);
         }
 
@@ -162,13 +172,13 @@ contract DeployBaseSepoliaV2Test is Test, DeployBaseSepoliaV2 {
         d.lp = ArcoraDexLPV2(address(d.pool.LP()));
         d.registry.setPool(address(d.pool));
         d.pool.setPauseGuardian(d.pgSafe);
-        // Seed each token's reserve to ~target (5x the §13-step-5 seed), which clears the
-        // per-token minReserve floor and stays under depositCapUsd — so the reserve-floor and
-        // marginal-fee drills exercise a non-degenerate usable band instead of an at-floor pool.
+        // Bootstrap deposits EXACTLY cfg.seedAmount, like the orchestrator's _bootstrap.
+        // _cfg() carries the headroom itself (seed = 5x the per-token minReserve floor,
+        // ~target, under depositCapUsd) so a LIVE deploy — not just this test — clears the
+        // floor and the reserve-floor/marginal-fee drills get a non-degenerate usable band.
         for (uint256 i = 0; i < 3; i++) {
-            uint256 seed = cfg[i].seedAmount * 5;
-            MintableERC20(d.token[i]).approve(address(d.pool), seed);
-            d.pool.deposit(d.token[i], seed, 0, block.timestamp + 1 days);
+            MintableERC20(d.token[i]).approve(address(d.pool), cfg[i].seedAmount);
+            d.pool.deposit(d.token[i], cfg[i].seedAmount, 0, block.timestamp + 1 days);
         }
 
         // Handoffs.
@@ -190,6 +200,11 @@ contract DeployBaseSepoliaV2Test is Test, DeployBaseSepoliaV2 {
             assertTrue(d.registry.isActive(d.token[i]), "token active");
         }
         assertGt(d.pool.totalReservesUSD(), 0, "NAV seeded");
+        // Live-deploy headroom guarantee: bootstrapping with _cfg().seedAmount alone must
+        // leave the reserve ABOVE the protected floor, so the drills are runnable on a fresh
+        // deploy before any external deposits (seed AT the floor would pin maxSwapOut to 0).
+        (uint256 usdcMaxNet,) = d.pool.maxSwapOut(d.token[0]);
+        assertGt(usdcMaxNet, 0, "live-deploy headroom: maxSwapOut(USDC) must be > 0 after bootstrap");
     }
 
     // ── §13 Drill coverage exercised as fork-style tests ────────────────────
@@ -269,5 +284,58 @@ contract DeployBaseSepoliaV2Test is Test, DeployBaseSepoliaV2 {
         vm.prank(d.pgSafe);
         vm.expectRevert();
         d.pool.unpause();
+    }
+
+    /// Drill 4 (confidence): blow the EURC Pyth confidence ratio past _cfg()'s
+    /// pythMaxConfBps -> EURC unsafe -> swaps INTO EURC revert OracleUnsafe; resetting the
+    /// confidence within bound restores safety. (Live Sepolia conf cannot be forced; this
+    /// is the fork-style drill the runbook's Drill 4 points at.)
+    function test_drill_confidence() public {
+        (Deployed memory d, MockPyth pyth) = _deployForTest();
+        TokenCfg[3] memory cfg = _cfg();
+        int64 px = 115_000_000; // $1.15 @ expo -8, matches the EURC mock CL leg (no divergence)
+        // Smallest conf whose ratio EXCEEDS the cfg bound: conf * BPS > price * pythMaxConfBps.
+        uint64 blownConf = uint64((uint256(uint64(px)) * cfg[2].pythMaxConfBps) / 10_000 + 1);
+        pyth.setPrice(PID_EURC, px, blownConf, -8, block.timestamp);
+        (, bool safe) = ChainlinkPythAdapterV2(d.adapter[2]).peekPrice(d.token[2]);
+        assertFalse(safe, "blown confidence must make EURC unsafe");
+        vm.expectRevert(abi.encodeWithSelector(IArcoraDexPoolV2.OracleUnsafe.selector, d.token[2]));
+        d.pool.quoteSwapV2(d.token[0], d.token[2], 1_000_000);
+        // Reset conf within bound -> safe again (§12 signal clears) and quoting works.
+        pyth.setPrice(PID_EURC, px, 100_000, -8, block.timestamp);
+        (, safe) = ChainlinkPythAdapterV2(d.adapter[2]).peekPrice(d.token[2]);
+        assertTrue(safe, "EURC must be safe again after confidence resets");
+        d.pool.quoteSwapV2(d.token[0], d.token[2], 1_000_000);
+    }
+
+    /// Drill 3 (stale Pyth): warp past pythMaxStaleSeconds without a new publish -> ALL
+    /// tokens' Pyth legs stale -> every token unsafe and swaps revert; the keeper pull
+    /// (adapter.updatePyth -> Pyth.updatePriceFeeds, fresh publishTime) restores safety.
+    function test_drill_stale_pyth() public {
+        (Deployed memory d,) = _deployForTest();
+        TokenCfg[3] memory cfg = _cfg();
+        // Warp just past the widest Pyth window. The CL legs stay fresh: the warp (~24h+1s)
+        // is far inside every chainlinkMaxStaleSeconds (>= 7d).
+        uint32 maxWindow = cfg[0].pythMaxStaleSeconds;
+        for (uint256 i = 1; i < 3; i++) {
+            if (cfg[i].pythMaxStaleSeconds > maxWindow) maxWindow = cfg[i].pythMaxStaleSeconds;
+        }
+        vm.warp(block.timestamp + uint256(maxWindow) + 1);
+        for (uint256 i = 0; i < 3; i++) {
+            (, bool safe) = ChainlinkPythAdapterV2(d.adapter[i]).peekPrice(d.token[i]);
+            assertFalse(safe, "stale Pyth must make every token unsafe");
+        }
+        vm.expectRevert(abi.encodeWithSelector(IArcoraDexPoolV2.OracleUnsafe.selector, d.token[0]));
+        d.pool.quoteSwapV2(d.token[0], d.token[1], 1_000_000);
+        // Keeper pull: adapter.updatePyth -> MockPyth.updatePriceFeeds refreshes publishTime
+        // (price/conf retained), mirroring ops/basekeeper/update-pyth-base-sepolia.mjs.
+        for (uint256 i = 0; i < 3; i++) {
+            bytes[] memory updateData = new bytes[](1);
+            updateData[0] = abi.encode(cfg[i].pythPriceId);
+            ChainlinkPythAdapterV2(d.adapter[i]).updatePyth(updateData);
+            (, bool safe) = ChainlinkPythAdapterV2(d.adapter[i]).peekPrice(d.token[i]);
+            assertTrue(safe, "keeper pull must restore safety");
+        }
+        d.pool.quoteSwapV2(d.token[0], d.token[1], 1_000_000);
     }
 }
