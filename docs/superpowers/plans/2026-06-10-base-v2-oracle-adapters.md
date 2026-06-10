@@ -1195,3 +1195,44 @@ The bound is therefore **exact** (peek==read, zero divergence), not merely "docu
 - `Ownable2Step` governance + UPPER_CASE-immutable slither justifications — reused.
 - try/catch fail-closed on a reverting feed — reused for BOTH legs.
 - Env-driven RPC endpoint + `vm.envOr`-skip fork pattern — reused from the existing `arc_testnet` endpoint / `DeployPublicTestnetTokenParam.t.sol` skip style.
+
+---
+
+## Per-Token Deploy Config (§6 deliverable — permanent reference)
+
+> Recorded by Task 6 (2026-06-10). This is the PERMANENT deliverable the future
+> `DeployOracleAdaptersV2.s.sol` transcribes verbatim — constructor args per token per
+> network for `ChainlinkPythAdapterV2(token, chainlinkFeed, pyth, pythPriceId,
+> chainlinkMaxStaleSeconds, pythMaxStaleSeconds, pythMaxConfBps, maxDivergenceBps, initialOwner)`.
+> Cross-checked against `docs/research/2026-06-10-base-oracle-feeds.md` (all five mainnet
+> anchor addresses/IDs appear verbatim — Task 6 Step 2).
+
+### Base mainnet (chainId 8453) — production
+
+| Token | `token` | `chainlinkFeed` | `pyth` | `pythPriceId` | `chainlinkMaxStaleSeconds` | `pythMaxStaleSeconds` | `pythMaxConfBps` | `maxDivergenceBps` |
+|---|---|---|---|---|---|---|---|---|
+| USDC | (prod USDC) | `0x7e860098F58bBFC8648a4311b374B1D669a2bc6B` | `0xbC16aee60f64864882BC6C4E428e148Fc0E272F5` | `0xeaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a` | `90000` | `60` | `30` | `50` |
+| EURC | (prod EURC) | `0xDAe398520e2B67cd3f27aeF9Cf14D93D927f8250` | `0xbC16aee60f64864882BC6C4E428e148Fc0E272F5` | `0x76fa85158bf14ede77087fe3ae472f66213f6ea2f5b411cb2de472794990fa5c` | `90000` | `60` | `40` | `60` |
+| USDT | (prod USDT) | `0xf19d560eB8d2ADf07BD6D13ed03e1D11215721F9` | `0xbC16aee60f64864882BC6C4E428e148Fc0E272F5` | `0x2b89b9dc8fdf9f34709a5b106b472f0f39bb6ca9ce04b0fd7f2e971688e2e53b` | `90000` | `60` | `30` | `50` |
+
+Rationale for the params:
+- `chainlinkMaxStaleSeconds = 90000` (> the verified 86400s heartbeat, with ~3600s margin) for all three.
+- `pythMaxStaleSeconds = 60` assumes a keeper calls `updatePyth` at least each minute before quotes/execution; loosen to 120 if the keeper cadence is slower (a monitoring-plan knob).
+- `pythMaxConfBps`: USDC/USDT 30 (0.30%), EURC 40 (0.40%) — EURC's live conf (±0.001545 on ~1.155 ≈ 13bps) and stables (~7bps) sit well under these; the cap catches a confidence blow-out, not normal noise.
+- `maxDivergenceBps`: 50 (0.50%) stables, 60 (0.60%) EURC — comfortably above the verified CL-vs-Pyth gap (sub-1bp at check time) while still tripping on a real depeg/disagreement.
+- All four are owner-settable post-deploy via Timelock, so these are launch defaults, not frozen forever.
+- The `(prod USDC/EURC/USDT)` token cells are the canonical Circle/Tether token addresses on Base, pinned at the deploy plan — the ORACLE wiring (feeds, IDs, params) is fully pinned here.
+
+### Base Sepolia (chainId 84532) — testnet
+
+| Token | `chainlinkFeed` | `pyth` | `pythPriceId` | `chainlinkMaxStaleSeconds` | `pythMaxStaleSeconds` | Notes |
+|---|---|---|---|---|---|---|
+| USDC | `0xd30e2101a97dcbAeBCBC04F14C3f624E67A35165` | `0x5f52e4DBEA21f5b23523B6e20d50c29ae0a4EB83` | `0xeaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a` | `2592000` (30d) | `86400` | USDC feed observed ~8d stale → **very lenient** window or use a MockChainlinkFeed leg |
+| USDT | `0x3ec8593F930EA45ea58c968260e6e9FF53FC934f` | `0x5f52e4DBEA21f5b23523B6e20d50c29ae0a4EB83` | `0x2b89b9dc8fdf9f34709a5b106b472f0f39bb6ca9ce04b0fd7f2e971688e2e53b` | `604800` (7d) | `86400` | fresh feed; still wide for testnet |
+| EURC | **`MockChainlinkFeed` (deploy a stub)** | `0x5f52e4DBEA21f5b23523B6e20d50c29ae0a4EB83` | `0x76fa85158bf14ede77087fe3ae472f66213f6ea2f5b411cb2de472794990fa5c` | `604800` (7d) | `86400` | **No Chainlink EURC on Sepolia** → deploy a `MockChainlinkFeed(8, 1.15e8)` (or a keeper-set stub) as the Chainlink leg so the adapter still has TWO sources; THIS IS A TESTNET-ONLY WORKAROUND, never on mainnet. Mainnet EURC uses the real direct CL proxy above. |
+
+Testnet EURC mock-leg procedure (record in the deploy plan):
+1. Deploy `MockChainlinkFeed(8, 115000000)` (= $1.15, 8 dec) on Sepolia, owned by the test operator.
+2. Construct the EURC adapter with that mock address as `chainlinkFeed`.
+3. A simple keeper/script periodically calls `setAnswer` / `setUpdatedAt` to keep the mock leg fresh and roughly tracking the real EUR/USD (or just hold ~1.15 for functional testing).
+4. Document explicitly in the deploy runbook that the Sepolia EURC adapter is dual-source ONLY via this mock — it does NOT satisfy the §15 "two verified independent direct sources" acceptance gate, which applies to MAINNET. Testnet is for flow/drill validation, not the production admission proof.
