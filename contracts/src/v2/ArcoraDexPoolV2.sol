@@ -327,24 +327,89 @@ contract ArcoraDexPoolV2 is IArcoraDexPoolV2, Ownable2Step, ReentrancyGuard {
         pauseGuardian = newGuardian;
     }
 
-    // Stubs filled in by Task 7 (withdrawSingle, quoteWithdrawV2, maxWithdraw) and
-    // Task 8 (withdrawProportional, maxSwapOut). Declared here to satisfy the interface.
-    function withdrawSingle(address, uint256, uint256, uint256) external virtual override returns (uint256) {
-        revert(); // implemented in Task 7
+    // ── single-token withdraw (§8.2) ───────────────────────────────────
+    function withdrawSingle(address tokenOut, uint256 lpAmount, uint256 minTokenOut, uint256 deadline)
+        external
+        override
+        whenNotPaused
+        nonReentrant
+        checkDeadline(deadline)
+        returns (uint256 amountOut)
+    {
+        if (lpAmount == 0) revert ZeroAmount();
+        uint256 unlockAt = lastMintAt[msg.sender] + MIN_HOLD_SECONDS;
+        if (block.timestamp < unlockAt) revert EarlyWithdraw(unlockAt, block.timestamp);
+
+        uint256 navBefore = _navMut(); // reverts OracleUnsafe if any active token unsafe (§11 NAV)
+        uint256 grossUsd = (lpAmount * (navBefore + VIRTUAL_ASSETS)) / (LP.totalSupply() + VIRTUAL_SHARES);
+
+        uint256 protFeeOut;
+        uint256 feeUsd;
+        (amountOut, protFeeOut, feeUsd) = _computeWithdrawOutput(tokenOut, grossUsd);
+
+        uint256 rv = reserves[tokenOut];
+        if (rv < amountOut + protFeeOut) revert InsufficientLiquidity(tokenOut, amountOut + protFeeOut, rv);
+        if (amountOut < minTokenOut) revert InsufficientTokenOut(amountOut, minTokenOut);
+
+        LP.burn(msg.sender, lpAmount);
+        reserves[tokenOut] = rv - (amountOut + protFeeOut);
+        protocolFeesAccrued[tokenOut] += protFeeOut;
+        IERC20(tokenOut).safeTransfer(msg.sender, amountOut);
+        emit WithdrewSingle(msg.sender, tokenOut, lpAmount, amountOut, protFeeOut, feeUsd);
+    }
+
+    /// @dev Priced-output computation for `withdrawSingle`, extracted verbatim into a private
+    /// helper solely to bound the live stack-slot count in `withdrawSingle` (avoids
+    /// stack-too-deep without via-IR). Stateful (routes through `_readSafe`); arithmetic,
+    /// rounding, ordering and the shared `FeeBandMathV2.traverse` call are identical to the
+    /// inline §8.2 flow.
+    function _computeWithdrawOutput(address tokenOut, uint256 grossUsd)
+        private
+        returns (uint256 amountOut, uint256 protFeeOut, uint256 feeUsd)
+    {
+        IArcoraDexRegistryV2.TokenConfigV2 memory cOut = REGISTRY.tokenConfig(tokenOut);
+        uint256 pOut = _readSafe(tokenOut, cOut);
+        FeeBandMathV2.Result memory r = FeeBandMathV2.traverse(
+            grossUsd,
+            _reserveUsd(tokenOut, pOut, cOut.decimals),
+            cOut.minimumReserveUsd,
+            cOut.targetReserveUsd,
+            cOut.bands,
+            protocolFeeShareBps
+        );
+        if (!r.ok) revert ReserveFloorBreached(tokenOut);
+        uint256 scale = 10 ** cOut.decimals;
+        amountOut = (r.totalUserOutputUsd * scale) / pOut;
+        protFeeOut = (r.totalProtocolFeeUsd * scale) / pOut;
+        feeUsd = r.totalFeeUsd;
     }
 
     function withdrawProportional(uint256, uint256) external virtual override returns (uint256[] memory) {
         revert(); // implemented in Task 8
     }
 
-    function quoteWithdrawV2(address, uint256)
+    function quoteWithdrawV2(address tokenOut, uint256 lpAmount)
         external
         view
-        virtual
         override
-        returns (uint256, uint256, uint256, uint256)
+        returns (uint256 amountOut, uint256 protocolFee, uint256 feeUsd1e18, uint256 postHealthBps)
     {
-        revert(); // implemented in Task 7
+        if (lpAmount == 0) revert ZeroAmount();
+        uint256 navBefore = totalReservesUSD(); // view, reverts OracleUnsafe if any active unsafe
+        uint256 grossUsd = (lpAmount * (navBefore + VIRTUAL_ASSETS)) / (LP.totalSupply() + VIRTUAL_SHARES);
+        IArcoraDexRegistryV2.TokenConfigV2 memory cOut = REGISTRY.tokenConfig(tokenOut);
+        uint256 pOut = _peekSafe(tokenOut, cOut);
+        uint256 reserveUsd = _reserveUsd(tokenOut, pOut, cOut.decimals);
+        FeeBandMathV2.Result memory r = FeeBandMathV2.traverse(
+            grossUsd, reserveUsd, cOut.minimumReserveUsd, cOut.targetReserveUsd, cOut.bands, protocolFeeShareBps
+        );
+        if (!r.ok) revert ReserveFloorBreached(tokenOut);
+        uint256 scale = 10 ** cOut.decimals;
+        amountOut = (r.totalUserOutputUsd * scale) / pOut;
+        protocolFee = (r.totalProtocolFeeUsd * scale) / pOut;
+        feeUsd1e18 = r.totalFeeUsd;
+        postHealthBps =
+            FeeBandMathV2.healthBps(reserveUsd - r.totalReserveDebitUsd, cOut.minimumReserveUsd, cOut.targetReserveUsd);
     }
 
     function maxSwapOut(address) external view virtual override returns (uint256, uint256) {
