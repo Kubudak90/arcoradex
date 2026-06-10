@@ -1,7 +1,9 @@
+"use client";
 import { Wordmark } from "@/components/ds/Wordmark";
 import { Pill } from "@/components/ds/Pill";
+import { useActiveChain, useExplorer } from "@/lib/useActiveChain";
 
-const COLUMNS: { h: string; links: { label: string; href: string }[] }[] = [
+const STATIC_COLUMNS: { h: string; links: { label: string; href: string }[] }[] = [
   {
     h: "Protocol",
     links: [
@@ -28,22 +30,29 @@ const COLUMNS: { h: string; links: { label: string; href: string }[] }[] = [
       { label: "Brand", href: "#" },
     ],
   },
-  {
-    h: "Network",
-    links: [
-      { label: "Base Sepolia", href: "https://sepolia.basescan.org" },
-      { label: "Status", href: "#" },
-      { label: "Bridge", href: "#" },
-    ],
-  },
 ];
 
 /**
  * Footer — the prototype's 4-column footer. Brand blurb + Wordmark + an
- * "Operational" success pill, the Protocol/Develop/Ecosystem/Network columns
- * (Network relabelled to Base Sepolia), and the mono © / `v2-testnet` bar.
+ * "Operational" success pill, the Protocol/Develop/Ecosystem/Network columns,
+ * and the mono © / `v2-testnet` bar. The brand blurb + the Network column's
+ * first link track the active chain (header switcher), so the footer reads
+ * "Base Sepolia" or "Arc Testnet" with the matching explorer link.
  */
 export function Footer() {
+  const chain = useActiveChain();
+  const explorer = useExplorer();
+  const columns = [
+    ...STATIC_COLUMNS,
+    {
+      h: "Network",
+      links: [
+        { label: chain.name, href: explorer },
+        { label: "Status", href: "#" },
+        { label: "Bridge", href: "#" },
+      ],
+    },
+  ];
   return (
     <footer
       style={{
@@ -67,7 +76,7 @@ export function Footer() {
         <div style={{ maxWidth: 280 }}>
           <Wordmark size={18} />
           <p style={{ marginTop: 14, fontSize: 13, color: "var(--fg-3)", lineHeight: 1.6 }}>
-            Stableswap on Base Sepolia. Part of the ArcoraPay ecosystem — settle in any stable,
+            Stableswap on {chain.name}. Part of the ArcoraPay ecosystem — settle in any stable,
             swap at oracle price.
           </p>
           <div style={{ marginTop: 16 }}>
@@ -84,7 +93,7 @@ export function Footer() {
             </Pill>
           </div>
         </div>
-        {COLUMNS.map((c) => (
+        {columns.map((c) => (
           <div key={c.h}>
             <div className="overline" style={{ marginBottom: 12 }}>
               {c.h}
