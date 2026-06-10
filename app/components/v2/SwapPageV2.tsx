@@ -55,6 +55,7 @@ export function SwapPageV2() {
   const [picker, setPicker] = useState<"in" | "out" | null>(null);
   const [slippagePct, setSlippagePct] = useState(0.5);
   const [slippageOpen, setSlippageOpen] = useState(false);
+  const [flipDeg, setFlipDeg] = useState(0);
 
   // Defaults derived at render time (no set-state-in-effect); explicit picks win.
   const effIn = tokenIn ?? tokens[0]?.address;
@@ -131,6 +132,7 @@ export function SwapPageV2() {
     setTokenIn(effOut);
     setTokenOut(effIn);
     setAmountStr("");
+    setFlipDeg((d) => d + 180);
   }
 
   // §9: advisory display gross ≈ output value + fee. The SDK quote returns no
@@ -255,7 +257,7 @@ export function SwapPageV2() {
             onHalf={setHalf}
             onPickToken={() => setPicker("in")}
           />
-          <FlipBtn onClick={flipTokens} />
+          <FlipBtn onClick={flipTokens} deg={flipDeg} />
           <FieldBox
             side="You receive"
             meta={outMeta}
@@ -488,7 +490,6 @@ function FieldBox({
     <div
       style={{
         background: "var(--surface-2)",
-        border: "1px solid var(--border)",
         borderRadius: "var(--radius-lg)",
         padding: "14px 16px",
       }}
@@ -613,7 +614,7 @@ function MiniBtn({ children, onClick }: { children: React.ReactNode; onClick?: (
   );
 }
 
-function FlipBtn({ onClick }: { onClick: () => void }) {
+function FlipBtn({ onClick, deg }: { onClick: () => void; deg: number }) {
   return (
     <div style={{ display: "grid", placeItems: "center", height: 0, position: "relative", zIndex: 5 }}>
       <button
@@ -630,7 +631,14 @@ function FlipBtn({ onClick }: { onClick: () => void }) {
           color: "var(--fg-1)",
           cursor: "pointer",
           boxShadow: "var(--elev-2)",
+          transform: `rotate(${deg}deg)`,
           transition: "transform .26s var(--ease-emphasized), color var(--dur-fast)",
+        }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.color = "var(--accent)";
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.color = "var(--fg-1)";
         }}
       >
         <Icon name="swap" size={18} />
