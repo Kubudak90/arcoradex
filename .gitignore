@@ -24,6 +24,11 @@ ops/keepalive/.env.*
 !ops/keepalive/.env.example
 ops/keepalive/node_modules/
 ops/keepalive/package-lock.json
+ops/basekeeper/.env
+ops/basekeeper/.env.*
+!ops/basekeeper/.env.example
+ops/basekeeper/node_modules/
+ops/basekeeper/package-lock.json
 
 # Next.js app
 app/node_modules/
