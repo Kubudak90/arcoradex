@@ -2,7 +2,7 @@
 import { useSyncExternalStore } from "react";
 
 /**
- * A tiny, dependency-free toast store (replaces `sonner`). A module-level array
+ * A tiny, dependency-free toast store (no external toast library). A module-level array
  * + a `Set` of subscribers, surfaced via `useSyncExternalStore`. The swap /
  * deposit / withdraw flows call `pushToast` with a success/error kind plus an
  * optional tx hash; the `<Toasts>` host renders a BaseScan link from it.
