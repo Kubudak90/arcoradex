@@ -24,11 +24,20 @@ contract DeployArcV2Test is Test, DeployArcV2 {
         assertEq(c[0].pegPrice1e18, 1e18, "USDC peg drift");
         assertEq(c[1].pegPrice1e18, 1e18, "USDT peg drift");
         assertEq(c[2].pegPrice1e18, 115e16, "EURC peg drift");
+        // Seed relation (live-deploy headroom): each token's bootstrap seed must be worth
+        // 5x the protected minReserveUsd floor (== targetReserveUsd) at the peg price, and
+        // stay under the §13-step-5 depositCapUsd — so maxSwapOut > 0 from genesis, BEFORE
+        // any external deposits (a seed AT the floor would leave maxSwapOut == 0, no drills).
         for (uint256 i = 0; i < 3; i++) {
             assertEq(uint256(c[i].decimals), 6, "decimals must be 6");
             assertTrue(c[i].targetReserveUsd > c[i].minReserveUsd, "target !> min");
             assertGt(c[i].depositCapUsd, 0, "cap must be set (rollout low cap)");
-            assertLt(c[i].seedAmount, c[i].depositCapUsd, "seed must fit under cap");
+            assertEq(c[i].targetReserveUsd, 5 * c[i].minReserveUsd, "target must be 5x min");
+            // seedAmount is token-native (6-dec); scale to 1e18 then apply the 1e18 peg price.
+            uint256 seedUsd1e18 = (c[i].seedAmount * 10 ** (18 - c[i].decimals)) * c[i].pegPrice1e18 / 1e18;
+            assertGe(seedUsd1e18, 5 * c[i].minReserveUsd, "seed must be >= 5x min floor");
+            assertApproxEqRel(seedUsd1e18, 5 * c[i].minReserveUsd, 0.005e18, "seed must be ~5x min floor");
+            assertLe(seedUsd1e18, c[i].depositCapUsd, "seed must fit under cap");
         }
     }
 
@@ -129,16 +138,14 @@ contract DeployArcV2Test is Test, DeployArcV2 {
     }
 
     // -- §7 reserve-floor: an over-max swap reverts ReserveFloorBreached; maxSwapOut gives the ceiling --
-    // Arc note: USDC/USDT are seeded at EXACTLY their $1,000 minReserveUsd floor (seedAmount 1,000,
-    // 6-dec), so their maxSwapOut is 0 (no floor-safe headroom). EURC (token[2]) is seeded 870 @ $1.15
-    // = ~$1,000.50, marginally ABOVE its floor, so it is the only token with a non-zero floor-safe
-    // ceiling — the meaningful target for this drill. (Base Sepolia seeds 5x the floor; Arc seeds 1x.)
+    // All 3 tokens are seeded 5x their $1,000 floor (= target), so every token has floor-safe headroom
+    // and a non-zero maxSwapOut. USDT (token[1]) is the drill target, mirroring Base Sepolia.
     function test_drill_reserve_floor() public {
         Deployed memory d = _deployForTest();
-        (uint256 maxNet,) = d.pool.maxSwapOut(d.token[2]); // EURC out (only token above its floor)
+        (uint256 maxNet,) = d.pool.maxSwapOut(d.token[1]); // USDT out
         assertGt(maxNet, 0, "a floor-safe max exists");
-        vm.expectRevert(abi.encodeWithSelector(IArcoraDexPoolV2.ReserveFloorBreached.selector, d.token[2]));
-        d.pool.quoteSwapV2(d.token[0], d.token[2], 1_000_000_000_000); // 1,000,000 USDC in
+        vm.expectRevert(abi.encodeWithSelector(IArcoraDexPoolV2.ReserveFloorBreached.selector, d.token[1]));
+        d.pool.quoteSwapV2(d.token[0], d.token[1], 1_000_000_000_000); // 1,000,000 USDC in
     }
 
     // -- §8.3 proportional exit while paused: PG Safe pauses; proportional still works --
