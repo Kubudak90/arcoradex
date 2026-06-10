@@ -28,10 +28,13 @@ library FeeBandMathV2 {
     /// (passed by reference) solely to bound live stack slots in `_run`/`_consumeBand` and
     /// avoid stack-too-deep without via-IR; carries no economics of its own.
     /// @param available targetUsd - minUsd.
+    /// @param excess Reserve above target (reserveUsd - targetUsd, else 0): per §7 this sits
+    /// "in the healthiest band", so it is credited as extra debit capacity to BAND 0 only.
     /// @param protocolShareBps Protocol fee share.
     /// @param bands The descending fee schedule.
     struct Ctx {
         uint256 available;
+        uint256 excess;
         uint256 protocolShareBps;
         Band[] bands;
     }
@@ -123,8 +126,18 @@ library FeeBandMathV2 {
         uint256 usable = reserveUsd > minUsd ? reserveUsd - minUsd : 0;
         uint256 curHealthBps = (usable * BPS) / available;
         if (curHealthBps > BPS) curHealthBps = BPS;
-        return
-            _run(Ctx({available: available, protocolShareBps: protocolShareBps, bands: bands}), grossUsd, curHealthBps);
+        // §7: "Reserve above targetReserveUsd is in the healthiest band." The clamped health
+        // caps band traversal at 100%, so the above-target excess would otherwise be dropped —
+        // making a single large tx spill into deeper (pricier) bands while sequential split txs
+        // each re-clamp at 100% and refill band 0, undercharging. Threading the excess into
+        // band 0's debit capacity (see `_run`) restores the §14 anti-split guarantee: at or
+        // below target excess is 0, so that regime stays byte-identical.
+        uint256 excess = reserveUsd > targetUsd ? reserveUsd - targetUsd : 0;
+        return _run(
+            Ctx({available: available, excess: excess, protocolShareBps: protocolShareBps, bands: bands}),
+            grossUsd,
+            curHealthBps
+        );
     }
 
     /// @dev The band loop. `ctx.available = targetUsd - minUsd`, `curHealthBps` already
@@ -143,11 +156,15 @@ library FeeBandMathV2 {
             uint256 topBps = band.upperHealthBps < curHealthBps ? band.upperHealthBps : curHealthBps;
             if (topBps <= lower) continue; // band entirely above current health
 
-            // Debit capacity in USD between topBps and lower (both round down), then the
+            // Debit capacity in USD between topBps and lower (both round down). For BAND 0
+            // (i == 0) add the above-target excess: §7 places it "in the healthiest band", so
+            // it is healthiest-band debit capacity, not band-1+ capacity. This is the whole
+            // fix — every other band is unchanged, and at/below target ctx.excess == 0 so the
+            // capacity (and thus all downstream economics) is byte-identical to before.
+            uint256 cap = (ctx.available * topBps) / BPS - (ctx.available * lower) / BPS;
+            if (i == 0) cap += ctx.excess;
             // gross that fits it (capped by remaining); _consumeBand accrues into `res`.
-            uint256 take = _consumeBand(
-                res, ctx, (ctx.available * topBps) / BPS - (ctx.available * lower) / BPS, band.rateBps, remainingGross
-            );
+            uint256 take = _consumeBand(res, ctx, cap, band.rateBps, remainingGross);
             if (take == 0) {
                 // Band has capacity in USD but not enough to admit 1 wei of gross net
                 // of the rounded-up fee; nothing consumable here — move on.

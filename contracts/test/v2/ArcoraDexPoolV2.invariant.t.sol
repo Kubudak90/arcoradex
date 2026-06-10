@@ -86,21 +86,38 @@ contract ArcoraDexPoolV2Invariant is StdInvariant, V2Fixture {
         FeeBandMathV2.Band[] memory b = _defaultBands();
         uint256 min = reg.tokenConfig(address(usdc)).minimumReserveUsd;
         uint256 tgt = reg.tokenConfig(address(usdc)).targetReserveUsd;
-        // The marginal split==single identity is a *rounding* question only while the gross
-        // and both split halves stay entirely WITHIN a single band, away from the floor.
-        // Crossing a band boundary makes fee(single contiguous gross) and fee(two re-clamped
-        // halves) legitimately differ by far more than a few wei — a property of marginal
-        // banding, not a `traverse` bug. So we probe only when the live reserve sits well
-        // inside the top band (health >= 8000 bps, a 500 bps margin above the 75% boundary)
-        // and consume a gross worth only ~100 bps of health, which keeps single + both halves
-        // inside band 0 and clear of the floor. There the identity must hold to <= 8 wei. (§7/§14)
+        // §7/§14 anti-split: the reserve ABOVE targetReserveUsd is "in the healthiest band",
+        // so `traverse` credits that excess to band 0 and a single contiguous gross charges the
+        // SAME fee as the same gross split into halves (each re-clamping health at 100%). This
+        // probe previously CLAMPED the live reserve down to target and SKIPPED below-target
+        // states — masking the above-target regime entirely. The earlier comment blamed the
+        // above-target divergence on "legitimate marginal-banding"; it was in fact a `traverse`
+        // bug that dropped the excess capacity (fixed: excess is now credited to band 0). So we
+        // remove the clamp and probe the above-target regime directly — there the identity is
+        // EXACT (verified 0 wei across the whole regime).
+        //
+        // Boundary nuance (NOT the bug, and regime-independent): when the live reserve sits
+        // strictly BETWEEN two internal band boundaries, the ~100 bps probe gross can straddle a
+        // boundary — the contiguous single fills the band remainder then spills, while the two
+        // chained halves cross the boundary at a different point. That makes fee(single) and
+        // fee(2 halves) legitimately differ by more than a few wei. It is a genuine property of
+        // marginal banding (the second half re-prices against the first half's debited reserve),
+        // present at and below target regardless of the above-target fix, so we still skip it.
+        //
+        // We therefore probe whenever the reserve is AT OR ABOVE target (the fixed regime — must
+        // hold to <= 8 wei) OR safely inside band 0 below target (health >= 8000 bps, a 500 bps
+        // margin above the 75% boundary, so single + both halves stay within band 0). The
+        // ~100 bps gross keeps both cases clear of the floor. (§7/§14)
         uint256 reserveUsd = (pool.reserves(address(usdc)) * 1e18) / 1e6;
-        if (reserveUsd > tgt) reserveUsd = tgt; // above-target reserve prices at 100% health
-        uint256 health = FeeBandMathV2.healthBps(reserveUsd, min, tgt);
-        if (health < 8_000) return; // not safely inside band 0 — identity undefined here; skip
-        uint256 gross = ((tgt - min) * 100) / 10_000; // ~100 bps of health, well within band 0
+        uint256 gross = ((tgt - min) * 100) / 10_000; // ~100 bps of `available`
         if (gross == 0) return;
+        // health is computed at the (un-clamped) live reserve; at/above target it is 10000.
+        uint256 health = FeeBandMathV2.healthBps(reserveUsd, min, tgt);
+        // Skip only the mid-band straddle regime (below target AND not safely inside band 0):
+        // there split-vs-single divergence is legitimate marginal banding, not a `traverse` bug.
+        if (reserveUsd < tgt && health < 8_000) return;
         FeeBandMathV2.Result memory single = FeeBandMathV2.traverse(gross, reserveUsd, min, tgt, b, PROT_SHARE);
+        if (!single.ok) return; // degenerate: cannot place this gross as a single tx (skip)
         FeeBandMathV2.Result memory h1 = FeeBandMathV2.traverse(gross / 2, reserveUsd, min, tgt, b, PROT_SHARE);
         uint256 reserveAfter = reserveUsd - h1.totalReserveDebitUsd;
         FeeBandMathV2.Result memory h2 =
