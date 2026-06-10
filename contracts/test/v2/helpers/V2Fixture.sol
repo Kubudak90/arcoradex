@@ -45,7 +45,6 @@ abstract contract V2Fixture is Test {
             minimumReserveUsd: minUsd,
             targetReserveUsd: targetUsd,
             depositCapUsd: 0,
-            protocolFeeShareBps: PROT_SHARE,
             bands: _defaultBands()
         });
     }

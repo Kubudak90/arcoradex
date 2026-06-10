@@ -11,8 +11,9 @@ interface IArcoraDexRegistryV2 {
     /// @param minimumReserveUsd Protected floor (1e18 USD). No priced op may cross it.
     /// @param targetReserveUsd Healthiest-band threshold (1e18 USD). Must exceed min.
     /// @param depositCapUsd Rollout cap on reserve USD (0 = unlimited).
-    /// @param protocolFeeShareBps Protocol share of the dynamic fee (<= MAX_PROTOCOL_FEE_SHARE_BPS).
     /// @param bands Ordered, contiguous, non-decreasing-rate fee schedule (§7).
+    /// @dev The protocol fee share is a single pool-level state var (V1 pattern); there is no
+    ///      per-token override.
     struct TokenConfigV2 {
         uint8 decimals;
         bool isActive;
@@ -20,7 +21,6 @@ interface IArcoraDexRegistryV2 {
         uint256 minimumReserveUsd;
         uint256 targetReserveUsd;
         uint256 depositCapUsd;
-        uint16 protocolFeeShareBps;
         FeeBandMathV2.Band[] bands;
     }
 
@@ -30,7 +30,6 @@ interface IArcoraDexRegistryV2 {
     error TokenDecimalMismatch(address token, uint8 declared, uint8 actual);
     error InvalidReserveBounds(address token);
     error InvalidBands(address token);
-    error InvalidProtocolFeeShareBps(uint16 bps);
     error TokenAlreadyListed(address token);
     error TokenNotListed(address token);
     error MaxTokensReached();

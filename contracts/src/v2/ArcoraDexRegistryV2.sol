@@ -46,9 +46,10 @@ contract ArcoraDexRegistryV2 is IArcoraDexRegistryV2, Ownable2Step {
         if (c.decimals == 0 || c.decimals > 18) revert InvalidDecimals(c.decimals);
         uint8 actual = IERC20Metadata(token).decimals();
         if (c.decimals != actual) revert TokenDecimalMismatch(token, c.decimals, actual);
-        if (c.targetReserveUsd <= c.minimumReserveUsd) revert InvalidReserveBounds(token);
-        if (c.protocolFeeShareBps > MAX_PROTOCOL_FEE_SHARE_BPS) {
-            revert InvalidProtocolFeeShareBps(c.protocolFeeShareBps);
+        // O1: a zero floor would let priced ops drain a reserve fully — require a non-zero
+        // protected floor strictly below the target.
+        if (c.minimumReserveUsd == 0 || c.targetReserveUsd <= c.minimumReserveUsd) {
+            revert InvalidReserveBounds(token);
         }
         uint256 n = c.bands.length;
         if (n == 0) revert InvalidBands(token);
@@ -92,7 +93,10 @@ contract ArcoraDexRegistryV2 is IArcoraDexRegistryV2, Ownable2Step {
         emit AdapterUpdated(token, old, address(newAdapter));
     }
 
+    /// @dev O2: forbid un-wiring the pool so the I-1 deactivate-with-reserves guard cannot be
+    /// silently bypassed. The initial zero state (before any setPool) remains valid.
     function setPool(address pool_) external override onlyOwner {
+        if (pool_ == address(0)) revert ZeroAddress();
         pool = pool_;
         emit PoolSet(pool_);
     }

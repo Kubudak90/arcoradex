@@ -32,7 +32,6 @@ contract ArcoraDexRegistryV2Test is Test {
             minimumReserveUsd: 1_000_000e18,
             targetReserveUsd: 2_000_000e18,
             depositCapUsd: 0,
-            protocolFeeShareBps: 1_000,
             bands: bands
         });
     }
@@ -61,6 +60,29 @@ contract ArcoraDexRegistryV2Test is Test {
         c.targetReserveUsd = c.minimumReserveUsd; // not strictly greater
         vm.prank(owner);
         vm.expectRevert(abi.encodeWithSelector(IArcoraDexRegistryV2.InvalidReserveBounds.selector, address(usdc)));
+        reg.listToken(address(usdc), c);
+    }
+
+    // O1: a zero protected floor would let priced ops drain a reserve fully (§6.2).
+    function test_reject_zeroMinimumReserve() public {
+        IArcoraDexRegistryV2.TokenConfigV2 memory c = _cfg(_defaultBands());
+        c.minimumReserveUsd = 0; // floor must be non-zero
+        vm.prank(owner);
+        vm.expectRevert(abi.encodeWithSelector(IArcoraDexRegistryV2.InvalidReserveBounds.selector, address(usdc)));
+        reg.listToken(address(usdc), c);
+    }
+
+    // Dedicated InvalidDecimals out-of-range coverage: 0 (too low) and 19 (too high) both revert.
+    function test_reject_decimalsOutOfRange() public {
+        IArcoraDexRegistryV2.TokenConfigV2 memory c = _cfg(_defaultBands());
+        c.decimals = 0;
+        vm.prank(owner);
+        vm.expectRevert(abi.encodeWithSelector(IArcoraDexRegistryV2.InvalidDecimals.selector, uint8(0)));
+        reg.listToken(address(usdc), c);
+
+        c.decimals = 19;
+        vm.prank(owner);
+        vm.expectRevert(abi.encodeWithSelector(IArcoraDexRegistryV2.InvalidDecimals.selector, uint8(19)));
         reg.listToken(address(usdc), c);
     }
 
@@ -104,6 +126,14 @@ contract ArcoraDexRegistryV2Test is Test {
             abi.encodeWithSelector(IArcoraDexRegistryV2.TokenDecimalMismatch.selector, address(usdc), 18, 6)
         );
         reg.listToken(address(usdc), c);
+    }
+
+    // O2: setPool must reject the zero address so the I-1 deactivate-with-reserves guard
+    // cannot be silently bypassed by un-wiring the pool.
+    function test_setPool_rejectsZeroAddress() public {
+        vm.prank(owner);
+        vm.expectRevert(IArcoraDexRegistryV2.ZeroAddress.selector);
+        reg.setPool(address(0));
     }
 
     function test_setPool_and_deactivate_guard() public {
