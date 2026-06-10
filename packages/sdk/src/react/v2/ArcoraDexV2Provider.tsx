@@ -4,19 +4,39 @@ import { useAccount, useChainId, useConnectorClient, usePublicClient } from "wag
 import { createWalletClient, custom, walletActions, type Chain, type WalletClient } from "viem";
 import { createArcoraDexV2, type ArcoraDexClientV2 } from "../../clientV2";
 import { baseSepolia } from "../../chains/baseSepolia";
+import { arcTestnet } from "../../chains/arcTestnet";
+import { DEFAULT_ADDRESSES_V2 } from "../../addresses.v2";
 import type { ArcoraDexAddresses } from "../../addresses";
 
 const ArcoraDexV2Ctx = createContext<ArcoraDexClientV2 | null>(null);
 
 export interface ArcoraDexV2ProviderProps {
+  /** Pin the V2 client to a specific chain. When omitted, the provider is
+   *  chain-REACTIVE: it follows the wallet's current chain (`useChainId()`)
+   *  across every chain that has a V2 deployment, falling back to Base Sepolia
+   *  when the wallet is disconnected or on an unsupported chain. */
   chain?: Chain;
   addresses?: ArcoraDexAddresses;
   children: ReactNode;
 }
 
+/** Chains the V2 provider can build a client for, by id. Sourced from the same
+ *  `DEFAULT_ADDRESSES_V2` map so a chain is only "supported" if it has live V2
+ *  addresses. */
+const V2_CHAINS: Record<number, Chain> = {
+  [baseSepolia.id]: baseSepolia,
+  [arcTestnet.id]: arcTestnet,
+};
+
 export function ArcoraDexV2Provider({ chain, addresses, children }: ArcoraDexV2ProviderProps) {
   const wagmiChainId = useChainId();
-  const effectiveChain: Chain = chain ?? baseSepolia;
+  // Chain-reactive resolution: an explicit `chain` prop always wins (test
+  // wrappers / embedders pin it). Otherwise follow the wallet's current chain
+  // when it has a V2 deployment, falling back to Base Sepolia.
+  const effectiveChain: Chain =
+    chain ??
+    (DEFAULT_ADDRESSES_V2[wagmiChainId] ? V2_CHAINS[wagmiChainId] : undefined) ??
+    baseSepolia;
   const { address, isConnected } = useAccount();
   // Cast through `never` because wagmi's `Register` may narrow `chainId` to a
   // literal union in the consumer app, while we intentionally accept any

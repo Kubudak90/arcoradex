@@ -1,8 +1,9 @@
 export { createArcoraDexV2 } from "./clientV2";
 export type { ArcoraDexClientV2, CreateArcoraDexV2Params } from "./clientV2";
 export { baseSepolia } from "./chains/baseSepolia";
+export { arcTestnet } from "./chains/arcTestnet";
 export { DEFAULT_ADDRESSES_V2 } from "./addresses.v2";
-export { KNOWN_TOKENS_V2 } from "./tokens/known.v2";
+export { KNOWN_TOKENS_V2, KNOWN_TOKENS_V2_BY_CHAIN } from "./tokens/known.v2";
 export { poolAbiV2 } from "./abi/v2/pool";
 export { registryAbiV2 } from "./abi/v2/registry";
 // `types.v2.ts` is type-only (interfaces); use `export type *` to satisfy the
