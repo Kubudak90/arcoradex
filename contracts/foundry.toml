@@ -16,6 +16,7 @@ invariant = { runs = 1024, depth = 128 }
 
 [rpc_endpoints]
 arc_testnet = "${ARC_TESTNET_RPC}"
+base_mainnet = "${BASE_MAINNET_RPC}"
 
 [etherscan]
 arc_testnet = { key = "${ARC_EXPLORER_KEY}", url = "${ARC_EXPLORER_URL}" }
