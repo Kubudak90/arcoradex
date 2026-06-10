@@ -384,8 +384,40 @@ contract ArcoraDexPoolV2 is IArcoraDexPoolV2, Ownable2Step, ReentrancyGuard {
         feeUsd = r.totalFeeUsd;
     }
 
-    function withdrawProportional(uint256, uint256) external virtual override returns (uint256[] memory) {
-        revert(); // implemented in Task 8
+    /// @notice §8.3 proportional emergency exit. No oracle, no floor, no pause gate.
+    /// Returns the pro-rata share of every active token's reserve. Protocol fees
+    /// (held separately in protocolFeesAccrued) are excluded.
+    function withdrawProportional(uint256 lpAmount, uint256 deadline)
+        external
+        override
+        nonReentrant
+        checkDeadline(deadline)
+        returns (uint256[] memory amounts)
+    {
+        if (lpAmount == 0) revert ZeroAmount();
+        uint256 supply = LP.totalSupply();
+        uint256 n = REGISTRY.tokensLength();
+        amounts = new uint256[](n);
+
+        // Burn FIRST (CEI): supply used for the pro-rata is the pre-burn supply.
+        LP.burn(msg.sender, lpAmount);
+
+        for (uint256 i; i < n;) {
+            address t = REGISTRY.tokens(i);
+            uint256 rv = reserves[t];
+            if (rv != 0) {
+                uint256 share = (lpAmount * rv) / supply; // round down
+                if (share != 0) {
+                    reserves[t] = rv - share;
+                    amounts[i] = share;
+                    IERC20(t).safeTransfer(msg.sender, share);
+                }
+            }
+            unchecked {
+                ++i;
+            }
+        }
+        emit WithdrewProportional(msg.sender, lpAmount);
     }
 
     function quoteWithdrawV2(address tokenOut, uint256 lpAmount)
