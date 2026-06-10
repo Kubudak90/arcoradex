@@ -7,8 +7,9 @@ import {
   isAddress,
   getAddress,
 } from "viem";
+import type { Chain } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { baseSepolia } from "@arcoralabs/dex-sdk/v2";
+import { baseSepolia, arcTestnet } from "@arcoralabs/dex-sdk/v2";
 import { checkBotId } from "botid/server";
 import {
   createCooldownStore,
@@ -21,11 +22,42 @@ import {
   refundHourlyBudget,
   extractClientIp,
 } from "@/lib/faucet-rate-limit";
-import { FAUCET_TOKENS } from "@/lib/faucet-tokens";
+import { faucetTokensFor, type FaucetToken } from "@/lib/faucet-tokens";
 
 export const runtime = "nodejs";
 
 const MINT_ABI = parseAbi(["function mint(address to, uint256 amount)"]);
+
+// Chain-aware faucet: the UI sends the wallet's active chain id and the route
+// mints THAT chain's token set with the same signer (FAUCET_PRIVATE_KEY owns
+// the mock stables on both chains). RPC per chain is env-overridable, falling
+// back to the SDK chain default — mirroring lib/wagmi.ts.
+interface FaucetChainConfig {
+  chain: Chain;
+  rpcUrl: string;
+  tokens: readonly FaucetToken[];
+}
+
+function chainConfigFor(chainId: number): FaucetChainConfig | null {
+  const tokens = faucetTokensFor(chainId);
+  if (!tokens) return null;
+  if (chainId === baseSepolia.id) {
+    return {
+      chain: baseSepolia,
+      rpcUrl: process.env.NEXT_PUBLIC_RPC_URL || baseSepolia.rpcUrls.default.http[0]!,
+      tokens,
+    };
+  }
+  if (chainId === arcTestnet.id) {
+    return {
+      chain: arcTestnet,
+      rpcUrl: process.env.NEXT_PUBLIC_ARC_RPC_URL || arcTestnet.rpcUrls.default.http[0]!,
+      tokens,
+    };
+  }
+  // Token set exists but no viem chain wired — treat as unsupported.
+  return null;
+}
 
 // L-11 (audit 2026-05-31): treat either Node's NODE_ENV or Vercel's VERCEL_ENV
 // as the production signal so the fail-closed origin check fires on real
@@ -46,6 +78,7 @@ const cooldownStore = createCooldownStore();
 interface FaucetSuccess {
   ok: true;
   recipient: `0x${string}`;
+  chainId: number;
   txHashes: Record<string, `0x${string}`>;
 }
 interface FaucetError {
@@ -101,9 +134,9 @@ export async function POST(req: Request): Promise<NextResponse<FaucetSuccess | F
     );
   }
 
-  let body: { address?: string };
+  let body: { address?: string; chainId?: number };
   try {
-    body = (await req.json()) as { address?: string };
+    body = (await req.json()) as { address?: string; chainId?: number };
   } catch {
     return NextResponse.json({ ok: false, error: "Invalid JSON body." }, { status: 400 });
   }
@@ -112,6 +145,23 @@ export async function POST(req: Request): Promise<NextResponse<FaucetSuccess | F
     return NextResponse.json({ ok: false, error: "Invalid recipient address." }, { status: 400 });
   }
   const recipient = getAddress(body.address);
+
+  // Target chain: the UI sends the wallet's active chain id. Omitted chainId
+  // defaults to Base Sepolia for back-compat with pre-multichain clients.
+  const chainId = body.chainId ?? baseSepolia.id;
+  if (typeof chainId !== "number" || !Number.isInteger(chainId)) {
+    return NextResponse.json({ ok: false, error: "Invalid chainId." }, { status: 400 });
+  }
+  const chainConfig = chainConfigFor(chainId);
+  if (!chainConfig) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: `Unsupported chain ${chainId}. The faucet mints on Base Sepolia (84532) and Arc testnet (5042002).`,
+      },
+      { status: 400 },
+    );
+  }
 
   // Rate limit: per-recipient AND per-IP (cross-instance via the store).
   const ip = extractClientIp(req);
@@ -163,13 +213,12 @@ export async function POST(req: Request): Promise<NextResponse<FaucetSuccess | F
     // tokens were broadcast, so a partial failure still consumes the cooldown.
     await recordClaim(cooldownStore, recipient, ip);
 
-    // Build clients
+    // Build clients on the TARGET chain (same signer key on both chains).
+    const { chain, rpcUrl, tokens } = chainConfig;
     const account = privateKeyToAccount(key as `0x${string}`);
-    const transport = http(
-      process.env.NEXT_PUBLIC_RPC_URL || baseSepolia.rpcUrls.default.http[0],
-    );
-    const publicClient = createPublicClient({ chain: baseSepolia, transport });
-    const walletClient = createWalletClient({ chain: baseSepolia, transport, account });
+    const transport = http(rpcUrl);
+    const publicClient = createPublicClient({ chain, transport });
+    const walletClient = createWalletClient({ chain, transport, account });
 
     try {
       // Pre-fetch the next nonce so back-to-back broadcasts don't collide
@@ -179,10 +228,10 @@ export async function POST(req: Request): Promise<NextResponse<FaucetSuccess | F
         address: account.address,
         blockTag: "pending",
       });
-      for (const t of FAUCET_TOKENS) {
+      for (const t of tokens) {
         const value = t.amount * 10n ** BigInt(t.decimals);
         const hash = await walletClient.writeContract({
-          chain: baseSepolia,
+          chain,
           account,
           address: t.address,
           abi: MINT_ABI,
@@ -217,14 +266,14 @@ export async function POST(req: Request): Promise<NextResponse<FaucetSuccess | F
     // immediately. Keep this short-circuit so the response isn't held open
     // for the full 7-tx batch on slow networks.
     try {
-      const lastSym = FAUCET_TOKENS[FAUCET_TOKENS.length - 1]!.symbol;
+      const lastSym = tokens[tokens.length - 1]!.symbol;
       const lastHash = txHashes[lastSym]!;
       await publicClient.waitForTransactionReceipt({ hash: lastHash, timeout: 8_000 });
     } catch {
       // Don't fail the response — txs were broadcast; client can poll the explorer.
     }
 
-    return NextResponse.json({ ok: true, recipient, txHashes }, { status: 200 });
+    return NextResponse.json({ ok: true, recipient, chainId, txHashes }, { status: 200 });
   } finally {
     // Always release the in-flight reservation so the next claim isn't blocked
     // for the full reservation TTL.

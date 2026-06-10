@@ -32,12 +32,18 @@ vi.mock("viem/accounts", () => ({
 const checkBotId = vi.fn(async () => ({ isBot: false }));
 vi.mock("botid/server", () => ({ checkBotId: () => checkBotId() }));
 
-// Only `baseSepolia` is consumed from the SDK V2 entrypoint by the route.
+// The chain-aware route consumes `baseSepolia` + `arcTestnet` from the SDK V2
+// entrypoint (chain object + default RPC per supported chain id).
 vi.mock("@arcoralabs/dex-sdk/v2", () => ({
   baseSepolia: {
     id: 84532,
     name: "Base Sepolia",
     rpcUrls: { default: { http: ["https://base-sepolia-rpc.publicnode.com"] } },
+  },
+  arcTestnet: {
+    id: 5042002,
+    name: "Arc Testnet",
+    rpcUrls: { default: { http: ["https://rpc.testnet.arc.network"] } },
   },
 }));
 
@@ -166,6 +172,105 @@ describe("POST /api/faucet", () => {
     // Re-POST is rate-limited.
     const res2 = await POST(mkReq({ address: RECIPIENT }));
     expect(res2.status).toBe(429);
+  });
+});
+
+describe("chain-aware minting (Base Sepolia 84532 + Arc testnet 5042002)", () => {
+  const BASE_TOKEN_ADDRESSES = [
+    "0x3a98d8adC295d90171e9DA93D411dEa95674c867", // USDC
+    "0x7110315D229C7CE655399703ACbA8E67f1d5C0c0", // USDT
+    "0x4b1F2D659DAD4B791414fF4323bCd17C218b8bD7", // EURC
+  ];
+  const ARC_TOKEN_ADDRESSES = [
+    "0x168655bc42265d8721AD6BCe20435919A0160B79", // USDC
+    "0xD05FE3e0A38508b182143E1eBf69C657a87cBe22", // USDT
+    "0xb1D82C6ba72CfE115Baa0Cd33De78224D9370Eea", // EURC
+  ];
+
+  beforeEach(() => {
+    process.env.FAUCET_PRIVATE_KEY = "0x" + "1".repeat(64);
+    delete process.env.NEXT_PUBLIC_APP_URL;
+    let n = 0;
+    writeContract.mockReset().mockImplementation(async () => {
+      n += 1;
+      return ("0x" + n.toString(16).padStart(64, "0")) as `0x${string}`;
+    });
+    getTransactionCount.mockReset().mockResolvedValue(0);
+    waitForTransactionReceipt.mockReset().mockResolvedValue({ status: "success" });
+    checkBotId.mockReset().mockResolvedValue({ isBot: false });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("omitted chainId defaults to Base Sepolia (back-compat)", async () => {
+    const { POST } = await loadRoute();
+
+    const res = await POST(mkReq({ address: RECIPIENT }));
+    const body = (await res.json()) as { ok: boolean; chainId: number };
+    expect(res.status).toBe(200);
+    expect(body.chainId).toBe(84532);
+
+    const minted = writeContract.mock.calls.map((c) => (c[0] as { address: string }).address);
+    expect(minted).toEqual(BASE_TOKEN_ADDRESSES);
+    for (const call of writeContract.mock.calls) {
+      expect((call[0] as { chain: { id: number } }).chain.id).toBe(84532);
+    }
+  });
+
+  it("explicit chainId 84532 mints the Base token set", async () => {
+    const { POST } = await loadRoute();
+
+    const res = await POST(mkReq({ address: RECIPIENT, chainId: 84532 }));
+    const body = (await res.json()) as { ok: boolean; chainId: number };
+    expect(res.status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(body.chainId).toBe(84532);
+
+    const minted = writeContract.mock.calls.map((c) => (c[0] as { address: string }).address);
+    expect(minted).toEqual(BASE_TOKEN_ADDRESSES);
+  });
+
+  it("chainId 5042002 mints the ARC token set on the Arc chain", async () => {
+    const { POST } = await loadRoute();
+
+    const res = await POST(mkReq({ address: RECIPIENT, chainId: 5042002 }));
+    const body = (await res.json()) as {
+      ok: boolean;
+      chainId: number;
+      txHashes: Record<string, string>;
+    };
+    expect(res.status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(body.chainId).toBe(5042002);
+    expect(Object.keys(body.txHashes).sort()).toEqual(["EURC", "USDC", "USDT"]);
+
+    const minted = writeContract.mock.calls.map((c) => (c[0] as { address: string }).address);
+    expect(minted).toEqual(ARC_TOKEN_ADDRESSES);
+    for (const call of writeContract.mock.calls) {
+      expect((call[0] as { chain: { id: number } }).chain.id).toBe(5042002);
+    }
+  });
+
+  it("unsupported chainId → 400 and nothing is broadcast", async () => {
+    const { POST } = await loadRoute();
+
+    const res = await POST(mkReq({ address: RECIPIENT, chainId: 11155111 }));
+    const body = (await res.json()) as { ok: boolean; error: string };
+    expect(res.status).toBe(400);
+    expect(body.ok).toBe(false);
+    expect(body.error).toContain("Unsupported chain");
+    expect(writeContract).not.toHaveBeenCalled();
+  });
+
+  it("non-numeric chainId → 400 and nothing is broadcast", async () => {
+    const { POST } = await loadRoute();
+
+    const res = await POST(mkReq({ address: RECIPIENT, chainId: "84532" }));
+    expect(res.status).toBe(400);
+    expect(writeContract).not.toHaveBeenCalled();
   });
 });
 

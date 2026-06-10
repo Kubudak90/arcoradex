@@ -2,22 +2,26 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useAccount, useChainId } from "wagmi";
-import { baseSepolia } from "@arcoralabs/dex-sdk/v2";
-import { isSupportedChain } from "@/lib/chain";
-import { useActiveChain, useExplorer } from "@/lib/useActiveChain";
+import { explorerFor, isSupportedChain, SUPPORTED_CHAINS } from "@/lib/chain";
+import { useActiveChain } from "@/lib/useActiveChain";
 import { Icon } from "@/components/ds/Icon";
 import { Button } from "@/components/ds/Button";
 import { CoinBadge } from "@/components/ds/CoinBadge";
 import { tokenColor } from "@/components/ds/tokens";
 import { iconBtnStyle } from "@/components/ds/iconBtnStyle";
 import { chipNav } from "@/components/layout/chip-style";
-import { FAUCET_TOKENS } from "@/lib/faucet-tokens";
+import { faucetTokensFor } from "@/lib/faucet-tokens";
 
 interface ClaimResult {
   ok: true;
   recipient: `0x${string}`;
   txHashes: Record<string, `0x${string}`>;
 }
+
+// A successful claim pinned to the chain it was minted on, so the success
+// panel (and its explorer links) doesn't go stale when the wallet switches
+// chains — the claim button re-appears for the newly active chain instead.
+type ClaimRecord = ClaimResult & { chainId: number };
 
 // Three user-visible failure classes. The server already returns sensible
 // error strings; we use these to attach a distinct icon + tone so 403 (bot)
@@ -46,33 +50,30 @@ function formatRetryAfter(sec: number | undefined): string | null {
   return `${Math.ceil(sec / 3600)}h`;
 }
 
-// M-11 (audit 2026-05-24): derive the displayed mint list from the same
-// source of truth the server route mints from. Previously this was a hand-
-// maintained duplicate that silently drifted from the canonical amounts.
-const TOKEN_LIST = FAUCET_TOKENS.map((t) => ({
-  sym: t.symbol,
-  amt: t.amount.toLocaleString("en-US"),
-}));
-
 export function FaucetButton() {
   const { address, isConnected } = useAccount();
   const chainId = useChainId();
   const activeChain = useActiveChain();
   const [open, setOpen] = useState(false);
   const [pending, setPending] = useState(false);
-  const [result, setResult] = useState<ClaimResult | null>(null);
+  const [result, setResult] = useState<ClaimRecord | null>(null);
   const [failure, setFailure] = useState<FaucetFailure | null>(null);
   const [mounted, setMounted] = useState(false);
 
-  // The /api/faucet route mints the BASE token set via the Base faucet signer
-  // (0xb5f3, which owns those mocks). The Arc V2 tokens are owned by the
-  // DEPLOYER, not that signer, so the faucet can only mint on Base for now —
-  // Arc minting needs a separate signer/owner wiring (see report). The button
-  // stays enabled only on Base; on Arc (or any other chain) it explains why.
+  // The /api/faucet route is CHAIN-AWARE: the faucet signer owns the mock
+  // stables on BOTH supported chains (Base Sepolia 84532 + Arc testnet
+  // 5042002), so the claim works on whichever supported chain the wallet is
+  // on. Only a genuinely unsupported chain prompts a switch.
   const wrongChain = isConnected && !isSupportedChain(chainId);
-  const onBase = isConnected && chainId === baseSepolia.id;
-  const faucetUnavailable = isConnected && isSupportedChain(chainId) && !onBase;
-  const explorer = useExplorer();
+
+  // M-11 (audit 2026-05-24): derive the displayed mint list from the same
+  // source of truth the server route mints from — now per active chain.
+  // `useActiveChain` falls back to the default chain when disconnected or on
+  // an unsupported network, so the preview always has a valid token set.
+  const tokenList = (faucetTokensFor(activeChain.id) ?? []).map((t) => ({
+    sym: t.symbol,
+    amt: t.amount.toLocaleString("en-US"),
+  }));
 
   // Portal target — the header has a backdrop-filter, which creates a containing
   // block for `position: fixed`, so the overlay must portal to <body> to center
@@ -93,7 +94,7 @@ export function FaucetButton() {
   }, [open]);
 
   async function claim() {
-    if (!address) return;
+    if (!address || !isSupportedChain(chainId)) return;
     setPending(true);
     setFailure(null);
     setResult(null);
@@ -101,13 +102,13 @@ export function FaucetButton() {
       const res = await fetch("/api/faucet", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ address }),
+        body: JSON.stringify({ address, chainId }),
       });
       const data = (await res.json()) as ClaimResult | ServerError;
       if (!data.ok) {
         setFailure(classifyFailure(res.status, data));
       } else {
-        setResult(data);
+        setResult({ ...data, chainId });
       }
     } catch (e) {
       setFailure({ kind: "generic", message: `Network error: ${(e as Error).message}` });
@@ -202,7 +203,7 @@ export function FaucetButton() {
             <div style={{ padding: "0 18px 18px", overflowY: "auto" }}>
               <p style={{ fontSize: 13.5, color: "var(--fg-3)", margin: "0 0 14px", lineHeight: 1.5 }}>
                 Mint a fresh batch of mock stablecoins to your connected wallet on{" "}
-                {baseSepolia.name}. One claim per 24 hours per address.
+                {activeChain.name}. One claim per 24 hours per address.
               </p>
 
               <div
@@ -217,7 +218,7 @@ export function FaucetButton() {
                   You receive
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
-                  {TOKEN_LIST.map((t) => (
+                  {tokenList.map((t) => (
                     <div
                       key={t.sym}
                       style={{ display: "flex", alignItems: "center", gap: 10 }}
@@ -259,34 +260,9 @@ export function FaucetButton() {
                     marginTop: 16,
                   }}
                 >
-                  Switch to {baseSepolia.name} to claim.
+                  Switch to {SUPPORTED_CHAINS.map((c) => c.name).join(" or ")} to claim.
                 </p>
-              ) : faucetUnavailable ? (
-                <div
-                  style={{
-                    marginTop: 16,
-                    borderRadius: "var(--radius-md)",
-                    border: "1px solid var(--border)",
-                    background: "var(--surface-2)",
-                    padding: "12px 14px",
-                    display: "flex",
-                    alignItems: "flex-start",
-                    gap: 9,
-                  }}
-                >
-                  <Icon name="info" size={17} style={{ color: "var(--fg-3)", marginTop: 1 }} />
-                  <div style={{ fontSize: 12.5, color: "var(--fg-2)", lineHeight: 1.5 }}>
-                    <div style={{ fontWeight: 600, color: "var(--fg-1)", marginBottom: 2 }}>
-                      Faucet available on {baseSepolia.name} only
-                    </div>
-                    <div>
-                      You&apos;re on {activeChain.name}. The hosted faucet mints the
-                      Base Sepolia token set — switch to {baseSepolia.name} to claim.
-                      Arc test tokens are minted by the deployer.
-                    </div>
-                  </div>
-                </div>
-              ) : result ? (
+              ) : result && result.chainId === chainId ? (
                 <div style={{ marginTop: 16 }}>
                   <p
                     style={{
@@ -325,7 +301,7 @@ export function FaucetButton() {
                       >
                         <span style={{ color: "var(--fg-2)" }}>{sym}</span>
                         <a
-                          href={`${explorer}/tx/${hash}`}
+                          href={`${explorerFor(result.chainId)}/tx/${hash}`}
                           target="_blank"
                           rel="noreferrer"
                           style={{
