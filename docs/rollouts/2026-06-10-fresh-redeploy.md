@@ -63,17 +63,34 @@ green; NAV 648.28 USD) → smoke swap 10 USDC → 9.995 USDT (0.05% fee exact) �
   EURC/TRYC/BRLC converging to live FX (capped @150bps per tick by design; service exits 1
   while both legs cap — alert semantics, self-clears at convergence).
 
-## Outstanding
+## Governance finalization — DONE 2026-06-10
 
-1. **Gov Safe accepts + Timelock 48h lockdown + PG pause drill** — team multisig actions,
-   full calldata in `arcora-key-ceremony-launch-pack/08-governance-accept-runbook.md`.
-2. **Vercel `FAUCET_PRIVATE_KEY`** — must be replaced with the fresh faucet key (`0xb5f3…08B6`)
-   by the key-holder, then production deploy of `app/` (contract addresses already updated
-   in Vercel env).
-3. Legacy `arcora-oracle-refresh.timer` on the VPS still refreshes the long-abandoned v0.7
+Executed via `contracts/script/ExecuteGovernanceAccepts.s.sol` (Arc has no hosted Safe UI;
+signatures produced locally over the safeTxHash, deployer EOA broadcast). All four phases
+landed on-chain and were independently re-verified:
+
+- 15 oracle-layer accepts (guard + 7 primaries + 7 secondaries) → owner == Gov Safe.
+- Pool + Registry `acceptOwnership` via Timelock batch → owner == Timelock.
+- **Pause drill passed:** PG Safe (2/3) paused the Pool; Gov Safe unpaused it through the
+  Timelock during the delay-0 window. (`pool.pauseGuardian` was unwired at deploy —
+  `address(0)` — and set to the PG Safe by the deployer beforehand; orchestrator gap noted.)
+- `Timelock.updateDelay(172800)` — every governance op now waits 48 h.
+
+The deployer EOA retains **no protocol authority** (tokens → faucet, Pool/Registry →
+Timelock, oracle layer → Gov Safe). Gov owner keys were used transiently and destroyed
+after execution.
+
+**dApp:** production deploy live at swap.arcorapay.xyz with the fresh `FAUCET_PRIVATE_KEY`
+(verified deriving to `0xb5f3…08B6`) — pool stats and live transactions read from the new
+Pool; faucet UI lists the 7 fresh tokens.
+
+## Outstanding (optional)
+
+1. Legacy `arcora-oracle-refresh.timer` on the VPS still refreshes the long-abandoned v0.7
    feeds from `/root/arcora-ops` — candidate for disablement (operator decision).
-4. V1 aggregators (unused; registry points at V2) have pending Gov Safe ownership — optional
+2. V1 aggregators (unused; registry points at V2) have pending Gov Safe ownership — optional
    accept, addresses in `contracts/broadcast/DeployPublicTestnet.s.sol/5042002/run-latest.json`.
+3. Merge `ops/2026-06-09-fresh-redeploy` to `main` (PR).
 
 ## Superseded
 
