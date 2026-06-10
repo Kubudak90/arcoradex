@@ -1,11 +1,5 @@
-import { ReservesTable } from "@/components/pool/ReservesTable";
-import { RecentSwapsCard } from "@/components/pool/RecentSwapsCard";
+import { PoolPageV2 } from "@/components/v2/PoolPageV2";
 
-export default function PoolPage() {
-  return (
-    <div className="grid grid-cols-1 lg:grid-cols-[1fr_460px] gap-8 items-start">
-      <ReservesTable />
-      <RecentSwapsCard />
-    </div>
-  );
+export default function Page() {
+  return <PoolPageV2 />;
 }

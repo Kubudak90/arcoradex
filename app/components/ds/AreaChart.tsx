@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
 /**
  * Area chart with a draw-in stroke animation + a fade-in fill. Self-heals by
@@ -53,7 +53,10 @@ export function AreaChart({
     const t = setTimeout(() => setDrawn(true), 1300);
     return () => clearTimeout(t);
   }, [data, animate]);
-  const gid = useRef("g" + Math.random().toString(36).slice(2)).current;
+  // Deterministic, SSR-stable gradient id (React's useId is identical on the
+  // server and the client) — the prototype's `Math.random()` id caused a
+  // hydration mismatch. Sanitize the colons so it's a valid SVG/url() id.
+  const gid = "g" + useId().replace(/:/g, "");
   return (
     <svg
       width="100%"
