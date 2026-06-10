@@ -40,12 +40,14 @@ export function AreaChart({
   const area = line + ` L${w} ${h} L0 ${h} Z`;
   const pathRef = useRef<SVGPathElement>(null);
   const [len, setLen] = useState(0);
+  // DOM measurement (path total length) — external-system sync.
   useEffect(() => {
     if (pathRef.current) setLen(pathRef.current.getTotalLength());
   }, [data]);
   // clear one-shot animations once played so the layer de-promotes (capture/PDF safe)
   useEffect(() => {
     if (!animate) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- draw-in gating (no animation)
       setDrawn(true);
       return;
     }

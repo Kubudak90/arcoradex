@@ -58,7 +58,7 @@ function lpPriceNum(lpPriceUsd1e18: bigint | undefined): number | null {
  *     "cap reached" when at/near cap (contract DepositCapExceeded is the backstop).
  */
 export function LiquidityPageV2() {
-  const { tokens } = useTokensV2();
+  const { tokens, isFetching: tokensFetching } = useTokensV2();
   const { stats } = usePoolStatsV2();
   const { prices } = useOraclePrices(tokens);
   const { reserves } = useReserves(tokens);
@@ -81,8 +81,10 @@ export function LiquidityPageV2() {
   const price = effAddr ? prices[effAddr.toLowerCase()] : undefined;
   const lpPrice = lpPriceNum(stats?.lpPriceUsd1e18);
 
-  // Reset transient UI when switching tab/token/amount.
+  // Reset the success banner when switching tab/token/amount — a transient-UI
+  // sync; the rule can't tell this derived reset from a render loop.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- clear stale tx banner on tab/token/amount change
     setTxHash(null);
   }, [tab, effAddr, amt]);
 
@@ -99,11 +101,13 @@ export function LiquidityPageV2() {
     query: { enabled: !!account && !!effAddr },
   });
 
-  // USD value of the entered deposit (token amount × oracle price).
-  const depositUsd1e18 = useMemo(() => {
-    if (!depositAmount || !meta || !price || price.price1e18 === 0n) return 0n;
-    return reserveUsd1e18(depositAmount, meta.decimals, price.price1e18);
-  }, [depositAmount, meta, price]);
+  // USD value of the entered deposit (token amount × oracle price). Plain
+  // computed value — the React Compiler memoizes it (a manual useMemo here was
+  // flagged as un-preservable by the compiler).
+  const depositUsd1e18 =
+    !depositAmount || !meta || !price || price.price1e18 === 0n
+      ? 0n
+      : reserveUsd1e18(depositAmount, meta.decimals, price.price1e18);
 
   // GF-4: deposit-cap headroom = depositCapUsd − current reserve USD.
   const capState = useMemo<CapHeadroom | null>(() => {
@@ -158,8 +162,10 @@ export function LiquidityPageV2() {
       isOracleUnsafe(healthError) ||
       isOracleUnsafe(withdrawSingle.error) ||
       (price != null && price.safe === false));
-  // Auto-promote the proportional pane the moment we learn the oracle is unsafe.
+  // Auto-promote the proportional pane the moment we learn the oracle is unsafe
+  // (§11) — derived from an async read result, so it must run in an effect.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- promote proportional exit when the oracle read turns unsafe
     if (oracleUnsafe) setProportional(true);
   }, [oracleUnsafe]);
 
@@ -281,6 +287,56 @@ export function LiquidityPageV2() {
     quote != null && meta ? `${fmtUnits(quote.amountOut, meta.decimals, 2)} ${meta.symbol}` : "—";
 
   const busy = deposit.isPending || withdrawSingle.isPending || withdrawProp.isPending;
+  const poolPaused = stats?.paused === true;
+
+  // Empty token universe — render a graceful state instead of an unusable card.
+  if (tokens.length === 0) {
+    return (
+      <div style={{ width: "min(460px, 96vw)", margin: "0 auto" }}>
+        <Card pad={28} elev={2}>
+          <div style={{ textAlign: "center", padding: "20px 8px" }}>
+            <div
+              style={{
+                width: 44,
+                height: 44,
+                margin: "0 auto 14px",
+                display: "grid",
+                placeItems: "center",
+                borderRadius: "var(--radius-md)",
+                background: "var(--surface-2)",
+                border: "1px solid var(--border)",
+                color: "var(--fg-3)",
+              }}
+            >
+              {tokensFetching ? (
+                <span
+                  className="ar-spin"
+                  style={{
+                    width: 18,
+                    height: 18,
+                    border: "2.5px solid var(--border-strong)",
+                    borderTopColor: "var(--accent)",
+                    borderRadius: "50%",
+                    display: "inline-block",
+                  }}
+                />
+              ) : (
+                <Icon name="layers" size={20} />
+              )}
+            </div>
+            <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 6 }}>
+              {tokensFetching ? "Loading tokens…" : "No active tokens"}
+            </div>
+            <p style={{ fontSize: 13, color: "var(--fg-3)", margin: 0, lineHeight: 1.5 }}>
+              {tokensFetching
+                ? "Fetching the active token universe from the registry."
+                : "The registry has no active tokens to provide liquidity for right now."}
+            </p>
+          </div>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -433,6 +489,32 @@ export function LiquidityPageV2() {
             )}
           </div>
         </div>
+
+        {/* Pool paused — deposits disabled; proportional withdraw stays available (§11). */}
+        {poolPaused && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "flex-start",
+              gap: 8,
+              padding: "10px 14px",
+              marginBottom: 8,
+              background: "var(--danger-bg)",
+              borderRadius: "var(--radius-md)",
+              fontSize: 12.5,
+              lineHeight: 1.45,
+              color: "var(--danger)",
+            }}
+          >
+            <Icon name="lock" size={15} style={{ flexShrink: 0, marginTop: 1 }} />
+            <span>
+              The pool is paused.{" "}
+              {tab === "deposit"
+                ? "Deposits are temporarily disabled."
+                : "Single-token withdraw is disabled; the emergency proportional exit stays available."}
+            </span>
+          </div>
+        )}
 
         {/* §8.2 single-token info banner */}
         {tab === "withdraw" && !proportional && meta && (
@@ -867,15 +949,15 @@ function ActionButton(props: {
   }
 
   // §11: proportional withdraw stays available even when the pool is paused;
-  // deposit is blocked when paused.
-  const depositPaused = tab === "deposit" && paused;
+  // deposit AND single-token withdraw are blocked when paused.
+  const pausedBlocked = paused && !(tab === "withdraw" && proportional);
   if (!hasAmount) {
     return <Button variant="secondary" size="lg" full disabled>Enter an amount</Button>;
   }
   if (insufficient) {
     return <Button variant="secondary" size="lg" full disabled>Insufficient {insufficientSym} balance</Button>;
   }
-  if (depositPaused) {
+  if (pausedBlocked) {
     return <Button variant="secondary" size="lg" full disabled>Pool is paused</Button>;
   }
   if (tab === "deposit" && capBlocked) {

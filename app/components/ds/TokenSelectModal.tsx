@@ -32,6 +32,7 @@ export function TokenSelectModal({
   const [q, setQ] = useState("");
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset the search field each time the modal re-opens
     if (open) setQ("");
   }, [open]);
 

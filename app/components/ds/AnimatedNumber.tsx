@@ -24,8 +24,11 @@ export function AnimatedNumber({
   const [disp, setDisp] = useState(animate ? 0 : value);
   const prev = useRef(animate ? 0 : value);
   const raf = useRef(0);
+  // rAF-driven tween — a genuine external-system (animation frame) sync, so the
+  // setState calls here are the allowed effect shape.
   useEffect(() => {
     if (!animate) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- snap to final value when animation is disabled
       setDisp(value);
       prev.current = value;
       return;

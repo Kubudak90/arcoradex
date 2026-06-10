@@ -20,6 +20,7 @@ import { iconBtnStyle } from "@/components/ds/iconBtnStyle";
 import { ACTIVE_CHAIN, EXPLORER } from "@/lib/chain";
 import { pushToast } from "@/components/layout/toast-store";
 import { useTokensV2 } from "./useTokensV2";
+import { usePoolStatsV2 } from "./usePoolStatsV2";
 import { useMaxGuard } from "./useMaxGuard";
 import { ReserveHealthBar } from "./ReserveHealthBar";
 import { DynamicFeeRow } from "./DynamicFeeRow";
@@ -43,7 +44,9 @@ function isOracleUnsafe(err: Error | null): boolean {
  *   - oracle-unsafe handling (swap disabled with a clear message).
  */
 export function SwapPageV2() {
-  const { tokens } = useTokensV2();
+  const { tokens, isFetching: tokensFetching } = useTokensV2();
+  const { stats } = usePoolStatsV2();
+  const paused = stats?.paused === true;
   const { address: account, isConnected } = useAccount();
   const chainId = useChainId();
   const { switchChain, isPending: switchPending } = useSwitchChain();
@@ -93,11 +96,13 @@ export function SwapPageV2() {
   const swap = useSwapV2();
 
   const [txHash, setTxHash] = useState<`0x${string}` | null>(null);
-  // Clear the success banner whenever the user starts a new trade.
-  useEffect(() => {
-    if (amountStr === "") return;
-    setTxHash(null);
-  }, [amountStr]);
+  // Clear the success banner whenever the user edits the pay amount (done in the
+  // change handler below, not an effect, to avoid a cascading re-render).
+  function onAmountChange(v: string) {
+    const next = v.replace(/[^0-9.]/g, "");
+    setAmountStr(next);
+    if (next !== "" && txHash) setTxHash(null);
+  }
 
   // §9: the output token's oracle is unsafe → swap is unavailable. The signal can
   // surface on any of the output-keyed reads or on the swap mutation itself.
@@ -152,6 +157,7 @@ export function SwapPageV2() {
   const ctaDisabled =
     !isConnected ||
     wrongChain ||
+    paused ||
     oracleUnsafe ||
     overMax ||
     isFetching ||
@@ -202,6 +208,17 @@ export function SwapPageV2() {
         ).toFixed(5)
       : null;
 
+  // Empty token universe — render a graceful state instead of an unusable card.
+  if (tokens.length === 0) {
+    return (
+      <div style={{ width: "min(440px, 94vw)", margin: "0 auto" }}>
+        <Card pad={28} elev={2}>
+          <EmptyTokensState loading={tokensFetching} />
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div style={{ width: "min(440px, 94vw)", margin: "0 auto" }}>
       <Card pad={20} elev={2}>
@@ -250,7 +267,7 @@ export function SwapPageV2() {
             side="You pay"
             meta={inMeta}
             value={amountStr}
-            onChange={(v) => setAmountStr(v.replace(/[^0-9.]/g, ""))}
+            onChange={onAmountChange}
             balance={balanceIn as bigint | undefined}
             connected={isConnected}
             onMax={setMax}
@@ -318,6 +335,14 @@ export function SwapPageV2() {
             <DetailRow label="Network fee" value="~$0.001" />
           </div>
 
+          {/* Pool paused — swaps disabled (proportional withdraw stays available
+              on the Liquidity page). */}
+          {paused && (
+            <WarnRow tone="danger">
+              The pool is paused — swaps are temporarily disabled. You can still exit
+              proportionally on the Liquidity page.
+            </WarnRow>
+          )}
           {/* §9: over-max warning — never submits */}
           {overMax && maxNetOut != null && outMeta && (
             <WarnRow>
@@ -379,6 +404,7 @@ export function SwapPageV2() {
               insufficient,
               overMax,
               oracleUnsafe,
+              paused,
               isFetching,
               inSym: inMeta?.symbol,
               outSym: outMeta?.symbol,
@@ -438,11 +464,57 @@ export function SwapPageV2() {
 
 // ---- Pieces -------------------------------------------------------------
 
+/** Loading / empty token-universe state for the swap card. */
+function EmptyTokensState({ loading }: { loading: boolean }) {
+  return (
+    <div style={{ textAlign: "center", padding: "20px 8px" }}>
+      <div
+        style={{
+          width: 44,
+          height: 44,
+          margin: "0 auto 14px",
+          display: "grid",
+          placeItems: "center",
+          borderRadius: "var(--radius-md)",
+          background: "var(--surface-2)",
+          border: "1px solid var(--border)",
+          color: "var(--fg-3)",
+        }}
+      >
+        {loading ? (
+          <span
+            className="ar-spin"
+            style={{
+              width: 18,
+              height: 18,
+              border: "2.5px solid var(--border-strong)",
+              borderTopColor: "var(--accent)",
+              borderRadius: "50%",
+              display: "inline-block",
+            }}
+          />
+        ) : (
+          <Icon name="layers" size={20} />
+        )}
+      </div>
+      <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 6 }}>
+        {loading ? "Loading tokens…" : "No active tokens"}
+      </div>
+      <p style={{ fontSize: 13, color: "var(--fg-3)", margin: 0, lineHeight: 1.5 }}>
+        {loading
+          ? "Fetching the active token universe from the registry."
+          : "The registry has no active tokens to swap right now. Check back shortly."}
+      </p>
+    </div>
+  );
+}
+
 function ctaLabel({
   amountIn,
   insufficient,
   overMax,
   oracleUnsafe,
+  paused,
   isFetching,
   inSym,
   outSym,
@@ -451,10 +523,12 @@ function ctaLabel({
   insufficient: boolean;
   overMax: boolean;
   oracleUnsafe: boolean;
+  paused: boolean;
   isFetching: boolean;
   inSym?: string;
   outSym?: string;
 }): string {
+  if (paused) return "Pool is paused";
   if (oracleUnsafe) return "Swap unavailable";
   if (!amountIn || amountIn === 0n) return "Enter an amount";
   if (insufficient) return `Insufficient ${inSym} balance`;

@@ -15,12 +15,15 @@ const STORAGE_KEY = "arcoradex-theme";
 export function useTheme(): { dark: boolean; toggle: () => void } {
   const [dark, setDark] = useState(true);
 
-  // Hydrate from localStorage / the current DOM attribute on mount.
+  // Hydrate from localStorage / the current DOM attribute on mount. This is a
+  // post-SSR external-system sync (read the persisted theme, reconcile the
+  // <html> attribute) — the one allowed setState-in-effect shape.
   useEffect(() => {
     const stored = window.localStorage.getItem(STORAGE_KEY);
     const initial = stored
       ? stored === "dark"
       : document.documentElement.dataset.theme !== "light";
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- hydration reconcile after SSR paint
     setDark(initial);
     document.documentElement.dataset.theme = initial ? "dark" : "light";
   }, []);
