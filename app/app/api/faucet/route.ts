@@ -165,7 +165,7 @@ export async function POST(req: Request): Promise<NextResponse<FaucetSuccess | F
 
   // Rate limit: per-recipient AND per-IP (cross-instance via the store).
   const ip = extractClientIp(req);
-  const rl = await checkRateLimit(cooldownStore, recipient, ip);
+  const rl = await checkRateLimit(cooldownStore, chainId, recipient, ip);
   if (!rl.ok) {
     const hours = Math.max(1, Math.ceil(rl.retryAfterSec / 3600));
     const error =
@@ -183,7 +183,7 @@ export async function POST(req: Request): Promise<NextResponse<FaucetSuccess | F
   // different Vercel instances) for the same address/IP cannot both proceed —
   // closing the cross-instance TOCTOU window the old per-instance Sets left
   // open. Reservation keys auto-expire so a crashed request can't lock a slot.
-  const reservation = await reserveInflight(cooldownStore, recipient, ip);
+  const reservation = await reserveInflight(cooldownStore, chainId, recipient, ip);
   if (!reservation.ok) {
     return NextResponse.json(
       { ok: false, error: "A claim for this address or network is already in progress. Try again shortly." },
@@ -211,7 +211,7 @@ export async function POST(req: Request): Promise<NextResponse<FaucetSuccess | F
     // recipient/IP immediately re-POST and re-mint the tokens that DID land,
     // unbounded. We now record up-front and roll the claim back only if ZERO
     // tokens were broadcast, so a partial failure still consumes the cooldown.
-    await recordClaim(cooldownStore, recipient, ip);
+    await recordClaim(cooldownStore, chainId, recipient, ip);
 
     // Build clients on the TARGET chain (same signer key on both chains).
     const { chain, rpcUrl, tokens } = chainConfig;
@@ -252,7 +252,7 @@ export async function POST(req: Request): Promise<NextResponse<FaucetSuccess | F
       // closing. Net: one batch per cooldown window regardless of partial
       // failure. On total failure we also refund the hourly budget slot.
       if (Object.keys(txHashes).length === 0) {
-        await rollbackClaim(cooldownStore, recipient, ip);
+        await rollbackClaim(cooldownStore, chainId, recipient, ip);
         await refundHourlyBudget(cooldownStore);
       }
 

@@ -15,9 +15,17 @@
 //   - MemoryCooldownStore    (dev/test fallback): a single-instance Map. Same
 //     interface, no atomicity guarantees across instances — fine locally.
 //
-// Keys: per-recipient ADDRESS and per-client IP for the 24h cooldown, an
-// in-flight reservation key per address/IP, and a single global hourly
-// mint-budget counter that caps total claims/hour regardless of who asks.
+// Keys: per-CHAIN, per-recipient ADDRESS and per-client IP for the 24h
+// cooldown, an in-flight reservation key per chain/address/IP, and a single
+// global hourly mint-budget counter that caps total claims/hour regardless of
+// who asks.
+//
+// Per-chain cooldown (2026-06-11): the faucet is multi-chain (Base Sepolia +
+// Arc testnet, same signer EOA). The cooldown keys are namespaced by chainId so
+// a claim on one chain does NOT lock the user out of the OTHER chain — claiming
+// Base test stables and then Arc test stables are independent 24h windows. The
+// hourly mint-budget stays GLOBAL on purpose: it's a blast-radius cap on the
+// shared signer key, which is the same EOA on both chains.
 
 export const COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
@@ -332,20 +340,20 @@ export interface RateLimitBlocked {
 
 export type RateLimitResult = RateLimitOk | RateLimitBlocked;
 
-function addrKey(recipient: string): string {
-  return `faucet:addr:${recipient.toLowerCase()}`;
+function addrKey(chainId: number, recipient: string): string {
+  return `faucet:addr:${chainId}:${recipient.toLowerCase()}`;
 }
 
-function ipKey(ip: string): string {
-  return `faucet:ip:${ip}`;
+function ipKey(chainId: number, ip: string): string {
+  return `faucet:ip:${chainId}:${ip}`;
 }
 
-function reserveAddrKey(recipient: string): string {
-  return `faucet:inflight:addr:${recipient.toLowerCase()}`;
+function reserveAddrKey(chainId: number, recipient: string): string {
+  return `faucet:inflight:addr:${chainId}:${recipient.toLowerCase()}`;
 }
 
-function reserveIpKey(ip: string): string {
-  return `faucet:inflight:ip:${ip}`;
+function reserveIpKey(chainId: number, ip: string): string {
+  return `faucet:inflight:ip:${chainId}:${ip}`;
 }
 
 const BUDGET_KEY = "faucet:budget:hourly";
@@ -357,12 +365,13 @@ export const INFLIGHT_TTL_MS = 60_000;
 
 export async function checkRateLimit(
   store: CooldownStore,
+  chainId: number,
   recipient: string,
   ip: string | undefined,
   now: number = Date.now(),
   cooldownMs: number = COOLDOWN_MS,
 ): Promise<RateLimitResult> {
-  const lastAddr = await store.get(addrKey(recipient));
+  const lastAddr = await store.get(addrKey(chainId, recipient));
   if (lastAddr !== undefined && now - lastAddr < cooldownMs) {
     return {
       ok: false,
@@ -371,7 +380,7 @@ export async function checkRateLimit(
     };
   }
   if (ip) {
-    const lastIp = await store.get(ipKey(ip));
+    const lastIp = await store.get(ipKey(chainId, ip));
     if (lastIp !== undefined && now - lastIp < cooldownMs) {
       return {
         ok: false,
@@ -385,13 +394,14 @@ export async function checkRateLimit(
 
 export async function recordClaim(
   store: CooldownStore,
+  chainId: number,
   recipient: string,
   ip: string | undefined,
   now: number = Date.now(),
   cooldownMs: number = COOLDOWN_MS,
 ): Promise<void> {
-  await store.set(addrKey(recipient), now, cooldownMs);
-  if (ip) await store.set(ipKey(ip), now, cooldownMs);
+  await store.set(addrKey(chainId, recipient), now, cooldownMs);
+  if (ip) await store.set(ipKey(chainId, ip), now, cooldownMs);
 }
 
 // M-2 (audit 2026-05-31): undo a recordClaim. The route records the claim
@@ -400,11 +410,12 @@ export async function recordClaim(
 // user's ability to retry immediately.
 export async function rollbackClaim(
   store: CooldownStore,
+  chainId: number,
   recipient: string,
   ip: string | undefined,
 ): Promise<void> {
-  await store.delete(addrKey(recipient));
-  if (ip) await store.delete(ipKey(ip));
+  await store.delete(addrKey(chainId, recipient));
+  if (ip) await store.delete(ipKey(chainId, ip));
 }
 
 export interface ReserveResult {
@@ -420,16 +431,17 @@ export interface ReserveResult {
 // `SET NX PX`, making this cross-instance race-safe.
 export async function reserveInflight(
   store: CooldownStore,
+  chainId: number,
   recipient: string,
   ip: string | undefined,
   ttlMs: number = INFLIGHT_TTL_MS,
 ): Promise<ReserveResult> {
-  const aKey = reserveAddrKey(recipient);
+  const aKey = reserveAddrKey(chainId, recipient);
   const gotAddr = await store.reserve(aKey, ttlMs);
   if (!gotAddr) return { ok: false, acquired: [] };
 
   if (ip) {
-    const iKey = reserveIpKey(ip);
+    const iKey = reserveIpKey(chainId, ip);
     const gotIp = await store.reserve(iKey, ttlMs);
     if (!gotIp) {
       await store.release(aKey);

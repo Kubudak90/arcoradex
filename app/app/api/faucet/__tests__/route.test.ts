@@ -254,6 +254,23 @@ describe("chain-aware minting (Base Sepolia 84532 + Arc testnet 5042002)", () =>
     }
   });
 
+  it("per-chain cooldown: claiming on Base then Arc with the same address+IP both succeed", async () => {
+    const { POST } = await loadRoute();
+
+    // Claim on Base Sepolia.
+    const base = await POST(mkReq({ address: RECIPIENT, chainId: 84532 }));
+    expect(base.status).toBe(200);
+
+    // Immediately claim on Arc with the SAME address + IP. The cooldown is
+    // namespaced per chain, so this is an independent window — NOT a 429.
+    const arc = await POST(mkReq({ address: RECIPIENT, chainId: 5042002 }));
+    expect(arc.status).toBe(200);
+
+    // Re-claiming on Base, however, is still rate-limited (same chain).
+    const baseAgain = await POST(mkReq({ address: RECIPIENT, chainId: 84532 }));
+    expect(baseAgain.status).toBe(429);
+  });
+
   it("unsupported chainId → 400 and nothing is broadcast", async () => {
     const { POST } = await loadRoute();
 

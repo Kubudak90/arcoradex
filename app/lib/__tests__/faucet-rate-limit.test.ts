@@ -22,18 +22,23 @@ const ADDR_OTHER = "0x0000000000000000000000000000000000005678";
 const IP_A = "10.0.0.1";
 const IP_B = "10.0.0.2";
 
+// Cooldown keys are namespaced by chainId (per-chain isolation). Existing
+// single-chain suites pin CHAIN_A; the per-chain suite below exercises both.
+const CHAIN_A = 84532; // Base Sepolia
+const CHAIN_B = 5042002; // Arc testnet
+
 describe("checkRateLimit", () => {
   it("returns ok when neither recipient nor IP has claimed", async () => {
     const store = new MemoryCooldownStore();
-    const r = await checkRateLimit(store, ADDR, IP_A);
+    const r = await checkRateLimit(store, CHAIN_A, ADDR, IP_A);
     expect(r.ok).toBe(true);
   });
 
   it("blocks by address when same recipient claimed within cooldown", async () => {
     const store = new MemoryCooldownStore();
     const t0 = 1_000_000_000;
-    await recordClaim(store, ADDR, IP_A, t0);
-    const r = await checkRateLimit(store, ADDR, IP_B, t0 + 1_000);
+    await recordClaim(store, CHAIN_A, ADDR, IP_A, t0);
+    const r = await checkRateLimit(store, CHAIN_A, ADDR, IP_B, t0 + 1_000);
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.blockedBy).toBe("address");
@@ -44,8 +49,8 @@ describe("checkRateLimit", () => {
   it("blocks by IP when a different recipient claimed from same IP within cooldown", async () => {
     const store = new MemoryCooldownStore();
     const t0 = 1_000_000_000;
-    await recordClaim(store, ADDR_OTHER, IP_A, t0);
-    const r = await checkRateLimit(store, ADDR, IP_A, t0 + 1_000);
+    await recordClaim(store, CHAIN_A, ADDR_OTHER, IP_A, t0);
+    const r = await checkRateLimit(store, CHAIN_A, ADDR, IP_A, t0 + 1_000);
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.blockedBy).toBe("ip");
@@ -55,16 +60,16 @@ describe("checkRateLimit", () => {
   it("releases after cooldown elapses for both keys", async () => {
     const store = new MemoryCooldownStore();
     const t0 = 1_000_000_000;
-    await recordClaim(store, ADDR, IP_A, t0);
-    const r = await checkRateLimit(store, ADDR, IP_A, t0 + COOLDOWN_MS + 1);
+    await recordClaim(store, CHAIN_A, ADDR, IP_A, t0);
+    const r = await checkRateLimit(store, CHAIN_A, ADDR, IP_A, t0 + COOLDOWN_MS + 1);
     expect(r.ok).toBe(true);
   });
 
   it("address-blocked even when IP is undefined (no per-IP cap)", async () => {
     const store = new MemoryCooldownStore();
     const t0 = 1_000_000_000;
-    await recordClaim(store, ADDR, undefined, t0);
-    const r = await checkRateLimit(store, ADDR, undefined, t0 + 1_000);
+    await recordClaim(store, CHAIN_A, ADDR, undefined, t0);
+    const r = await checkRateLimit(store, CHAIN_A, ADDR, undefined, t0 + 1_000);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.blockedBy).toBe("address");
   });
@@ -72,8 +77,8 @@ describe("checkRateLimit", () => {
   it("is case-insensitive on recipient address", async () => {
     const store = new MemoryCooldownStore();
     const t0 = 1_000_000_000;
-    await recordClaim(store, ADDR.toUpperCase(), IP_A, t0);
-    const r = await checkRateLimit(store, ADDR_LOWER, IP_B, t0 + 1_000);
+    await recordClaim(store, CHAIN_A, ADDR.toUpperCase(), IP_A, t0);
+    const r = await checkRateLimit(store, CHAIN_A, ADDR_LOWER, IP_B, t0 + 1_000);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.blockedBy).toBe("address");
   });
@@ -81,11 +86,58 @@ describe("checkRateLimit", () => {
   it("retryAfterSec shrinks as time advances", async () => {
     const store = new MemoryCooldownStore();
     const t0 = 1_000_000_000;
-    await recordClaim(store, ADDR, IP_A, t0);
-    const r1 = await checkRateLimit(store, ADDR, IP_A, t0 + 1_000);
-    const r2 = await checkRateLimit(store, ADDR, IP_A, t0 + 10 * 60 * 1000);
+    await recordClaim(store, CHAIN_A, ADDR, IP_A, t0);
+    const r1 = await checkRateLimit(store, CHAIN_A, ADDR, IP_A, t0 + 1_000);
+    const r2 = await checkRateLimit(store, CHAIN_A, ADDR, IP_A, t0 + 10 * 60 * 1000);
     if (r1.ok || r2.ok) throw new Error("expected both blocked");
     expect(r2.retryAfterSec).toBeLessThan(r1.retryAfterSec);
+  });
+});
+
+describe("per-chain cooldown isolation (2026-06-11 multi-chain faucet)", () => {
+  it("a claim on one chain does NOT block the same address on another chain", async () => {
+    const store = new MemoryCooldownStore();
+    const t0 = 1_000_000_000;
+    await recordClaim(store, CHAIN_A, ADDR, IP_A, t0);
+    // Same chain, within cooldown → blocked (regression guard).
+    expect((await checkRateLimit(store, CHAIN_A, ADDR, IP_A, t0 + 1_000)).ok).toBe(false);
+    // OTHER chain, same address + IP → independent window, allowed.
+    expect((await checkRateLimit(store, CHAIN_B, ADDR, IP_A, t0 + 1_000)).ok).toBe(true);
+  });
+
+  it("a per-IP claim on one chain does NOT block a different address on another chain", async () => {
+    const store = new MemoryCooldownStore();
+    const t0 = 1_000_000_000;
+    await recordClaim(store, CHAIN_A, ADDR_OTHER, IP_A, t0);
+    // Same chain, same IP, different address → IP-blocked.
+    const same = await checkRateLimit(store, CHAIN_A, ADDR, IP_A, t0 + 1_000);
+    expect(same.ok).toBe(false);
+    // Other chain, same IP → independent, allowed.
+    expect((await checkRateLimit(store, CHAIN_B, ADDR, IP_A, t0 + 1_000)).ok).toBe(true);
+  });
+
+  it("rollback on one chain leaves the other chain's window untouched", async () => {
+    const store = new MemoryCooldownStore();
+    const t0 = 1_000_000_000;
+    await recordClaim(store, CHAIN_A, ADDR, IP_A, t0);
+    await recordClaim(store, CHAIN_B, ADDR, IP_A, t0);
+    await rollbackClaim(store, CHAIN_A, ADDR, IP_A);
+    // CHAIN_A retry allowed (rolled back); CHAIN_B still blocked.
+    expect((await checkRateLimit(store, CHAIN_A, ADDR, IP_A, t0 + 1_000)).ok).toBe(true);
+    expect((await checkRateLimit(store, CHAIN_B, ADDR, IP_A, t0 + 1_000)).ok).toBe(false);
+  });
+
+  it("reserveInflight slots are per-chain: same address can reserve on both chains at once", async () => {
+    const store = new MemoryCooldownStore();
+    const a = await reserveInflight(store, CHAIN_A, ADDR, IP_A);
+    expect(a.ok).toBe(true);
+    // A concurrent in-flight claim for the SAME address/IP on the OTHER chain
+    // must not be blocked by chain A's reservation.
+    const b = await reserveInflight(store, CHAIN_B, ADDR, IP_A);
+    expect(b.ok).toBe(true);
+    // But a second reservation on chain A is still blocked.
+    const c = await reserveInflight(store, CHAIN_A, ADDR, IP_A);
+    expect(c.ok).toBe(false);
   });
 });
 
@@ -93,53 +145,53 @@ describe("rollbackClaim (M-2)", () => {
   it("undoes a recorded claim so a retry is allowed", async () => {
     const store = new MemoryCooldownStore();
     const t0 = 1_000_000_000;
-    await recordClaim(store, ADDR, IP_A, t0);
-    expect((await checkRateLimit(store, ADDR, IP_A, t0 + 1_000)).ok).toBe(false);
-    await rollbackClaim(store, ADDR, IP_A);
-    expect((await checkRateLimit(store, ADDR, IP_A, t0 + 1_000)).ok).toBe(true);
+    await recordClaim(store, CHAIN_A, ADDR, IP_A, t0);
+    expect((await checkRateLimit(store, CHAIN_A, ADDR, IP_A, t0 + 1_000)).ok).toBe(false);
+    await rollbackClaim(store, CHAIN_A, ADDR, IP_A);
+    expect((await checkRateLimit(store, CHAIN_A, ADDR, IP_A, t0 + 1_000)).ok).toBe(true);
   });
 });
 
 describe("reserveInflight (M-3 atomic reserve-or-fail)", () => {
   it("first reserve wins, a second concurrent reserve for the same address fails", async () => {
     const store = new MemoryCooldownStore();
-    const a = await reserveInflight(store, ADDR, IP_A);
+    const a = await reserveInflight(store, CHAIN_A, ADDR, IP_A);
     expect(a.ok).toBe(true);
     // Same address, different IP: still blocked by the address slot.
-    const b = await reserveInflight(store, ADDR, IP_B);
+    const b = await reserveInflight(store, CHAIN_A, ADDR, IP_B);
     expect(b.ok).toBe(false);
     expect(b.acquired).toEqual([]);
   });
 
   it("a second reserve for the same IP (different address) fails", async () => {
     const store = new MemoryCooldownStore();
-    const a = await reserveInflight(store, ADDR, IP_A);
+    const a = await reserveInflight(store, CHAIN_A, ADDR, IP_A);
     expect(a.ok).toBe(true);
-    const b = await reserveInflight(store, ADDR_OTHER, IP_A);
+    const b = await reserveInflight(store, CHAIN_A, ADDR_OTHER, IP_A);
     expect(b.ok).toBe(false);
   });
 
   it("releasing the reservation lets a new reserve succeed", async () => {
     const store = new MemoryCooldownStore();
-    const a = await reserveInflight(store, ADDR, IP_A);
+    const a = await reserveInflight(store, CHAIN_A, ADDR, IP_A);
     expect(a.ok).toBe(true);
     await releaseInflight(store, a.acquired);
-    const b = await reserveInflight(store, ADDR, IP_A);
+    const b = await reserveInflight(store, CHAIN_A, ADDR, IP_A);
     expect(b.ok).toBe(true);
   });
 
   it("does not leak the address slot when the IP slot is already held", async () => {
     const store = new MemoryCooldownStore();
     // Hold IP_A via ADDR_OTHER.
-    const held = await reserveInflight(store, ADDR_OTHER, IP_A);
+    const held = await reserveInflight(store, CHAIN_A, ADDR_OTHER, IP_A);
     expect(held.ok).toBe(true);
     // ADDR tries with the held IP_A — should fail AND not leave ADDR's slot set.
-    const blocked = await reserveInflight(store, ADDR, IP_A);
+    const blocked = await reserveInflight(store, CHAIN_A, ADDR, IP_A);
     expect(blocked.ok).toBe(false);
     // Release the holder, then ADDR with a fresh IP should succeed (proving
     // ADDR's address slot was rolled back, not leaked).
     await releaseInflight(store, held.acquired);
-    const ok = await reserveInflight(store, ADDR, IP_B);
+    const ok = await reserveInflight(store, CHAIN_A, ADDR, IP_B);
     expect(ok.ok).toBe(true);
   });
 });
