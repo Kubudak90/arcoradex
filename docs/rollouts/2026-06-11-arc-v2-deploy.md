@@ -26,8 +26,9 @@ the SAME audited V2 contracts live on Base — §9 (reserveHealth/quotes/maxSwap
 | Timelock | `0xe71AbE95deFAEc16B113b62f1eED95FF5442f7F1` |
 
 Governance owners = public Foundry test mnemonic (`GOV_USE_TEST_MNEMONIC=true`, testnet).
-Pool/Registry `pendingOwner = Timelock` (Ownable2Step, accept pending). Adapter admin → Gov
-Safe (pending); adapter `writer` = keeper `0xed37B7fc534Cc93D4195b4F11ADc5C14237cd287`.
+**Governance FINALIZED 2026-06-11** (see below): Pool/Registry `owner = Timelock`, the 3 mock
+adapters `owner = Gov Safe`, Timelock locked to 48h. Adapter `writer` = keeper
+`0xed37B7fc534Cc93D4195b4F11ADc5C14237cd287` (unchanged — only the Ownable2Step admin moved).
 
 | Token | Token | Mock adapter |
 |---|---|---|
@@ -39,13 +40,26 @@ Fresh `MintableERC20` test stables (6-dec), seeded 5× the $1,000 floor (= targe
 5,000, EURC 4,350 → maxSwapOut > 0 (swap headroom from genesis). **NAV $15,002.50**, paused
 false, all adapters safe at peg (verified on-chain 2026-06-11).
 
+## Governance finalized 2026-06-11
+
+Run via `script/ExecuteGovArcV2.s.sol` (deployer broadcast, `--slow`; the test-mnemonic Safe
+owners signed off-chain — the EXACT SAME KEYS as Base: deployer EOA + public Foundry test
+mnemonic, gov indices 0/1/2, pg indices 5/6, verified on-chain to match the Arc Safes). The
+Arc twin of `ExecuteGovBaseSepoliaV2`; only addresses + the `5042002` chainid guard differ.
+Sequence (delay-0 window): A) Gov Safe accepted the 3 mock adapters; B) Gov Safe drove the
+Timelock (schedule+execute, delay 0) to accept Pool + Registry; C) pause drill — PG Safe paused,
+Gov Safe unpaused via Timelock; D) `ARC_LOCK_48H=true` → `Timelock.updateDelay(172800)`.
+
+Verified independently on-chain after broadcast: Pool/Registry `owner == Timelock`
+(`pendingOwner == 0x0`), 3 adapters `owner == Gov Safe`, `getMinDelay() == 172800`, pool
+unpaused. Future gov ops now incur the 48h delay; emergency pause stays immediate via the PG
+Safe. No address needed gas (deployer paid all); Arc gov keys are the public test mnemonic
+(nothing secret to delete).
+
 ## Outstanding / next
 
-- Governance accepts (Pool/Registry → Timelock; adapter admin → Gov Safe) — same pattern as
-  the Base Sepolia `ExecuteGovBaseSepoliaV2` script; operator follow-up (Timelock delay must be
-  0 at runtime to land immediately — verify before accepting). Pool functions deployer-owned
-  until then.
-- Optional Arc V2 keeper (`ops/arckeeper/`) to refresh prices — NOT required for the pool to work.
-- **Next plan: SDK multi-chain + app chain switcher** — add this 5042002 V2 ledger to the SDK's
-  `DEFAULT_ADDRESSES_V2` + a `chains/arc` def, wagmi both chains, a header Arc↔Base switcher; the
-  V2 UI then works on both pools.
+- Optional Arc V2 keeper (`ops/arckeeper/`) to refresh prices — NOT required for the pool to work
+  (the mock adapters don't go stale).
+- **DONE: SDK multi-chain + app chain switcher** — the 5042002 V2 ledger is in the SDK's
+  `DEFAULT_ADDRESSES_V2`, both chains are wagmi-wired, and the header Arc↔Base switcher is LIVE on
+  `swap.arcorapay.xyz` (footer + faucet are chain-aware too; verified on both pools 2026-06-11).
