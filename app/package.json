@@ -14,7 +14,7 @@
     "@arcoralabs/dex-sdk": "workspace:*",
     "@tanstack/react-query": "^5.62.10",
     "botid": "^1.5.11",
-    "next": "16.2.6",
+    "next": "16.2.9",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "viem": "^2.21.55",
