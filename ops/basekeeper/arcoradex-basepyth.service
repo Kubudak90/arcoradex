@@ -1,0 +1,60 @@
+# ArcoraDEX Base Sepolia V2 Pyth keeper — systemd oneshot.
+#
+# WHY: ChainlinkPythAdapterV2 fail-closes (safe=false -> Pool reverts OracleUnsafe)
+# once the Pyth leg is older than pythMaxStaleSeconds (24h on testnet). Pyth is a
+# PULL oracle, so updatePyth must be called at least daily. The 2026-06-10 deploy
+# only ran the keeper once (bootstrap), with no recurring schedule -> Pyth went
+# stale ~40h later and all swaps reverted. This unit (paired with the .timer)
+# refreshes Pyth every 4h so the adapter stays safe.
+#
+# DEPLOY (on the keeper box, as root):
+#   mkdir -p /home/arcora/arcoradex-basepyth
+#   # copy repo ops/keepalive/lib.mjs              -> /home/arcora/arcoradex-basepyth/keepalive/lib.mjs
+#   # copy repo ops/basekeeper/{update-pyth-base-sepolia.mjs,lib.mjs}
+#   #                                              -> /home/arcora/arcoradex-basepyth/basekeeper/
+#   # write /home/arcora/arcoradex-basepyth/basekeeper/.env (NO key — only):
+#   #   BASE_SEPOLIA_RPC=https://sepolia.base.org
+#   #   ADAPTER_USDC=0x7C5eAf40638Bb99595F1cD7d08d4C72e3833577e
+#   #   ADAPTER_USDT=0x4D350eA1BfEb3ccE076d4bd3ade26FFcedb1C4C9
+#   #   ADAPTER_EURC=0xf141246C632d19157C1222591CFab64e3025C108
+#   ln -sfn /home/arcora/arcoradex-feeds/node_modules /home/arcora/arcoradex-basepyth/node_modules
+#   chown -R arcora:arcora /home/arcora/arcoradex-basepyth && chmod 600 .../basekeeper/.env
+#   install this unit + the .timer to /etc/systemd/system/, then:
+#   systemctl daemon-reload && systemctl enable --now arcoradex-basepyth.timer
+#
+# KEY: the signer is the Vault keeper PRIMARY EOA (kv/arcora/keeper-arcoradex,
+# KEEPER_PRIMARY_KEY -> 0xed37B7fc534Cc93D4195b4F11ADc5C14237cd287). On Base the
+# keeper only RELAYS Pyth's pre-signed update data (no price authority), so reuse
+# of the Arc keeper key is safe; different chain => independent nonce. That EOA
+# must hold Base Sepolia ETH (gas + 30 wei/feed Pyth fee; ~0.00146 ETH per run).
+
+[Unit]
+Description=ArcoraDEX — push Pyth updates to ChainlinkPythAdapterV2 (Base Sepolia V2)
+Documentation=https://github.com/Kubudak90/arcoradex
+After=network-online.target vault.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+TimeoutStartSec=120
+User=arcora
+Group=arcora
+RuntimeDirectory=arcora
+RuntimeDirectoryMode=0700
+WorkingDirectory=/home/arcora/arcoradex-basepyth/basekeeper
+# Reuse the Arc keeper's Vault fetch; distinct KEEPER_ENV_PATH (H-8) so co-scheduled
+# units never race each other's ExecStopPost cleanup. Provides KEEPER_PRIVATE_KEY=primary.
+Environment=KEEPER_TENANT=arcoradex
+Environment=KEEPER_ENV_PATH=/run/arcora/keeper-basepyth.env
+ExecStartPre=/home/arcora/bin/fetch-keeper-secret.sh
+EnvironmentFile=-/run/arcora/keeper-basepyth.env
+EnvironmentFile=/home/arcora/arcoradex-basepyth/basekeeper/.env
+ExecStart=/usr/bin/node /home/arcora/arcoradex-basepyth/basekeeper/update-pyth-base-sepolia.mjs
+ExecStopPost=/bin/rm -f /run/arcora/keeper-basepyth.env
+Nice=10
+StandardOutput=journal
+StandardError=journal
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/run/arcora
+NoNewPrivileges=true

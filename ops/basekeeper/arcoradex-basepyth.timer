@@ -1,0 +1,17 @@
+# Fires the Base Sepolia Pyth keeper every 4h. The adapter's pythMaxStaleSeconds
+# is 24h, so 4h gives a 6x freshness margin (survives several consecutive failed
+# runs before any token can go stale). Persistent=true + OnBootSec re-fire after
+# downtime so a missed window is caught immediately on boot.
+
+[Unit]
+Description=ArcoraDEX Base Sepolia Pyth keeper — fire every 4h (adapter pythMaxStaleSeconds=24h)
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=4h
+AccuracySec=1min
+Persistent=true
+Unit=arcoradex-basepyth.service
+
+[Install]
+WantedBy=timers.target
